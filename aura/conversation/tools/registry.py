@@ -1,0 +1,357 @@
+"""Tool registry — workspace-jailed dispatch and OpenAI tool definitions.
+
+The registry is the only place that:
+- builds the API tool list (read_only switches off write tools)
+- resolves and validates filesystem paths against workspace_root
+- calls the GUI approval callback for writes
+- creates timestamped backups before approved writes
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Literal
+
+from aura.conversation.tools.backup import backup_existing
+from aura.conversation.tools.fs_read import glob_files, list_directory, read_file
+from aura.conversation.tools.fs_write import propose_edit, propose_write
+
+ApprovalAction = Literal["approve", "reject", "reject_all"]
+
+
+@dataclass
+class ApprovalRequest:
+    """Passed to approval_cb when a write is proposed."""
+    tool_name: str  # "write_file" or "edit_file"
+    rel_path: str
+    old_content: str
+    new_content: str
+    is_new_file: bool
+
+
+@dataclass
+class ApprovalDecision:
+    action: ApprovalAction
+    note: str = ""
+
+
+ApprovalCallback = Callable[[ApprovalRequest], ApprovalDecision]
+
+READ_TOOL_DEFS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": (
+                "Read a UTF-8 text file from the workspace. Returns its full contents (capped at 200KB). "
+                "Use this to inspect the user's source code, configs, or notes before answering or editing. "
+                "The path argument MUST be relative to the workspace root."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path, e.g. 'scripts/player.gd'.",
+                    }
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_directory",
+            "description": (
+                "List files and subdirectories of a workspace directory. Hidden files and "
+                "build/cache directories (.git, .venv, __pycache__, .import) are excluded. "
+                "Use '.' for the workspace root."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative directory path. Use '.' for the root.",
+                    }
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "glob",
+            "description": (
+                "Recursively find files matching a glob pattern relative to the workspace root. "
+                "Examples: '**/*.gd', 'scripts/**/*.py', '*.md'. Capped at 200 matches."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern, e.g. '**/*.gd' or 'res/**/*.tscn'.",
+                    }
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+]
+
+WRITE_TOOL_DEFS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": (
+                "Write the given content to a workspace file, replacing it entirely if it exists. "
+                "Use this for new files or when an edit would replace most of the file. "
+                "The user MUST approve every write through a diff dialog before it is applied. "
+                "Existing files are backed up before being overwritten."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path of the file to write.",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Full new file content.",
+                    },
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": (
+                "Surgically replace one occurrence of old_str with new_str inside a workspace file. "
+                "old_str MUST match exactly once — include enough surrounding context (lines above and "
+                "below the change) to be unique. Whitespace and indentation must match exactly. "
+                "The user reviews and approves the diff before it's applied. Backed up first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path of the file to edit.",
+                    },
+                    "old_str": {
+                        "type": "string",
+                        "description": "Exact text to find. Must occur exactly once in the file.",
+                    },
+                    "new_str": {
+                        "type": "string",
+                        "description": "Replacement text.",
+                    },
+                },
+                "required": ["path", "old_str", "new_str"],
+            },
+        },
+    },
+]
+
+
+@dataclass
+class ToolExecResult:
+    ok: bool
+    payload: dict[str, Any]
+    extras: dict[str, Any] = field(default_factory=dict)
+
+    def to_tool_message_content(self) -> str:
+        return json.dumps(self.payload, ensure_ascii=False)
+
+
+class ToolRegistry:
+    """Workspace-jailed tool dispatcher.
+
+    `read_only` swaps the API tool list to read-only — the model literally cannot
+    propose edits. Toggle it via `set_read_only` between turns.
+    """
+
+    def __init__(self, workspace_root: Path, read_only: bool = False) -> None:
+        self._root = workspace_root.resolve()
+        self._read_only = read_only
+
+    @property
+    def workspace_root(self) -> Path:
+        return self._root
+
+    def set_workspace_root(self, root: Path) -> None:
+        self._root = root.resolve()
+
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
+    def set_read_only(self, value: bool) -> None:
+        self._read_only = value
+
+    def tool_defs(self) -> list[dict[str, Any]]:
+        if self._read_only:
+            return list(READ_TOOL_DEFS)
+        return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS)
+
+    # ---- path resolution ---------------------------------------------------
+
+    def _resolve_in_root(self, raw: str) -> Path:
+        """Resolve a workspace-relative path; raise if it escapes the jail.
+
+        Rejections:
+        - any '..' segment (even if final resolved path lands inside)
+        - absolute paths outside the workspace
+        - resolved paths not under the workspace root
+        """
+        if raw is None:
+            raise ValueError("path is required")
+        s = str(raw).strip()
+        if s == "":
+            raise ValueError("path must not be empty")
+        if ".." in Path(s).parts:
+            raise ValueError("'..' is not allowed in tool paths")
+        candidate = (self._root / s).resolve() if not Path(s).is_absolute() else Path(s).resolve()
+        if not candidate.is_relative_to(self._root):
+            raise ValueError(f"path '{raw}' escapes workspace root")
+        return candidate
+
+    # ---- main dispatch -----------------------------------------------------
+
+    def execute(
+        self,
+        name: str,
+        args: dict[str, Any],
+        approval_cb: ApprovalCallback,
+        reject_all: bool = False,
+    ) -> ToolExecResult:
+        try:
+            if name == "read_file":
+                target = self._resolve_in_root(args.get("path", ""))
+                return ToolExecResult(ok=True, payload=read_file(self._root, target))
+            if name == "list_directory":
+                target = self._resolve_in_root(args.get("path", "."))
+                return ToolExecResult(ok=True, payload=list_directory(self._root, target))
+            if name == "glob":
+                pattern = str(args.get("pattern", "")).strip()
+                if not pattern:
+                    return ToolExecResult(
+                        ok=False, payload={"ok": False, "error": "pattern is required"}
+                    )
+                if ".." in Path(pattern).parts or Path(pattern).is_absolute():
+                    return ToolExecResult(
+                        ok=False,
+                        payload={"ok": False, "error": "glob pattern must be workspace-relative"},
+                    )
+                return ToolExecResult(ok=True, payload=glob_files(self._root, pattern))
+            if name in ("write_file", "edit_file"):
+                if self._read_only:
+                    return ToolExecResult(
+                        ok=False,
+                        payload={
+                            "ok": False,
+                            "error": "Read-Only Mode is enabled — write tools are disabled.",
+                        },
+                    )
+                return self._handle_write(name, args, approval_cb, reject_all)
+            return ToolExecResult(
+                ok=False, payload={"ok": False, "error": f"unknown tool: {name}"}
+            )
+        except (ValueError, OSError) as exc:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": str(exc)})
+
+    def _handle_write(
+        self,
+        name: str,
+        args: dict[str, Any],
+        approval_cb: ApprovalCallback,
+        reject_all: bool,
+    ) -> ToolExecResult:
+        if reject_all:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "User rejected all writes in this turn."},
+                extras={"rejected_all": True},
+            )
+
+        path_arg = args.get("path", "")
+        target = self._resolve_in_root(path_arg)
+
+        if name == "write_file":
+            content = args.get("content", "")
+            if not isinstance(content, str):
+                return ToolExecResult(
+                    ok=False, payload={"ok": False, "error": "content must be a string"}
+                )
+            proposal = propose_write(self._root, target, content)
+            req = ApprovalRequest(
+                tool_name="write_file",
+                rel_path=proposal["rel_path"],
+                old_content=proposal["old_content"],
+                new_content=proposal["new_content"],
+                is_new_file=proposal["is_new_file"],
+            )
+        else:  # edit_file
+            old_str = args.get("old_str", "")
+            new_str = args.get("new_str", "")
+            if not isinstance(old_str, str) or not isinstance(new_str, str):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "old_str and new_str must be strings"},
+                )
+            proposal = propose_edit(self._root, target, old_str, new_str)
+            if not proposal.get("ok", False):
+                return ToolExecResult(ok=False, payload=proposal)
+            req = ApprovalRequest(
+                tool_name="edit_file",
+                rel_path=proposal["rel_path"],
+                old_content=proposal["old_content"],
+                new_content=proposal["new_content"],
+                is_new_file=False,
+            )
+
+        decision = approval_cb(req)
+
+        if decision.action == "reject":
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "User rejected this change."},
+                extras={"approval": "reject", "rel_path": req.rel_path},
+            )
+        if decision.action == "reject_all":
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": "User rejected this change and all further writes in this turn.",
+                },
+                extras={"approval": "reject_all", "rel_path": req.rel_path},
+            )
+
+        # Approve — back up if file exists, write new content.
+        target.parent.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_existing(self._root, target)
+        target.write_text(req.new_content, encoding="utf-8")
+        rel_backup = (
+            backup_path.relative_to(self._root).as_posix() if backup_path is not None else None
+        )
+        return ToolExecResult(
+            ok=True,
+            payload={
+                "ok": True,
+                "path": req.rel_path,
+                "applied": name,
+                "is_new_file": req.is_new_file,
+                "backup": rel_backup,
+            },
+            extras={"approval": "approve", "rel_path": req.rel_path},
+        )

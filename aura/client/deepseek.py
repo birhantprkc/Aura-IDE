@@ -1,0 +1,187 @@
+"""Streaming DeepSeek V4 client.
+
+Yields events; never raises. Honors thinking mode rules:
+- thinking on:  pass extra_body={"thinking":{"type":"enabled"}}, reasoning_effort
+                in ("high","max"); do NOT pass temperature/top_p/penalties
+- thinking off: pass extra_body={"thinking":{"type":"disabled"}} for clarity
+"""
+from __future__ import annotations
+
+import json
+import threading
+from collections.abc import Iterator
+from typing import Any
+
+from openai import APIError, APIStatusError, OpenAI
+
+from aura.client.events import (
+    ApiError,
+    ContentDelta,
+    Done,
+    Event,
+    ReasoningDelta,
+    ToolCallArgsDelta,
+    ToolCallEnd,
+    ToolCallStart,
+    Usage,
+)
+from aura.config import DEEPSEEK_BASE_URL, ModelId, ThinkingMode, require_api_key
+
+
+class DeepSeekClient:
+    """Wraps the OpenAI-compatible DeepSeek endpoint as an event stream."""
+
+    def __init__(self, api_key: str | None = None) -> None:
+        key = api_key if api_key is not None else require_api_key()
+        self._client = OpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL)
+
+    def stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        model: ModelId,
+        thinking: ThinkingMode,
+        cancel_event: threading.Event | None = None,
+    ) -> Iterator[Event]:
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        if thinking == "off":
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            kwargs["temperature"] = 0.7
+        else:
+            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+            kwargs["reasoning_effort"] = "high" if thinking == "high" else "max"
+            # Per docs: temperature/top_p/penalties silently ignored. Skip them.
+
+        # Accumulators reproduce the streamed assistant message exactly.
+        reasoning_buf: list[str] = []
+        content_buf: list[str] = []
+        # tool_calls indexed by stream "index" — the model can stream multiple in parallel.
+        tool_calls: dict[int, dict[str, Any]] = {}
+        seen_starts: set[int] = set()
+        finish_reason: str | None = None
+        usage_emitted = False
+
+        try:
+            stream = self._client.chat.completions.create(**kwargs)
+        except APIStatusError as exc:
+            yield ApiError(status_code=exc.status_code, message=str(exc))
+            return
+        except APIError as exc:
+            yield ApiError(status_code=None, message=str(exc))
+            return
+        except Exception as exc:  # network errors, ssl, etc.
+            yield ApiError(status_code=None, message=f"{type(exc).__name__}: {exc}")
+            return
+
+        try:
+            for chunk in stream:
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+
+                # Usage may appear on a terminal-only chunk OR be bundled with the final
+                # choice chunk depending on the server. Emit at most once.
+                if not usage_emitted and getattr(chunk, "usage", None) is not None:
+                    u = chunk.usage
+                    cache_hit = getattr(u, "prompt_cache_hit_tokens", 0) or 0
+                    cache_miss = getattr(u, "prompt_cache_miss_tokens", 0) or 0
+                    yield Usage(
+                        prompt_tokens=getattr(u, "prompt_tokens", 0) or 0,
+                        completion_tokens=getattr(u, "completion_tokens", 0) or 0,
+                        cache_hit_tokens=cache_hit,
+                        cache_miss_tokens=cache_miss,
+                    )
+                    usage_emitted = True
+
+                if not chunk.choices:
+                    continue
+
+                choice = chunk.choices[0]
+                delta = choice.delta
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+
+                # Reasoning text (CoT) — the V4 thinking-mode field.
+                rc = getattr(delta, "reasoning_content", None)
+                if rc:
+                    reasoning_buf.append(rc)
+                    yield ReasoningDelta(rc)
+
+                # Final answer text.
+                if delta.content:
+                    content_buf.append(delta.content)
+                    yield ContentDelta(delta.content)
+
+                # Tool-call fragments. OpenAI streams them as deltas keyed by index.
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        slot = tool_calls.setdefault(
+                            idx,
+                            {
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            },
+                        )
+                        if tc.id:
+                            slot["id"] = tc.id
+                        if tc.function is not None:
+                            if tc.function.name:
+                                slot["function"]["name"] = tc.function.name
+                            if tc.function.arguments:
+                                slot["function"]["arguments"] += tc.function.arguments
+
+                        if idx not in seen_starts and slot["id"] and slot["function"]["name"]:
+                            seen_starts.add(idx)
+                            yield ToolCallStart(
+                                index=idx, id=slot["id"], name=slot["function"]["name"]
+                            )
+                        if tc.function is not None and tc.function.arguments:
+                            yield ToolCallArgsDelta(
+                                index=idx, args_chunk=tc.function.arguments
+                            )
+        except APIStatusError as exc:
+            yield ApiError(status_code=exc.status_code, message=str(exc))
+            return
+        except APIError as exc:
+            yield ApiError(status_code=None, message=str(exc))
+            return
+        except Exception as exc:
+            yield ApiError(status_code=None, message=f"{type(exc).__name__}: {exc}")
+            return
+
+        # Close out any tool-calls we started.
+        for idx in sorted(tool_calls):
+            if idx in seen_starts:
+                yield ToolCallEnd(index=idx)
+
+        full_message: dict[str, Any] = {
+            "role": "assistant",
+            "content": "".join(content_buf) if content_buf else None,
+            "reasoning_content": "".join(reasoning_buf) if reasoning_buf else None,
+        }
+        if tool_calls:
+            full_message["tool_calls"] = [
+                tool_calls[i] for i in sorted(tool_calls)
+            ]
+            # Sanity: ensure args parse — if not, the tool runner will surface it.
+            for tc in full_message["tool_calls"]:
+                if not tc["function"]["arguments"]:
+                    tc["function"]["arguments"] = "{}"
+                else:
+                    try:
+                        json.loads(tc["function"]["arguments"])
+                    except json.JSONDecodeError:
+                        # Leave as-is; manager will catch and surface error.
+                        pass
+
+        yield Done(finish_reason=finish_reason, full_message=full_message)
