@@ -141,6 +141,8 @@ class _Worker(QObject):
         except Exception as exc:
             self.apiError.emit(-1, f"{type(exc).__name__}: {exc}")
         finally:
+            if self._cancel.is_set():
+                self._manager.history.pop_if_empty_assistant_message()
             self.finished.emit()
 
     def _on_event(self, ev: Event) -> None:
@@ -161,7 +163,8 @@ class _Worker(QObject):
         elif isinstance(ev, ApiError):
             self.apiError.emit(ev.status_code if ev.status_code is not None else -1, ev.message)
         elif isinstance(ev, Done):
-            self.streamDone.emit(ev.finish_reason or "", ev.full_message)
+            if ev.full_message:
+                self.streamDone.emit(ev.finish_reason or "", ev.full_message)
         elif isinstance(ev, ToolResult):
             self.toolResultEmitted.emit(ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {})
         elif isinstance(ev, WorkerDispatchRequested):
@@ -382,7 +385,8 @@ class _DispatchProxy(QObject):
                     ev.cache_miss_tokens,
                 )
             elif isinstance(ev, Done):
-                self.workerStreamDone.emit(tool_call_id, ev.finish_reason or "", ev.full_message)
+                if ev.full_message:
+                    self.workerStreamDone.emit(tool_call_id, ev.finish_reason or "", ev.full_message)
             elif isinstance(ev, ApiError):
                 msg = f"{ev.status_code}: {ev.message}" if ev.status_code is not None else ev.message
                 api_errors.append(msg)
@@ -437,6 +441,9 @@ class _DispatchProxy(QObject):
             )
         except Exception as exc:
             api_errors.append(f"{type(exc).__name__}: {exc}")
+
+        if cancel_event.is_set():
+            worker_history.pop_if_empty_assistant_message()
 
         summary = _build_worker_summary(req, worker_history, write_results, api_errors)
         ok = not api_errors and bool(write_results or _last_assistant_content(worker_history))
