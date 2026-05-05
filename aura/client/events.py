@@ -72,6 +72,20 @@ class ToolResult:
     extras: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class WorkerDispatchRequested:
+    """Emitted by the planner manager before it blocks waiting for a worker
+    dispatch. Signals the GUI to render a SpecCard with Dispatch/Edit/Cancel
+    controls. The dispatch callback (registered via send()) is what actually
+    blocks until the user decides and the worker completes.
+    """
+    tool_call_id: str
+    goal: str
+    files: list[str]
+    spec: str
+    acceptance: str
+
+
 Event = (
     ReasoningDelta
     | ContentDelta
@@ -82,4 +96,5 @@ Event = (
     | Done
     | ApiError
     | ToolResult
+    | WorkerDispatchRequested
 )

@@ -23,17 +23,21 @@ from PySide6.QtWidgets import (
 )
 
 from aura.bridge import ConversationBridge
+from aura.bridge.qt_bridge import PLANNER_SYSTEM_PROMPT
 from aura.config import (
     APP_NAME,
     AppSettings,
     DEFAULT_MODEL,
     DEFAULT_THINKING,
+    DEFAULT_WORKER_MODEL,
+    DEFAULT_WORKER_THINKING,
     MODELS,
     ModelId,
     ThinkingMode,
     cost_usd,
     load_settings,
     load_workspace_root,
+    save_settings,
     save_workspace_root,
 )
 from aura.conversation.persistence import (
@@ -43,9 +47,10 @@ from aura.conversation.persistence import (
     most_recent_conversation,
     save_conversation,
 )
-from aura.gui.chat_view import ChatView
+from aura.gui.chat_view import ChatView, SpecCard
 from aura.gui.input_panel import Attachment, InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
+from aura.gui.spec_edit_dialog import SpecEditDialog
 from aura.gui.theme import BG, BG_ALT, BORDER, FG, FG_DIM, FG_MUTED, WARN
 from aura.gui.workspace_tree import WorkspaceTree
 
@@ -91,7 +96,9 @@ class MainWindow(QMainWindow):
         # Bridge.
         self._bridge = ConversationBridge(parent_widget=self)
         self._bridge.set_workspace_root(self._workspace_root)
-        self._bridge.set_system_prompt(SYSTEM_PROMPT)
+        self._apply_planner_worker_mode_to_bridge(self._settings.planner_worker_mode)
+        self._bridge.set_worker_model(self._settings.default_worker_model)
+        self._bridge.set_worker_thinking(self._settings.default_worker_thinking)
 
         # Persistence state.
         self._current_conversation_path: Path | None = None
@@ -124,8 +131,15 @@ class MainWindow(QMainWindow):
 
         self._input = InputPanel(self._workspace_root)
         # Apply default model / thinking from settings.
-        self._input.set_model(self._settings.default_model)
-        self._input.set_thinking(self._settings.default_thinking)
+        if self._settings.planner_worker_mode:
+            self._input.set_model(self._settings.default_planner_model)
+            self._input.set_thinking(self._settings.default_planner_thinking)
+        else:
+            self._input.set_model(self._settings.default_model)
+            self._input.set_thinking(self._settings.default_thinking)
+        self._input.set_worker_model(self._settings.default_worker_model)
+        self._input.set_worker_thinking(self._settings.default_worker_thinking)
+        self._input.set_planner_worker_mode(self._settings.planner_worker_mode)
         right_layout.addWidget(self._input)
 
         splitter.addWidget(right)
@@ -156,6 +170,23 @@ class MainWindow(QMainWindow):
         self._input.stop_requested.connect(self._on_stop)
         self._input.model_changed.connect(lambda _m: self._refresh_status_bar())
         self._input.thinking_changed.connect(lambda _t: self._refresh_status_bar())
+        self._input.worker_model_changed.connect(self._on_worker_model_changed)
+        self._input.worker_thinking_changed.connect(self._on_worker_thinking_changed)
+
+        # Planner / worker dispatch flow.
+        self._bridge.workerDispatchRequested.connect(self._on_worker_dispatch_requested)
+        self._bridge.workerStarted.connect(self._on_worker_started)
+        self._bridge.workerFinished.connect(self._on_worker_finished)
+        self._bridge.workerCancelled.connect(self._on_worker_cancelled)
+        self._bridge.workerReasoningDelta.connect(self._chat.worker_append_reasoning)
+        self._bridge.workerContentDelta.connect(self._chat.worker_append_content)
+        self._bridge.workerToolCallStart.connect(self._chat.worker_add_tool_call)
+        self._bridge.workerToolCallArgs.connect(self._chat.worker_append_tool_args)
+        self._bridge.workerToolCallEnd.connect(lambda _t, _w: None)
+        self._bridge.workerToolResult.connect(self._on_worker_tool_result)
+        self._bridge.workerDiffDecided.connect(self._on_worker_diff_decided)
+        self._bridge.workerApiError.connect(self._on_worker_api_error)
+        self._bridge.workerUsage.connect(self._on_worker_usage)
 
         self._update_workspace_label()
         self._refresh_status_bar()
@@ -363,9 +394,33 @@ class MainWindow(QMainWindow):
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             self._settings = dlg.result_settings()
             # Apply to current widgets.
-            self._input.set_model(self._settings.default_model)
-            self._input.set_thinking(self._settings.default_thinking)
+            if self._settings.planner_worker_mode:
+                self._input.set_model(self._settings.default_planner_model)
+                self._input.set_thinking(self._settings.default_planner_thinking)
+            else:
+                self._input.set_model(self._settings.default_model)
+                self._input.set_thinking(self._settings.default_thinking)
+            self._input.set_worker_model(self._settings.default_worker_model)
+            self._input.set_worker_thinking(self._settings.default_worker_thinking)
+            self._input.set_planner_worker_mode(self._settings.planner_worker_mode)
+            self._apply_planner_worker_mode_to_bridge(self._settings.planner_worker_mode)
+            self._bridge.set_worker_model(self._settings.default_worker_model)
+            self._bridge.set_worker_thinking(self._settings.default_worker_thinking)
             self._refresh_status_bar()
+
+    def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
+        self._bridge.set_planner_worker_mode(enabled)
+        self._bridge.set_system_prompt(
+            PLANNER_SYSTEM_PROMPT if enabled else SYSTEM_PROMPT
+        )
+
+    def _on_worker_model_changed(self, model: str) -> None:
+        self._bridge.set_worker_model(model)  # type: ignore[arg-type]
+        self._refresh_status_bar()
+
+    def _on_worker_thinking_changed(self, thinking: str) -> None:
+        self._bridge.set_worker_thinking(thinking)  # type: ignore[arg-type]
+        self._refresh_status_bar()
 
     def _on_send(self, payload: SendPayload) -> None:
         if self._bridge.is_running():
@@ -433,6 +488,113 @@ class MainWindow(QMainWindow):
     ) -> None:
         self._chat.add_diff_card(tool_call_id, rel_path, old, new, decision, is_new_file)
 
+    # ---- planner/worker dispatch slots -----------------------------------
+
+    def _on_worker_dispatch_requested(
+        self,
+        tool_call_id: str,
+        goal: str,
+        files: list,
+        spec: str,
+        acceptance: str,
+    ) -> None:
+        card = self._chat.add_spec_card(
+            tool_call_id, goal, list(files), spec, acceptance
+        )
+        try:
+            card.dispatch_clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            card.edit_clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            card.cancel_clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        card.dispatch_clicked.connect(self._on_dispatch_clicked)
+        card.edit_clicked.connect(self._on_edit_spec_clicked)
+        card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)
+
+    def _on_dispatch_clicked(self, tool_call_id: str) -> None:
+        card = self._chat.get_spec_card(tool_call_id)
+        if card is None:
+            return
+        goal, files, spec, acceptance = card.current_spec()
+        self._bridge.user_dispatched(tool_call_id, goal, files, spec, acceptance)
+
+    def _on_edit_spec_clicked(self, tool_call_id: str) -> None:
+        card = self._chat.get_spec_card(tool_call_id)
+        if card is None:
+            return
+        goal, files, spec, acceptance = card.current_spec()
+        dlg = SpecEditDialog(goal, files, spec, acceptance, parent=self)
+        if dlg.exec() == SpecEditDialog.DialogCode.Accepted:
+            card.update_spec(dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance())
+
+    def _on_cancel_dispatch_clicked(self, tool_call_id: str) -> None:
+        self._bridge.user_cancelled_dispatch(tool_call_id)
+
+    def _on_worker_started(self, _tool_call_id: str) -> None:
+        return
+
+    def _on_worker_finished(self, tool_call_id: str, ok: bool, summary: str) -> None:
+        self._chat.worker_finished(tool_call_id, ok, summary)
+
+    def _on_worker_cancelled(self, tool_call_id: str) -> None:
+        card = self._chat.get_spec_card(tool_call_id)
+        if card is not None:
+            card.disable_buttons()
+
+    def _on_worker_tool_result(
+        self,
+        parent_tool_id: str,
+        worker_tool_id: str,
+        name: str,
+        ok: bool,
+        result: str,
+        extras: dict,
+    ) -> None:
+        self._chat.worker_set_tool_result(parent_tool_id, worker_tool_id, ok, result)
+
+    def _on_worker_diff_decided(
+        self,
+        parent_tool_id: str,
+        worker_tool_id: str,
+        decision: str,
+        rel_path: str,
+        old: str,
+        new: str,
+        is_new_file: bool,
+    ) -> None:
+        self._chat.worker_add_diff_card(
+            parent_tool_id, worker_tool_id, rel_path, old, new, decision, is_new_file
+        )
+
+    def _on_worker_api_error(self, tool_call_id: str, status: int, message: str) -> None:
+        title = f"API Error {status}" if status > 0 else "Worker Error"
+        self._chat.worker_add_error(tool_call_id, f"{title}: {message}")
+
+    def _on_worker_usage(
+        self,
+        _tool_call_id: str,
+        model_id: str,
+        prompt: int,
+        completion: int,
+        hit: int,
+        miss: int,
+    ) -> None:
+        if hit == 0 and miss == 0:
+            miss = prompt
+        bucket = self._session_usage.setdefault(
+            model_id, {"hit": 0, "miss": 0, "out": 0}
+        )
+        bucket["hit"] += hit
+        bucket["miss"] += miss
+        bucket["out"] += completion
+        self._refresh_status_bar()
+
     def _on_api_error(self, status: int, message: str) -> None:
         title = f"API Error {status}" if status > 0 else "Error"
         self._chat.add_error(title, message)
@@ -465,6 +627,12 @@ class MainWindow(QMainWindow):
                 model=self._input.current_model(),
                 thinking=self._input.current_thinking(),
                 existing_path=self._current_conversation_path,
+                planner_worker_mode=self._bridge.planner_worker_mode,
+                planner_model=self._input.current_model(),
+                worker_model=self._input.current_worker_model(),
+                planner_thinking=self._input.current_thinking(),
+                worker_thinking=self._input.current_worker_thinking(),
+                worker_dispatches=self._bridge.dispatch_records,
             )
         except OSError as exc:
             # Disk error — surface but don't crash the chat.
@@ -483,15 +651,27 @@ class MainWindow(QMainWindow):
         self._apply_loaded_conversation(loaded)
 
     def _apply_loaded_conversation(self, loaded: LoadedConversation) -> None:
-        # Replace history.
-        self._bridge.history.system_prompt = loaded.history.system_prompt or SYSTEM_PROMPT
+        pwm = loaded.planner_worker_mode
+        default_prompt = PLANNER_SYSTEM_PROMPT if pwm else SYSTEM_PROMPT
+        self._bridge.history.system_prompt = (
+            loaded.history.system_prompt or default_prompt
+        )
         self._bridge.history.messages = list(loaded.history.messages)
         self._current_conversation_path = loaded.path
         self._reset_session_usage()
-        # Apply model/thinking.
-        self._input.set_model(loaded.model)
-        self._input.set_thinking(loaded.thinking)
-        # Replay into the chat view.
+        # Sync mode (without overwriting the system prompt we just set).
+        self._bridge.set_planner_worker_mode(pwm)
+        if pwm:
+            self._input.set_model(loaded.planner_model)
+            self._input.set_thinking(loaded.planner_thinking)
+            self._input.set_worker_model(loaded.worker_model)
+            self._input.set_worker_thinking(loaded.worker_thinking)
+            self._bridge.set_worker_model(loaded.worker_model)
+            self._bridge.set_worker_thinking(loaded.worker_thinking)
+        else:
+            self._input.set_model(loaded.model)
+            self._input.set_thinking(loaded.thinking)
+        self._input.set_planner_worker_mode(pwm)
         self._chat.reset()
         self._replay_history_into_view()
         self._refresh_status_bar()

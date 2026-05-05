@@ -1,18 +1,26 @@
 """Bridge between the (sync) ConversationManager worker thread and Qt's GUI thread.
 
-- send() spawns a QThread that runs ConversationManager.send.
+- send() spawns a QThread that runs ConversationManager.send for the planner.
 - Each event becomes a Qt signal on the GUI thread.
 - The approval callback is bridged via QMetaObject.invokeMethod with
   Qt.BlockingQueuedConnection — the worker thread blocks until the user clicks
   in the modal dialog on the main thread.
+
+Planner / worker mode:
+- The planner runs as the long-lived manager. When it calls dispatch_to_worker,
+  the dispatch callback (`_DispatchProxy`) marshals the spec to the GUI thread,
+  blocks until the user dispatches or cancels, and (on dispatch) runs a worker
+  ConversationManager synchronously on the same background thread, forwarding
+  worker-prefixed signals up to the GUI for nested rendering.
 """
 from __future__ import annotations
 
+import json
 import threading
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import (
-    Q_ARG,
     QMetaObject,
     QObject,
     QThread,
@@ -33,9 +41,21 @@ from aura.client import (
     ToolCallStart,
     ToolResult,
     Usage,
+    WorkerDispatchRequested,
 )
-from aura.config import ModelId, ThinkingMode
-from aura.conversation import ConversationManager, History
+from aura.config import (
+    DEFAULT_WORKER_MODEL,
+    DEFAULT_WORKER_THINKING,
+    ModelId,
+    ThinkingMode,
+)
+from aura.conversation import (
+    ConversationManager,
+    History,
+    WorkerDispatchRequest,
+    WorkerDispatchResult,
+)
+from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tools import (
     ApprovalDecision,
     ApprovalRequest,
@@ -44,24 +64,52 @@ from aura.conversation.tools import (
 from aura.gui.diff_dialog import DiffApprovalDialog
 
 
+PLANNER_SYSTEM_PROMPT = (
+    "You are the planner in Aura, a desktop assistant for a Godot 4 game developer.\n"
+    "The user chats with you to troubleshoot and modify their codebase.\n"
+    "You have read-only filesystem tools (read_file, list_directory, glob) scoped to the "
+    "workspace, plus the dispatch_to_worker tool. Workspace-relative paths only.\n"
+    "Before calling dispatch_to_worker, you should have read the relevant files and "
+    "confirmed the user's intent. If the user's request is ambiguous, ask. If files might "
+    "be involved that you haven't read, read them first. When the user has agreed to a "
+    "change and you have enough information, call dispatch_to_worker with a complete, "
+    "self-contained spec — the worker does not see this conversation. Do not propose code "
+    "edits inline; propose them via dispatch. Keep your responses concise and oriented "
+    "toward action."
+)
+
+WORKER_SYSTEM_PROMPT = (
+    "You are the worker in Aura. You execute a precise coding task specified by the "
+    "planner. You have read/write filesystem tools (read_file, list_directory, glob, "
+    "write_file, edit_file) scoped to the workspace; every write is gated by user "
+    "approval through a diff dialog.\n"
+    "Read the spec carefully. Read each file listed before modifying it. Make the "
+    "changes via edit_file (preferred — keep old_str tightly scoped) or write_file. "
+    "When done, return a brief summary describing exactly what you changed and which "
+    "files were touched. Do not chat. Your output is a structured report."
+)
+
+
 class _Worker(QObject):
-    """Lives on the worker thread. Runs the conversation loop."""
+    """Lives on the worker thread. Runs the planner conversation loop."""
 
     reasoningDelta = Signal(str)
     contentDelta = Signal(str)
     toolCallStart = Signal(int, str, str)  # index, id, name
     toolCallArgs = Signal(int, str)  # index, fragment
     toolCallEnd = Signal(int)
-    usageEmitted = Signal(int, int, int, int)  # prompt, completion, hit, miss
-    apiError = Signal(int, str)  # status (-1 if None), message
-    streamDone = Signal(str, dict)  # finish_reason, full_message
+    usageEmitted = Signal(int, int, int, int)
+    apiError = Signal(int, str)
+    streamDone = Signal(str, dict)
     toolResultEmitted = Signal(str, str, bool, str, dict)
+    workerDispatchRequested = Signal(str, str, list, str, str)
     finished = Signal()
 
     def __init__(
         self,
         manager: ConversationManager,
         approval_proxy: "_ApprovalProxy",
+        dispatch_proxy: "_DispatchProxy | None",
         cancel_event: threading.Event,
         model: ModelId,
         thinking: ThinkingMode,
@@ -69,21 +117,26 @@ class _Worker(QObject):
         super().__init__()
         self._manager = manager
         self._approval_proxy = approval_proxy
+        self._dispatch_proxy = dispatch_proxy
         self._cancel = cancel_event
         self._model = model
         self._thinking = thinking
-        # Track tool name by id so result event can label it.
-        self._tool_id_to_index: dict[int, str] = {}
 
     @Slot()
     def run(self) -> None:
         try:
+            dispatch_cb = (
+                self._dispatch_proxy.request_dispatch
+                if self._dispatch_proxy is not None
+                else None
+            )
             self._manager.send(
                 on_event=self._on_event,
                 approval_cb=self._approval_proxy.request_approval,
                 cancel_event=self._cancel,
                 model=self._model,
                 thinking=self._thinking,
+                dispatch_cb=dispatch_cb,
             )
         except Exception as exc:
             self.apiError.emit(-1, f"{type(exc).__name__}: {exc}")
@@ -111,36 +164,35 @@ class _Worker(QObject):
             self.streamDone.emit(ev.finish_reason or "", ev.full_message)
         elif isinstance(ev, ToolResult):
             self.toolResultEmitted.emit(ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {})
+        elif isinstance(ev, WorkerDispatchRequested):
+            self.workerDispatchRequested.emit(
+                ev.tool_call_id, ev.goal, list(ev.files), ev.spec, ev.acceptance
+            )
 
 
 class _ApprovalProxy(QObject):
-    """Marshals approval requests from the worker thread onto the GUI thread.
-
-    The worker calls request_approval() which uses QMetaObject.invokeMethod with
-    BlockingQueuedConnection, synchronously running _open_dialog on the GUI thread.
-    """
+    """Marshals approval requests from any worker thread onto the GUI thread."""
 
     def __init__(self, parent_widget) -> None:
         super().__init__()
         self._parent_widget = parent_widget
+        self._lock = threading.Lock()
         self._last_decision: ApprovalDecision = ApprovalDecision(action="reject")
         self._last_request: ApprovalRequest | None = None
-        # Side-channel for bridge consumers to know what was decided + on what.
         self.last_event: dict[str, Any] | None = None
 
     def request_approval(self, request: ApprovalRequest) -> ApprovalDecision:
-        # Called from worker thread. Block until GUI thread has shown the dialog.
-        self._last_request = request
-        QMetaObject.invokeMethod(
-            self,
-            "_open_dialog",
-            Qt.ConnectionType.BlockingQueuedConnection,
-        )
-        return self._last_decision
+        with self._lock:
+            self._last_request = request
+            QMetaObject.invokeMethod(
+                self,
+                "_open_dialog",
+                Qt.ConnectionType.BlockingQueuedConnection,
+            )
+            return self._last_decision
 
     @Slot()
     def _open_dialog(self) -> None:
-        # Runs on GUI thread.
         req = self._last_request
         if req is None:
             self._last_decision = ApprovalDecision(action="reject")
@@ -157,47 +209,389 @@ class _ApprovalProxy(QObject):
         }
 
 
-class ConversationBridge(QObject):
-    """Public Qt-facing facade for one running conversation.
+class _DispatchProxy(QObject):
+    """Routes dispatch_to_worker calls through the GUI (SpecCard) and runs
+    the worker manager when the user clicks Dispatch.
 
-    Owns the ConversationManager + History + ToolRegistry. The MainWindow
-    creates one bridge per app session and reuses it across turns.
+    The planner thread calls request_dispatch(); we marshal a "show card"
+    signal to the GUI thread, then block on a threading.Event until the user
+    clicks Dispatch (after which we run the worker on this same thread, then
+    signal back) or Cancel (we just return immediately).
     """
+
+    showSpecCard = Signal(str, str, list, str, str)  # tool_id, goal, files, spec, acceptance
+    workerStarted = Signal(str)  # tool_id
+    workerFinished = Signal(str, bool, str)  # tool_id, ok, summary
+    workerCancelled = Signal(str)
+    workerReasoningDelta = Signal(str, str)
+    workerContentDelta = Signal(str, str)
+    workerToolCallStart = Signal(str, str, str)  # parent_id, worker_tool_id, name
+    workerToolCallArgs = Signal(str, str, str)
+    workerToolCallEnd = Signal(str, str)
+    workerToolResult = Signal(str, str, str, bool, str, dict)
+    workerDiffDecided = Signal(str, str, str, str, str, str, bool)
+    workerStreamDone = Signal(str, str, dict)
+    workerApiError = Signal(str, int, str)
+    workerUsage = Signal(str, str, int, int, int, int)  # tool_id, model, prompt, comp, hit, miss
+
+    def __init__(
+        self,
+        parent_widget,
+        client: DeepSeekClient,
+        registry_factory,
+        approval_proxy: _ApprovalProxy,
+    ) -> None:
+        super().__init__()
+        self._parent_widget = parent_widget
+        self._client = client
+        self._registry_factory = registry_factory
+        self._approval_proxy = approval_proxy
+
+        self._worker_model: ModelId = DEFAULT_WORKER_MODEL
+        self._worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
+
+        # Per-call state — guarded by a lock so concurrent dispatches (which
+        # shouldn't happen, but be safe) don't trample each other.
+        self._lock = threading.Lock()
+        self._pending: dict[str, _DispatchPending] = {}
+        # Records of each completed dispatch for persistence.
+        self._records: list[WorkerDispatchRecord] = []
+
+    # ---- config -----------------------------------------------------------
+
+    def set_worker_model(self, model: ModelId) -> None:
+        self._worker_model = model
+
+    def set_worker_thinking(self, thinking: ThinkingMode) -> None:
+        self._worker_thinking = thinking
+
+    def records(self) -> list[WorkerDispatchRecord]:
+        return list(self._records)
+
+    def clear_records(self) -> None:
+        self._records.clear()
+
+    # ---- planner-thread side ---------------------------------------------
+
+    def request_dispatch(
+        self, tool_call_id: str, req: WorkerDispatchRequest
+    ) -> WorkerDispatchResult:
+        """Called from the planner's worker thread. Blocks."""
+        pending = _DispatchPending(request=req)
+        with self._lock:
+            self._pending[tool_call_id] = pending
+
+        # Tell GUI thread to render the spec card; user will call user_dispatched
+        # or user_cancelled, which will set decision_event.
+        self.showSpecCard.emit(
+            tool_call_id, req.goal, list(req.files), req.spec, req.acceptance
+        )
+
+        pending.decision_event.wait()
+        if pending.cancelled:
+            with self._lock:
+                self._pending.pop(tool_call_id, None)
+            return WorkerDispatchResult(
+                ok=False,
+                summary="user cancelled dispatch",
+                cancelled=True,
+            )
+
+        edited = pending.edited_request or req
+        result = self._run_worker(tool_call_id, edited, pending)
+        with self._lock:
+            self._pending.pop(tool_call_id, None)
+        return result
+
+    # ---- GUI-thread side --------------------------------------------------
+
+    def user_dispatched(
+        self,
+        tool_call_id: str,
+        goal: str,
+        files: list[str],
+        spec: str,
+        acceptance: str,
+    ) -> None:
+        with self._lock:
+            pending = self._pending.get(tool_call_id)
+        if pending is None:
+            return
+        pending.edited_request = WorkerDispatchRequest(
+            goal=goal, files=list(files), spec=spec, acceptance=acceptance
+        )
+        pending.cancelled = False
+        pending.decision_event.set()
+
+    def user_cancelled(self, tool_call_id: str) -> None:
+        with self._lock:
+            pending = self._pending.get(tool_call_id)
+        if pending is None:
+            return
+        pending.cancelled = True
+        pending.decision_event.set()
+
+    # ---- worker run -------------------------------------------------------
+
+    def _run_worker(
+        self,
+        tool_call_id: str,
+        req: WorkerDispatchRequest,
+        pending: "_DispatchPending",
+    ) -> WorkerDispatchResult:
+        worker_history = History()
+        worker_history.set_system(WORKER_SYSTEM_PROMPT)
+        worker_history.append_user_text(_format_spec_as_user_message(req))
+
+        worker_registry = self._registry_factory("worker")
+        worker_manager = ConversationManager(self._client, worker_history, worker_registry)
+
+        self.workerStarted.emit(tool_call_id)
+        cancel_event = threading.Event()
+        pending.cancel_event = cancel_event
+
+        # Track worker tool calls for the structured report and to map
+        # streaming index -> id for arg/end signals.
+        index_to_id: dict[int, str] = {}
+        write_results: list[dict[str, Any]] = []
+        api_errors: list[str] = []
+
+        def on_event(ev: Event) -> None:
+            if isinstance(ev, ReasoningDelta):
+                self.workerReasoningDelta.emit(tool_call_id, ev.text)
+            elif isinstance(ev, ContentDelta):
+                self.workerContentDelta.emit(tool_call_id, ev.text)
+            elif isinstance(ev, ToolCallStart):
+                index_to_id[ev.index] = ev.id
+                self.workerToolCallStart.emit(tool_call_id, ev.id, ev.name)
+            elif isinstance(ev, ToolCallArgsDelta):
+                wid = index_to_id.get(ev.index, "")
+                if wid:
+                    self.workerToolCallArgs.emit(tool_call_id, wid, ev.args_chunk)
+            elif isinstance(ev, ToolCallEnd):
+                wid = index_to_id.get(ev.index, "")
+                if wid:
+                    self.workerToolCallEnd.emit(tool_call_id, wid)
+            elif isinstance(ev, Usage):
+                self.workerUsage.emit(
+                    tool_call_id,
+                    str(self._worker_model),
+                    ev.prompt_tokens,
+                    ev.completion_tokens,
+                    ev.cache_hit_tokens,
+                    ev.cache_miss_tokens,
+                )
+            elif isinstance(ev, Done):
+                self.workerStreamDone.emit(tool_call_id, ev.finish_reason or "", ev.full_message)
+            elif isinstance(ev, ApiError):
+                msg = f"{ev.status_code}: {ev.message}" if ev.status_code is not None else ev.message
+                api_errors.append(msg)
+                self.workerApiError.emit(
+                    tool_call_id,
+                    ev.status_code if ev.status_code is not None else -1,
+                    ev.message,
+                )
+            elif isinstance(ev, ToolResult):
+                approval = (ev.extras or {}).get("approval")
+                if approval and self._approval_proxy.last_event is not None:
+                    last = self._approval_proxy.last_event
+                    self.workerDiffDecided.emit(
+                        tool_call_id,
+                        ev.tool_call_id,
+                        str(approval),
+                        str(last["rel_path"]),
+                        str(last["old_content"]),
+                        str(last["new_content"]),
+                        bool(last["is_new_file"]),
+                    )
+                    self._approval_proxy.last_event = None
+                self.workerToolResult.emit(
+                    tool_call_id, ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {}
+                )
+                # Track writes for the summary back to the planner.
+                try:
+                    parsed = json.loads(ev.result)
+                except (json.JSONDecodeError, TypeError):
+                    parsed = {}
+                if (
+                    ev.name in ("write_file", "edit_file")
+                    and isinstance(parsed, dict)
+                    and parsed.get("ok")
+                ):
+                    write_results.append(
+                        {
+                            "tool": ev.name,
+                            "path": parsed.get("path"),
+                            "is_new_file": parsed.get("is_new_file", False),
+                        }
+                    )
+
+        try:
+            worker_manager.send(
+                on_event=on_event,
+                approval_cb=self._approval_proxy.request_approval,
+                cancel_event=cancel_event,
+                model=self._worker_model,
+                thinking=self._worker_thinking,
+                dispatch_cb=None,
+            )
+        except Exception as exc:
+            api_errors.append(f"{type(exc).__name__}: {exc}")
+
+        summary = _build_worker_summary(req, worker_history, write_results, api_errors)
+        ok = not api_errors and bool(write_results or _last_assistant_content(worker_history))
+
+        record = WorkerDispatchRecord(
+            after_message_index=-1,
+            tool_call_id=tool_call_id,
+            spec=req.to_dict(),
+            worker_history=list(worker_history.messages),
+            result_summary=summary,
+        )
+        self._records.append(record)
+
+        self.workerFinished.emit(tool_call_id, ok, summary)
+        return WorkerDispatchResult(
+            ok=ok,
+            summary=summary,
+            cancelled=False,
+            extras={"writes": write_results, "errors": api_errors},
+        )
+
+
+class _DispatchPending:
+    """Per-dispatch state on the bridge."""
+
+    def __init__(self, request: WorkerDispatchRequest) -> None:
+        self.request = request
+        self.edited_request: WorkerDispatchRequest | None = None
+        self.cancelled: bool = False
+        self.decision_event: threading.Event = threading.Event()
+        self.cancel_event: threading.Event | None = None
+
+
+def _format_spec_as_user_message(req: WorkerDispatchRequest) -> str:
+    files_block = "\n".join(f"- {p}" for p in req.files) if req.files else "(none listed)"
+    return (
+        f"Goal: {req.goal}\n\n"
+        f"Files involved:\n{files_block}\n\n"
+        f"Spec:\n{req.spec}\n\n"
+        f"Acceptance criteria:\n{req.acceptance}\n\n"
+        "Begin. Read the listed files first, then make the change(s). When done, "
+        "respond with a concise summary of what you changed and which files were touched."
+    )
+
+
+def _last_assistant_content(history: History) -> str:
+    for msg in reversed(history.messages):
+        if msg.get("role") == "assistant":
+            content = msg.get("content")
+            if isinstance(content, str) and content.strip():
+                return content
+    return ""
+
+
+def _build_worker_summary(
+    req: WorkerDispatchRequest,
+    history: History,
+    writes: list[dict[str, Any]],
+    errors: list[str],
+) -> str:
+    lines: list[str] = []
+    if errors:
+        lines.append("Worker encountered errors:")
+        for err in errors:
+            lines.append(f"  - {err}")
+    if writes:
+        lines.append("Files modified:")
+        for w in writes:
+            tag = "(new)" if w.get("is_new_file") else f"({w.get('tool')})"
+            lines.append(f"  - {w.get('path')} {tag}")
+    final = _last_assistant_content(history)
+    if final:
+        lines.append("")
+        lines.append("Worker's final report:")
+        lines.append(final.strip())
+    if not lines:
+        lines.append("Worker finished with no changes and no final report.")
+    return "\n".join(lines).strip()
+
+
+class ConversationBridge(QObject):
+    """Public Qt-facing facade for one running conversation."""
 
     reasoningDelta = Signal(str)
     contentDelta = Signal(str)
     toolCallStart = Signal(str, str)  # tool_call_id, name
-    toolCallArgs = Signal(str, str)  # tool_call_id, fragment
-    toolCallEnd = Signal(str)  # tool_call_id
+    toolCallArgs = Signal(str, str)
+    toolCallEnd = Signal(str)
     apiError = Signal(int, str)
     streamDone = Signal(str, dict)
-    toolResult = Signal(str, str, bool, str, dict)  # id, name, ok, result, extras
-    diffApplied = Signal(str, str, str, str, bool)  # tool_call_id, rel_path, old, new, is_new_file -> approve
+    toolResult = Signal(str, str, bool, str, dict)
+    diffApplied = Signal(str, str, str, str, bool)
     diffDecided = Signal(str, str, str, str, str, bool)
-    # diffDecided: tool_call_id, decision, rel_path, old, new, is_new_file
     started = Signal()
     finished = Signal()
     usageEmitted = Signal(int, int, int, int)
-    usageWithModel = Signal(str, int, int, int, int)  # model_id, prompt, completion, hit, miss
+    usageWithModel = Signal(str, int, int, int, int)
+
+    # Planner / worker signals (re-exposed from the dispatch proxy so the GUI
+    # binds to a single object).
+    workerDispatchRequested = Signal(str, str, list, str, str)
+    workerStarted = Signal(str)
+    workerFinished = Signal(str, bool, str)
+    workerCancelled = Signal(str)
+    workerReasoningDelta = Signal(str, str)
+    workerContentDelta = Signal(str, str)
+    workerToolCallStart = Signal(str, str, str)
+    workerToolCallArgs = Signal(str, str, str)
+    workerToolCallEnd = Signal(str, str)
+    workerToolResult = Signal(str, str, str, bool, str, dict)
+    workerDiffDecided = Signal(str, str, str, str, str, str, bool)
+    workerApiError = Signal(str, int, str)
+    workerUsage = Signal(str, str, int, int, int, int)
 
     def __init__(self, parent_widget) -> None:
         super().__init__()
         self._client = DeepSeekClient()
         self._history = History()
-        self._registry = ToolRegistry(workspace_root=_dummy_root())
+        self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="single")
         self._manager = ConversationManager(self._client, self._history, self._registry)
         self._parent_widget = parent_widget
         self._approval_proxy = _ApprovalProxy(parent_widget)
+
+        # Dispatch proxy (used only when planner_worker_mode is on).
+        self._dispatch_proxy = _DispatchProxy(
+            parent_widget=parent_widget,
+            client=self._client,
+            registry_factory=self._make_worker_registry,
+            approval_proxy=self._approval_proxy,
+        )
+
         self._cancel: threading.Event = threading.Event()
         self._thread: QThread | None = None
         self._worker: _Worker | None = None
-        # Map streaming-index -> tool_call_id (for routing args/end events).
         self._index_to_id: dict[int, str] = {}
         self._index_to_name: dict[int, str] = {}
-        # Pending approval correlation: when worker's tool_call_id is unknown to
-        # _ApprovalProxy, we match by rel_path and most-recent worker tool id.
         self._last_proposed_tool_call_id: str | None = None
         self._active_model: str = ""
+
+        self._planner_worker_mode: bool = False  # configured by main_window
+
+        # Re-emit dispatch proxy signals on the bridge so the GUI binds once.
+        self._dispatch_proxy.showSpecCard.connect(self.workerDispatchRequested)
+        self._dispatch_proxy.workerStarted.connect(self.workerStarted)
+        self._dispatch_proxy.workerFinished.connect(self.workerFinished)
+        self._dispatch_proxy.workerCancelled.connect(self.workerCancelled)
+        self._dispatch_proxy.workerReasoningDelta.connect(self.workerReasoningDelta)
+        self._dispatch_proxy.workerContentDelta.connect(self.workerContentDelta)
+        self._dispatch_proxy.workerToolCallStart.connect(self.workerToolCallStart)
+        self._dispatch_proxy.workerToolCallArgs.connect(self.workerToolCallArgs)
+        self._dispatch_proxy.workerToolCallEnd.connect(self.workerToolCallEnd)
+        self._dispatch_proxy.workerToolResult.connect(self.workerToolResult)
+        self._dispatch_proxy.workerDiffDecided.connect(self.workerDiffDecided)
+        self._dispatch_proxy.workerApiError.connect(self.workerApiError)
+        self._dispatch_proxy.workerUsage.connect(self.workerUsage)
 
     # ---- config -----------------------------------------------------------
 
@@ -209,6 +603,17 @@ class ConversationBridge(QObject):
     def registry(self) -> ToolRegistry:
         return self._registry
 
+    @property
+    def planner_worker_mode(self) -> bool:
+        return self._planner_worker_mode
+
+    @property
+    def dispatch_records(self) -> list[WorkerDispatchRecord]:
+        return self._dispatch_proxy.records()
+
+    def clear_dispatch_records(self) -> None:
+        self._dispatch_proxy.clear_records()
+
     def set_workspace_root(self, root) -> None:
         self._registry.set_workspace_root(root)
 
@@ -218,13 +623,54 @@ class ConversationBridge(QObject):
     def set_system_prompt(self, prompt: str) -> None:
         self._history.set_system(prompt)
 
+    def set_planner_worker_mode(self, enabled: bool) -> None:
+        self._planner_worker_mode = enabled
+        if enabled:
+            self._registry.set_mode("planner")
+            if not self._history.system_prompt or self._history.system_prompt == "":
+                self._history.set_system(PLANNER_SYSTEM_PROMPT)
+        else:
+            self._registry.set_mode("single")
+
+    def set_worker_model(self, model: ModelId) -> None:
+        self._dispatch_proxy.set_worker_model(model)
+
+    def set_worker_thinking(self, thinking: ThinkingMode) -> None:
+        self._dispatch_proxy.set_worker_thinking(thinking)
+
     def reset_history(self) -> None:
         self._history.messages.clear()
         self._index_to_id.clear()
         self._index_to_name.clear()
+        self._dispatch_proxy.clear_records()
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.isRunning()
+
+    # ---- worker registry factory -----------------------------------------
+
+    def _make_worker_registry(self, mode: str) -> ToolRegistry:
+        worker_reg = ToolRegistry(
+            workspace_root=self._registry.workspace_root,
+            read_only=self._registry.read_only,
+            mode="worker" if mode == "worker" else "single",
+        )
+        return worker_reg
+
+    # ---- dispatch button-pressed handlers (GUI -> bridge) -----------------
+
+    def user_dispatched(
+        self,
+        tool_call_id: str,
+        goal: str,
+        files: list[str],
+        spec: str,
+        acceptance: str,
+    ) -> None:
+        self._dispatch_proxy.user_dispatched(tool_call_id, goal, files, spec, acceptance)
+
+    def user_cancelled_dispatch(self, tool_call_id: str) -> None:
+        self._dispatch_proxy.user_cancelled(tool_call_id)
 
     # ---- send / cancel ----------------------------------------------------
 
@@ -239,13 +685,15 @@ class ConversationBridge(QObject):
         self._worker = _Worker(
             manager=self._manager,
             approval_proxy=self._approval_proxy,
+            dispatch_proxy=(
+                self._dispatch_proxy if self._planner_worker_mode else None
+            ),
             cancel_event=self._cancel,
             model=model,
             thinking=thinking,
         )
         self._worker.moveToThread(self._thread)
 
-        # Wire signals from worker to bridge.
         self._worker.reasoningDelta.connect(self.reasoningDelta)
         self._worker.contentDelta.connect(self.contentDelta)
         self._worker.toolCallStart.connect(self._on_tool_call_start)
@@ -254,6 +702,7 @@ class ConversationBridge(QObject):
         self._worker.apiError.connect(self.apiError)
         self._worker.streamDone.connect(self.streamDone)
         self._worker.toolResultEmitted.connect(self._on_tool_result)
+        self._worker.workerDispatchRequested.connect(self._on_worker_dispatch_requested)
         self._worker.usageEmitted.connect(self.usageEmitted)
         self._worker.usageEmitted.connect(self._forward_usage_with_model)
         self._worker.finished.connect(self._on_finished)
@@ -290,7 +739,6 @@ class ConversationBridge(QObject):
     def _on_tool_result(
         self, tool_id: str, name: str, ok: bool, result: str, extras: dict
     ) -> None:
-        # If this was an approval-bearing tool, surface a diff card with the user's decision.
         approval = extras.get("approval")
         if approval and self._approval_proxy.last_event is not None:
             ev = self._approval_proxy.last_event
@@ -304,6 +752,20 @@ class ConversationBridge(QObject):
             )
             self._approval_proxy.last_event = None
         self.toolResult.emit(tool_id, name, ok, result, extras)
+
+    @Slot(str, str, list, str, str)
+    def _on_worker_dispatch_requested(
+        self,
+        tool_call_id: str,
+        goal: str,
+        files: list,
+        spec: str,
+        acceptance: str,
+    ) -> None:
+        # The proxy's showSpecCard is the GUI's source of truth for spec
+        # cards — the manager event arrives milliseconds earlier on the same
+        # thread, so we just no-op here.
+        return
 
     @Slot(int, int, int, int)
     def _forward_usage_with_model(
@@ -325,7 +787,4 @@ class ConversationBridge(QObject):
 
 
 def _dummy_root():
-    """Returns an existing path so ToolRegistry init doesn't fail. The real
-    workspace is set via set_workspace_root() before any tool is dispatched."""
-    from pathlib import Path
     return Path.home()

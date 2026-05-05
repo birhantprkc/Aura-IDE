@@ -167,14 +167,17 @@ class InputPanel(QFrame):
 
     sent = Signal(SendPayload)
     stop_requested = Signal()
-    model_changed = Signal(str)  # ModelId
-    thinking_changed = Signal(str)  # ThinkingMode
+    model_changed = Signal(str)  # ModelId (planner)
+    thinking_changed = Signal(str)  # ThinkingMode (planner)
+    worker_model_changed = Signal(str)
+    worker_thinking_changed = Signal(str)
 
     def __init__(self, workspace_root: Path | None) -> None:
         super().__init__()
         self.setStyleSheet(f"QFrame {{ background: {BG_RAISED}; border-top: 1px solid {BORDER}; }}")
         self._workspace_root = workspace_root
         self._streaming = False
+        self._planner_worker_mode = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 8, 12, 10)
@@ -202,6 +205,8 @@ class InputPanel(QFrame):
         controls = QHBoxLayout()
         controls.setSpacing(10)
 
+        self._planner_label = QLabel("Planner:")
+        controls.addWidget(self._planner_label)
         self._model_combo = QComboBox()
         for mid, info in MODELS.items():
             self._model_combo.addItem(info.label, mid)
@@ -211,11 +216,10 @@ class InputPanel(QFrame):
         self._model_combo.currentIndexChanged.connect(
             lambda _: self.model_changed.emit(self.current_model())
         )
-        controls.addWidget(QLabel("Model:"))
         controls.addWidget(self._model_combo)
 
-        controls.addSpacing(8)
-
+        self._thinking_label = QLabel("Thinking:")
+        controls.addWidget(self._thinking_label)
         self._thinking_combo = QComboBox()
         self._thinking_combo.addItem("Off", "off")
         self._thinking_combo.addItem("High", "high")
@@ -226,8 +230,39 @@ class InputPanel(QFrame):
         self._thinking_combo.currentIndexChanged.connect(
             lambda _: self.thinking_changed.emit(self.current_thinking())
         )
-        controls.addWidget(QLabel("Thinking:"))
         controls.addWidget(self._thinking_combo)
+
+        # Worker controls — visible only in planner/worker mode.
+        self._worker_sep = QLabel("•")
+        self._worker_sep.setStyleSheet(f"color: {FG_DIM}; padding: 0 6px;")
+        controls.addWidget(self._worker_sep)
+
+        self._worker_label = QLabel("Worker:")
+        controls.addWidget(self._worker_label)
+        self._worker_model_combo = QComboBox()
+        for mid, info in MODELS.items():
+            self._worker_model_combo.addItem(info.label, mid)
+        self._worker_model_combo.setCurrentIndex(
+            list(MODELS.keys()).index("deepseek-v4-pro")
+        )
+        self._worker_model_combo.currentIndexChanged.connect(
+            lambda _: self.worker_model_changed.emit(self.current_worker_model())
+        )
+        controls.addWidget(self._worker_model_combo)
+
+        self._worker_thinking_label = QLabel("Thinking:")
+        controls.addWidget(self._worker_thinking_label)
+        self._worker_thinking_combo = QComboBox()
+        self._worker_thinking_combo.addItem("Off", "off")
+        self._worker_thinking_combo.addItem("High", "high")
+        self._worker_thinking_combo.addItem("Max", "max")
+        self._worker_thinking_combo.setCurrentIndex(
+            ["off", "high", "max"].index("high")
+        )
+        self._worker_thinking_combo.currentIndexChanged.connect(
+            lambda _: self.worker_thinking_changed.emit(self.current_worker_thinking())
+        )
+        controls.addWidget(self._worker_thinking_combo)
 
         controls.addStretch(1)
 
@@ -257,6 +292,12 @@ class InputPanel(QFrame):
     def current_thinking(self) -> ThinkingMode:
         return self._thinking_combo.currentData()
 
+    def current_worker_model(self) -> ModelId:
+        return self._worker_model_combo.currentData()
+
+    def current_worker_thinking(self) -> ThinkingMode:
+        return self._worker_thinking_combo.currentData()
+
     def set_model(self, model: ModelId) -> None:
         keys = list(MODELS.keys())
         if model in keys:
@@ -266,6 +307,29 @@ class InputPanel(QFrame):
         keys = ["off", "high", "max"]
         if thinking in keys:
             self._thinking_combo.setCurrentIndex(keys.index(thinking))
+
+    def set_worker_model(self, model: ModelId) -> None:
+        keys = list(MODELS.keys())
+        if model in keys:
+            self._worker_model_combo.setCurrentIndex(keys.index(model))
+
+    def set_worker_thinking(self, thinking: ThinkingMode) -> None:
+        keys = ["off", "high", "max"]
+        if thinking in keys:
+            self._worker_thinking_combo.setCurrentIndex(keys.index(thinking))
+
+    def set_planner_worker_mode(self, enabled: bool) -> None:
+        self._planner_worker_mode = enabled
+        # Hide / show worker pickers; relabel the planner picker.
+        self._planner_label.setText("Planner:" if enabled else "Model:")
+        for w in (
+            self._worker_sep,
+            self._worker_label,
+            self._worker_model_combo,
+            self._worker_thinking_label,
+            self._worker_thinking_combo,
+        ):
+            w.setVisible(enabled)
 
     def set_streaming(self, streaming: bool) -> None:
         self._streaming = streaming

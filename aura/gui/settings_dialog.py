@@ -57,6 +57,11 @@ class SettingsDialog(QDialog):
             default_model=settings.default_model,
             default_thinking=settings.default_thinking,
             restore_last_conversation=settings.restore_last_conversation,
+            planner_worker_mode=settings.planner_worker_mode,
+            default_planner_model=settings.default_planner_model,
+            default_worker_model=settings.default_worker_model,
+            default_planner_thinking=settings.default_planner_thinking,
+            default_worker_thinking=settings.default_worker_thinking,
         )
         self._on_change_root = on_change_root
 
@@ -89,6 +94,49 @@ class SettingsDialog(QDialog):
         self._restore_chk = QCheckBox("Restore most-recent conversation on launch")
         self._restore_chk.setChecked(self._settings.restore_last_conversation)
         form.addRow("", self._restore_chk)
+
+        self._pw_mode_chk = QCheckBox(
+            "Planner/Worker mode (planner chats; worker executes code changes)"
+        )
+        self._pw_mode_chk.setChecked(self._settings.planner_worker_mode)
+        self._pw_mode_chk.toggled.connect(self._on_pw_toggled)
+        form.addRow("", self._pw_mode_chk)
+
+        self._planner_model_combo = QComboBox()
+        for mid, info in MODELS.items():
+            self._planner_model_combo.addItem(info.label, mid)
+        self._planner_model_combo.setCurrentIndex(
+            list(MODELS.keys()).index(self._settings.default_planner_model)
+        )
+        form.addRow("Planner model:", self._planner_model_combo)
+
+        self._planner_thinking_combo = QComboBox()
+        self._planner_thinking_combo.addItem("Off", "off")
+        self._planner_thinking_combo.addItem("High", "high")
+        self._planner_thinking_combo.addItem("Max", "max")
+        self._planner_thinking_combo.setCurrentIndex(
+            ["off", "high", "max"].index(self._settings.default_planner_thinking)
+        )
+        form.addRow("Planner thinking:", self._planner_thinking_combo)
+
+        self._worker_model_combo = QComboBox()
+        for mid, info in MODELS.items():
+            self._worker_model_combo.addItem(info.label, mid)
+        self._worker_model_combo.setCurrentIndex(
+            list(MODELS.keys()).index(self._settings.default_worker_model)
+        )
+        form.addRow("Worker model:", self._worker_model_combo)
+
+        self._worker_thinking_combo = QComboBox()
+        self._worker_thinking_combo.addItem("Off", "off")
+        self._worker_thinking_combo.addItem("High", "high")
+        self._worker_thinking_combo.addItem("Max", "max")
+        self._worker_thinking_combo.setCurrentIndex(
+            ["off", "high", "max"].index(self._settings.default_worker_thinking)
+        )
+        form.addRow("Worker thinking:", self._worker_thinking_combo)
+
+        self._refresh_pw_enabled()
 
         # Workspace
         ws_row = QHBoxLayout()
@@ -147,12 +195,27 @@ class SettingsDialog(QDialog):
             new_root = getattr(host, "_workspace_root")
             self._ws_label.setText(str(new_root) if new_root else "(none)")
 
+    def _on_pw_toggled(self, _checked: bool) -> None:
+        self._refresh_pw_enabled()
+
+    def _refresh_pw_enabled(self) -> None:
+        enabled = self._pw_mode_chk.isChecked()
+        self._planner_model_combo.setEnabled(enabled)
+        self._planner_thinking_combo.setEnabled(enabled)
+        self._worker_model_combo.setEnabled(enabled)
+        self._worker_thinking_combo.setEnabled(enabled)
+
     def result_settings(self) -> AppSettings:
         """Read the current widget values and return a fresh AppSettings."""
         return AppSettings(
             default_model=self._model_combo.currentData(),
             default_thinking=self._thinking_combo.currentData(),
             restore_last_conversation=self._restore_chk.isChecked(),
+            planner_worker_mode=self._pw_mode_chk.isChecked(),
+            default_planner_model=self._planner_model_combo.currentData(),
+            default_worker_model=self._worker_model_combo.currentData(),
+            default_planner_thinking=self._planner_thinking_combo.currentData(),
+            default_worker_thinking=self._worker_thinking_combo.currentData(),
         )
 
     def accept(self) -> None:  # type: ignore[override]

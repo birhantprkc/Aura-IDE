@@ -6,6 +6,12 @@ this directly except through the bridge.
 Cancellation: a threading.Event the GUI sets when Stop is clicked. We check
 it between rounds and propagate it into client.stream() so the OpenAI iterator
 short-circuits mid-chunk.
+
+Roles: a manager instance is either a planner, a worker, or "single" (legacy
+single-model chat). The role is implicit in the ToolRegistry's mode plus the
+History's system prompt — the manager itself only branches when it sees a
+`dispatch_to_worker` tool call: that path is intercepted and routed through
+the supplied DispatchCallback rather than the registry.
 """
 from __future__ import annotations
 
@@ -25,8 +31,14 @@ from aura.client import (
     ToolCallStart,
     ToolResult,
     Usage,
+    WorkerDispatchRequested,
 )
 from aura.config import MAX_TOOL_ROUNDS, ModelId, ThinkingMode
+from aura.conversation.dispatch import (
+    DispatchCallback,
+    WorkerDispatchRequest,
+    WorkerDispatchResult,
+)
 from aura.conversation.history import History
 from aura.conversation.tools.registry import (
     ApprovalCallback,
@@ -64,10 +76,16 @@ class ConversationManager:
         cancel_event: threading.Event,
         model: ModelId,
         thinking: ThinkingMode,
+        dispatch_cb: DispatchCallback | None = None,
     ) -> None:
         """Run the model -> tool -> model loop until the model stops calling tools.
 
         Caller appends the user message to history before invoking this.
+
+        `dispatch_cb` is required when the registry is in "planner" mode (the
+        only mode that exposes the `dispatch_to_worker` tool). If the tool is
+        called and `dispatch_cb` is None, the call returns an error result so
+        the planner can recover rather than blocking forever.
         """
         reject_all_for_turn = False
 
@@ -93,24 +111,21 @@ class ConversationManager:
                     return  # surface and stop
 
             if cancel_event.is_set():
-                # If the client returned without Done due to cancel, persist whatever
-                # we got as a partial assistant message so the conversation isn't broken.
                 if full_message is not None and (
                     full_message.get("content") or full_message.get("reasoning_content")
                 ):
-                    # Drop tool_calls from a partial — we won't be able to satisfy them.
                     full_message.pop("tool_calls", None)
                     self._history.append_assistant(full_message)
                 return
 
             if full_message is None:
-                return  # client errored without Done; ApiError already surfaced
+                return
 
             self._history.append_assistant(full_message)
 
             tool_calls = full_message.get("tool_calls") or []
             if not tool_calls:
-                return  # natural stop
+                return
 
             for tc in tool_calls:
                 if cancel_event.is_set():
@@ -134,6 +149,15 @@ class ConversationManager:
                             ok=False,
                             result=err,
                         )
+                    )
+                    continue
+
+                if name == "dispatch_to_worker":
+                    self._handle_dispatch(
+                        tool_call_id=tool_call_id,
+                        args=args,
+                        on_event=on_event,
+                        dispatch_cb=dispatch_cb,
                     )
                     continue
 
@@ -174,11 +198,71 @@ class ConversationManager:
                     )
                 )
 
-        # Hit max rounds — give up gracefully.
         on_event(
             ApiError(
                 status_code=None,
                 message=f"Reached max tool rounds ({MAX_TOOL_ROUNDS}) without natural stop.",
+            )
+        )
+
+    # ---- dispatch_to_worker ------------------------------------------------
+
+    def _handle_dispatch(
+        self,
+        tool_call_id: str,
+        args: dict[str, Any],
+        on_event: EventCallback,
+        dispatch_cb: DispatchCallback | None,
+    ) -> None:
+        if dispatch_cb is None:
+            err = (
+                "dispatch_to_worker is not enabled for this manager — "
+                "planner/worker mode is off."
+            )
+            payload = json.dumps({"ok": False, "error": err})
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(
+                ToolResult(
+                    tool_call_id=tool_call_id,
+                    name="dispatch_to_worker",
+                    ok=False,
+                    result=payload,
+                )
+            )
+            return
+
+        req = WorkerDispatchRequest.from_dict(args)
+        on_event(
+            WorkerDispatchRequested(
+                tool_call_id=tool_call_id,
+                goal=req.goal,
+                files=list(req.files),
+                spec=req.spec,
+                acceptance=req.acceptance,
+            )
+        )
+        try:
+            result = dispatch_cb(tool_call_id, req)
+        except Exception as exc:
+            result = WorkerDispatchResult(
+                ok=False,
+                summary=f"dispatch failed: {type(exc).__name__}: {exc}",
+                cancelled=False,
+            )
+
+        payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
+        self._history.append_tool_result(tool_call_id, payload)
+        on_event(
+            ToolResult(
+                tool_call_id=tool_call_id,
+                name="dispatch_to_worker",
+                ok=result.ok,
+                result=payload,
+                extras={
+                    "dispatch": True,
+                    "cancelled": result.cancelled,
+                    "summary": result.summary,
+                },
             )
         )
 
@@ -202,4 +286,8 @@ __all__ = [
     "Done",
     "ApiError",
     "ToolResult",
+    "WorkerDispatchRequested",
+    "DispatchCallback",
+    "WorkerDispatchRequest",
+    "WorkerDispatchResult",
 ]

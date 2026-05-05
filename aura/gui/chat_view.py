@@ -15,13 +15,14 @@ import json
 import re
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QFont, QPixmap, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QTextBrowser,
@@ -32,9 +33,12 @@ from PySide6.QtWidgets import (
 
 from aura.gui.diff_dialog import render_unified_diff
 from aura.gui.theme import (
+    ACCENT,
     BG,
     BG_ALT,
+    BG_RAISED,
     BORDER,
+    BORDER_STRONG,
     DANGER,
     DIFF_ADD_BG,
     DIFF_DEL_BG,
@@ -42,6 +46,7 @@ from aura.gui.theme import (
     FG_BODY_USER,
     FG_DIM,
     FG_ITALIC,
+    FG_MUTED,
     SUCCESS,
     SUCCESS_DIM,
     WARN,
@@ -566,6 +571,258 @@ class DiffCard(QFrame):
                 break
 
 
+class SpecCard(QFrame):
+    """Worker dispatch spec — collapsible, with Dispatch/Edit/Cancel buttons.
+
+    After dispatch (or cancel), the buttons collapse into a status header and
+    a nested area below shows the worker's streaming output (a sub-conversation
+    visually indented under the spec).
+    """
+
+    dispatch_clicked = Signal(str)  # tool_call_id (with current spec values)
+    edit_clicked = Signal(str)
+    cancel_clicked = Signal(str)
+
+    def __init__(
+        self,
+        tool_call_id: str,
+        goal: str,
+        files: list[str],
+        spec: str,
+        acceptance: str,
+    ) -> None:
+        super().__init__()
+        self.setObjectName("specCard")
+        self._tool_call_id = tool_call_id
+        self._goal = goal
+        self._files = list(files)
+        self._spec = spec
+        self._acceptance = acceptance
+        self._dispatched = False
+        self._cancelled = False
+        self._worker_running = False
+
+        self.setStyleSheet(
+            f"QFrame#specCard {{ background: {BG_ALT}; border: 1px solid {BORDER}; "
+            f"border-left: 3px solid {ACCENT}; border-radius: 8px; }}"
+        )
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 10, 14, 12)
+        outer.setSpacing(6)
+
+        header = QLabel("⚡ Dispatch to Worker")
+        header.setStyleSheet(f"color: {ACCENT}; font-weight: 700; font-size: 12px;")
+        outer.addWidget(header)
+
+        self._goal_label = QLabel(self._goal)
+        self._goal_label.setWordWrap(True)
+        self._goal_label.setStyleSheet(f"color: {FG}; font-weight: 600;")
+        outer.addWidget(self._goal_label)
+
+        self._files_label = QLabel(self._format_files(self._files))
+        self._files_label.setWordWrap(True)
+        self._files_label.setStyleSheet(
+            f"color: {FG_DIM}; font-family: 'Cascadia Mono', Consolas, monospace; "
+            "font-size: 11px;"
+        )
+        outer.addWidget(self._files_label)
+
+        # Spec body (collapsible if long).
+        self._spec_label = QLabel(self._spec)
+        self._spec_label.setWordWrap(True)
+        self._spec_label.setStyleSheet(f"color: {FG};")
+        self._spec_label.setTextFormat(Qt.TextFormat.PlainText)
+
+        self._spec_section: _CollapsibleSection | None = None
+        if self._spec.count("\n") > 6 or len(self._spec) > 600:
+            section = _CollapsibleSection(
+                "Spec", self._spec_label, start_open=False, prominent=False
+            )
+            self._spec_section = section
+            outer.addWidget(section)
+        else:
+            outer.addWidget(self._spec_label)
+
+        self._acceptance_label = QLabel(f"Acceptance: {self._acceptance}")
+        self._acceptance_label.setWordWrap(True)
+        self._acceptance_label.setStyleSheet(
+            f"color: {FG_MUTED}; font-style: italic;"
+        )
+        outer.addWidget(self._acceptance_label)
+
+        # Buttons row.
+        self._buttons_row = QWidget()
+        btn_layout = QHBoxLayout(self._buttons_row)
+        btn_layout.setContentsMargins(0, 4, 0, 0)
+        btn_layout.setSpacing(8)
+
+        self._dispatch_btn = QPushButton("Dispatch")
+        self._dispatch_btn.setObjectName("primary")
+        self._dispatch_btn.clicked.connect(self._on_dispatch)
+        btn_layout.addWidget(self._dispatch_btn)
+
+        self._edit_btn = QPushButton("Edit Spec")
+        self._edit_btn.clicked.connect(lambda: self.edit_clicked.emit(self._tool_call_id))
+        btn_layout.addWidget(self._edit_btn)
+
+        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.setObjectName("danger")
+        self._cancel_btn.clicked.connect(self._on_cancel)
+        btn_layout.addWidget(self._cancel_btn)
+
+        btn_layout.addStretch(1)
+
+        outer.addWidget(self._buttons_row)
+
+        # Status label, hidden until dispatch/cancel.
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        self._status_label.setVisible(False)
+        outer.addWidget(self._status_label)
+
+        # Nested area for the worker's sub-conversation. Created on dispatch.
+        self._nested_container = QFrame()
+        self._nested_container.setObjectName("workerNest")
+        self._nested_container.setStyleSheet(
+            f"QFrame#workerNest {{ background: transparent; border: none; "
+            f"border-left: 1px solid {BORDER_STRONG}; }}"
+        )
+        self._nested_layout = QVBoxLayout(self._nested_container)
+        self._nested_layout.setContentsMargins(14, 6, 0, 0)
+        self._nested_layout.setSpacing(8)
+        self._nested_container.setVisible(False)
+        outer.addWidget(self._nested_container)
+
+        # Worker turn state.
+        self._current_worker_assistant: AssistantCard | None = None
+        self._worker_tool_owner: dict[str, AssistantCard] = {}
+
+    # ---- helpers ---------------------------------------------------------
+
+    @staticmethod
+    def _format_files(files: list[str]) -> str:
+        if not files:
+            return "(no files listed)"
+        return "  ".join(f"• {p}" for p in files)
+
+    def update_spec(
+        self, goal: str, files: list[str], spec: str, acceptance: str
+    ) -> None:
+        self._goal = goal
+        self._files = list(files)
+        self._spec = spec
+        self._acceptance = acceptance
+        self._goal_label.setText(self._goal)
+        self._files_label.setText(self._format_files(self._files))
+        self._spec_label.setText(self._spec)
+        self._acceptance_label.setText(f"Acceptance: {self._acceptance}")
+
+    def current_spec(self) -> tuple[str, list[str], str, str]:
+        return (self._goal, list(self._files), self._spec, self._acceptance)
+
+    def tool_call_id(self) -> str:
+        return self._tool_call_id
+
+    # ---- button handlers -------------------------------------------------
+
+    def _on_dispatch(self) -> None:
+        self._dispatched = True
+        self._buttons_row.setVisible(False)
+        self._status_label.setText("Dispatched — worker running…")
+        self._status_label.setVisible(True)
+        self._nested_container.setVisible(True)
+        self._worker_running = True
+        self.dispatch_clicked.emit(self._tool_call_id)
+
+    def _on_cancel(self) -> None:
+        self._cancelled = True
+        self._buttons_row.setVisible(False)
+        self._status_label.setText("Cancelled.")
+        self._status_label.setStyleSheet(f"color: {DANGER}; font-size: 11px;")
+        self._status_label.setVisible(True)
+        self.cancel_clicked.emit(self._tool_call_id)
+
+    def disable_buttons(self) -> None:
+        self._dispatch_btn.setEnabled(False)
+        self._edit_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(False)
+
+    # ---- worker streaming hooks -----------------------------------------
+
+    def begin_worker_assistant(self) -> "AssistantCard":
+        card = AssistantCard()
+        self._current_worker_assistant = card
+        self._nested_layout.addWidget(card)
+        return card
+
+    def current_worker_assistant(self) -> "AssistantCard":
+        if self._current_worker_assistant is None:
+            return self.begin_worker_assistant()
+        return self._current_worker_assistant
+
+    def append_worker_reasoning(self, text: str) -> None:
+        self.current_worker_assistant().append_reasoning(text)
+
+    def append_worker_content(self, text: str) -> None:
+        ac = self.current_worker_assistant()
+        ac.reasoning_done()
+        ac.append_content(text)
+
+    def add_worker_tool_call(self, tool_call_id: str, name: str) -> None:
+        ac = self.current_worker_assistant()
+        ac.add_tool_card(tool_call_id, name)
+        self._worker_tool_owner[tool_call_id] = ac
+
+    def append_worker_tool_args(self, tool_call_id: str, fragment: str) -> None:
+        ac = self._worker_tool_owner.get(tool_call_id) or self.current_worker_assistant()
+        card = ac.get_tool_card(tool_call_id)
+        if card is not None:
+            card.append_args(fragment)
+
+    def set_worker_tool_result(self, tool_call_id: str, ok: bool, result: str) -> None:
+        ac = self._worker_tool_owner.get(tool_call_id) or self.current_worker_assistant()
+        card = ac.get_tool_card(tool_call_id)
+        if card is not None:
+            card.set_result(ok, result)
+
+    def add_worker_diff_card(
+        self,
+        worker_tool_call_id: str,
+        rel_path: str,
+        old: str,
+        new: str,
+        decision: str,
+        is_new_file: bool,
+    ) -> None:
+        ac = self._worker_tool_owner.get(worker_tool_call_id) or self.current_worker_assistant()
+        card = DiffCard(rel_path, old, new, decision, is_new_file)
+        ac.add_footer_widget(card)
+
+    def add_worker_error(self, message: str) -> None:
+        err = ErrorCard("Worker error", message)
+        self._nested_layout.addWidget(err)
+
+    def finalize_worker_assistant(self) -> None:
+        ac = self._current_worker_assistant
+        if ac is None:
+            return
+        text = ac._content_label.text_buffer()
+        if text:
+            html = _render_markdown_with_code(text)
+            ac._content_label.setTextFormat(Qt.TextFormat.RichText)
+            ac._content_label.setText(html)
+        self._current_worker_assistant = None
+
+    def worker_finished(self, ok: bool, summary: str) -> None:
+        self._worker_running = False
+        self.finalize_worker_assistant()
+        verb = "Worker finished" if ok else "Worker finished with errors"
+        color = SUCCESS if ok else DANGER
+        self._status_label.setText(verb)
+        self._status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+
 class ErrorCard(QFrame):
     def __init__(self, title: str, message: str) -> None:
         super().__init__()
@@ -606,6 +863,8 @@ class ChatView(QScrollArea):
         self._current_assistant: AssistantCard | None = None
         # Map tool_call_id -> the assistant card that owns it (for routing diff-after).
         self._tool_owner: dict[str, AssistantCard] = {}
+        # Map dispatch tool_call_id -> SpecCard.
+        self._spec_cards: dict[str, SpecCard] = {}
         self._empty_hint: QLabel | None = None
         self._show_empty_hint()
 
@@ -643,6 +902,7 @@ class ChatView(QScrollArea):
                 w.deleteLater()
         self._current_assistant = None
         self._tool_owner.clear()
+        self._spec_cards.clear()
         self._empty_hint = None
         self._show_empty_hint()
 
@@ -728,3 +988,92 @@ class ChatView(QScrollArea):
         html = _render_markdown_with_code(text)
         ac._content_label.setTextFormat(Qt.TextFormat.RichText)
         ac._content_label.setText(html)
+
+    # ---- spec card / worker dispatch ------------------------------------
+
+    def add_spec_card(
+        self,
+        tool_call_id: str,
+        goal: str,
+        files: list[str],
+        spec: str,
+        acceptance: str,
+    ) -> SpecCard:
+        existing = self._spec_cards.get(tool_call_id)
+        if existing is not None:
+            existing.update_spec(goal, files, spec, acceptance)
+            return existing
+        card = SpecCard(tool_call_id, goal, files, spec, acceptance)
+        ac = self.current_assistant()
+        ac.add_footer_widget(card)
+        self._spec_cards[tool_call_id] = card
+        self._scroll_to_bottom()
+        return card
+
+    def get_spec_card(self, tool_call_id: str) -> SpecCard | None:
+        return self._spec_cards.get(tool_call_id)
+
+    def worker_begin_assistant(self, tool_call_id: str) -> None:
+        card = self._spec_cards.get(tool_call_id)
+        if card is not None:
+            card.begin_worker_assistant()
+
+    def worker_append_reasoning(self, tool_call_id: str, text: str) -> None:
+        card = self._spec_cards.get(tool_call_id)
+        if card is not None:
+            card.append_worker_reasoning(text)
+            self._scroll_to_bottom()
+
+    def worker_append_content(self, tool_call_id: str, text: str) -> None:
+        card = self._spec_cards.get(tool_call_id)
+        if card is not None:
+            card.append_worker_content(text)
+            self._scroll_to_bottom()
+
+    def worker_add_tool_call(self, tool_call_id: str, worker_tool_id: str, name: str) -> None:
+        card = self._spec_cards.get(tool_call_id)
+        if card is not None:
+            card.add_worker_tool_call(worker_tool_id, name)
+            self._scroll_to_bottom()
+
+    def worker_append_tool_args(
+        self, tool_call_id: str, worker_tool_id: str, fragment: str
+    ) -> None:
+        card = self._spec_cards.get(tool_call_id)
+        if card is not None:
+            card.append_worker_tool_args(worker_tool_id, fragment)
+
+    def worker_set_tool_result(
+        self, tool_call_id: str, worker_tool_id: str, ok: bool, result: str
+    ) -> None:
+        card = self._spec_cards.get(tool_call_id)
+        if card is not None:
+            card.set_worker_tool_result(worker_tool_id, ok, result)
+
+    def worker_add_diff_card(
+        self,
+        tool_call_id: str,
+        worker_tool_id: str,
+        rel_path: str,
+        old: str,
+        new: str,
+        decision: str,
+        is_new_file: bool,
+    ) -> None:
+        card = self._spec_cards.get(tool_call_id)
+        if card is not None:
+            card.add_worker_diff_card(
+                worker_tool_id, rel_path, old, new, decision, is_new_file
+            )
+            self._scroll_to_bottom()
+
+    def worker_add_error(self, tool_call_id: str, message: str) -> None:
+        card = self._spec_cards.get(tool_call_id)
+        if card is not None:
+            card.add_worker_error(message)
+
+    def worker_finished(self, tool_call_id: str, ok: bool, summary: str) -> None:
+        card = self._spec_cards.get(tool_call_id)
+        if card is not None:
+            card.worker_finished(ok, summary)
+            self._scroll_to_bottom()

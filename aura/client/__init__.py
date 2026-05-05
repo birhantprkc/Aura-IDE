@@ -11,6 +11,7 @@ from aura.client.events import (
     ToolCallStart,
     ToolResult,
     Usage,
+    WorkerDispatchRequested,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "Done",
     "ApiError",
     "ToolResult",
+    "WorkerDispatchRequested",
 ]

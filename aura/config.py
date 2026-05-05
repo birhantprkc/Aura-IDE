@@ -133,11 +133,22 @@ def has_api_key() -> bool:
 # ---- App settings (persisted JSON) ----------------------------------------
 
 
+DEFAULT_PLANNER_MODEL: ModelId = "deepseek-v4-flash"
+DEFAULT_WORKER_MODEL: ModelId = "deepseek-v4-pro"
+DEFAULT_PLANNER_THINKING: ThinkingMode = "high"
+DEFAULT_WORKER_THINKING: ThinkingMode = "high"
+
+
 @dataclass
 class AppSettings:
     default_model: ModelId = DEFAULT_MODEL
     default_thinking: ThinkingMode = DEFAULT_THINKING
     restore_last_conversation: bool = True
+    planner_worker_mode: bool = True
+    default_planner_model: ModelId = DEFAULT_PLANNER_MODEL
+    default_worker_model: ModelId = DEFAULT_WORKER_MODEL
+    default_planner_thinking: ThinkingMode = DEFAULT_PLANNER_THINKING
+    default_worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
@@ -148,6 +159,16 @@ class AppSettings:
             s.default_thinking = data["default_thinking"]  # type: ignore[assignment]
         if isinstance(data.get("restore_last_conversation"), bool):
             s.restore_last_conversation = data["restore_last_conversation"]
+        if isinstance(data.get("planner_worker_mode"), bool):
+            s.planner_worker_mode = data["planner_worker_mode"]
+        if data.get("default_planner_model") in PRICING:
+            s.default_planner_model = data["default_planner_model"]  # type: ignore[assignment]
+        if data.get("default_worker_model") in PRICING:
+            s.default_worker_model = data["default_worker_model"]  # type: ignore[assignment]
+        if data.get("default_planner_thinking") in ("off", "high", "max"):
+            s.default_planner_thinking = data["default_planner_thinking"]  # type: ignore[assignment]
+        if data.get("default_worker_thinking") in ("off", "high", "max"):
+            s.default_worker_thinking = data["default_worker_thinking"]  # type: ignore[assignment]
         return s
 
 

@@ -1,23 +1,36 @@
 """Conversation persistence — JSON files in `<workspace>/.aura/conversations/`.
 
-Each file stores the full History (messages including reasoning_content), plus
-the model and thinking state that were active when the conversation was last
-extended. This is enough to round-trip a chat into the GUI on next launch.
+Schema:
+- v1 (legacy): single-model conversation. {version, model, thinking,
+  system_prompt, messages, ...}.
+- v2: planner-worker aware. Adds planner_worker_mode, planner_model,
+  worker_model, planner_thinking, worker_thinking, and an optional
+  worker_dispatches list. Loading v1 is backward-compatible: it's treated as
+  planner_worker_mode=False with a single set of messages on the planner.
 """
 from __future__ import annotations
 
 import copy
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from aura.config import DEFAULT_MODEL, DEFAULT_THINKING, ModelId, ThinkingMode
+from aura.config import (
+    DEFAULT_MODEL,
+    DEFAULT_PLANNER_MODEL,
+    DEFAULT_PLANNER_THINKING,
+    DEFAULT_THINKING,
+    DEFAULT_WORKER_MODEL,
+    DEFAULT_WORKER_THINKING,
+    ModelId,
+    ThinkingMode,
+)
 from aura.conversation.history import History
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CONVERSATIONS_SUBDIR = ".aura/conversations"
 
 
@@ -28,6 +41,37 @@ class ConversationMeta:
     title: str
     model: ModelId
     thinking: ThinkingMode
+
+
+@dataclass
+class WorkerDispatchRecord:
+    """One worker dispatch fired during a planner conversation. Stored
+    alongside the planner history so the chat can be replayed faithfully.
+    """
+    after_message_index: int
+    spec: dict[str, Any]
+    worker_history: list[dict[str, Any]]
+    result_summary: str
+    tool_call_id: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "after_message_index": self.after_message_index,
+            "tool_call_id": self.tool_call_id,
+            "spec": dict(self.spec),
+            "worker_history": list(self.worker_history),
+            "result_summary": self.result_summary,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "WorkerDispatchRecord":
+        return cls(
+            after_message_index=int(data.get("after_message_index", 0)),
+            tool_call_id=str(data.get("tool_call_id", "")),
+            spec=dict(data.get("spec") or {}),
+            worker_history=list(data.get("worker_history") or []),
+            result_summary=str(data.get("result_summary", "")),
+        )
 
 
 def conversations_dir(workspace_root: Path) -> Path:
@@ -68,13 +112,14 @@ def save_conversation(
     *,
     title: str | None = None,
     existing_path: Path | None = None,
+    planner_worker_mode: bool = False,
+    planner_model: ModelId | None = None,
+    worker_model: ModelId | None = None,
+    planner_thinking: ThinkingMode | None = None,
+    worker_thinking: ThinkingMode | None = None,
+    worker_dispatches: list[WorkerDispatchRecord] | None = None,
 ) -> Path:
-    """Write the conversation to disk and return the file path.
-
-    If `existing_path` is supplied and lives under `<workspace>/.aura/conversations/`,
-    we overwrite it in place — that's how auto-save updates a single file across
-    rounds within one chat.
-    """
+    """Write the conversation to disk and return the file path."""
     target_dir = conversations_dir(workspace_root)
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -92,8 +137,16 @@ def save_conversation(
         "created_at": _read_created_at(path) or _utc_iso(),
         "model": model,
         "thinking": thinking,
+        "planner_worker_mode": bool(planner_worker_mode),
+        "planner_model": planner_model or model,
+        "worker_model": worker_model or DEFAULT_WORKER_MODEL,
+        "planner_thinking": planner_thinking or thinking,
+        "worker_thinking": worker_thinking or DEFAULT_WORKER_THINKING,
         "system_prompt": history.system_prompt,
         "messages": copy.deepcopy(history.messages),
+        "worker_dispatches": [
+            d.to_dict() for d in (worker_dispatches or [])
+        ],
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
@@ -122,15 +175,18 @@ class LoadedConversation:
     model: ModelId
     thinking: ThinkingMode
     path: Path
+    planner_worker_mode: bool = False
+    planner_model: ModelId = DEFAULT_PLANNER_MODEL
+    worker_model: ModelId = DEFAULT_WORKER_MODEL
+    planner_thinking: ThinkingMode = DEFAULT_PLANNER_THINKING
+    worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
+    worker_dispatches: list[WorkerDispatchRecord] = field(default_factory=list)
 
 
 def load_conversation(path: Path) -> LoadedConversation:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"Conversation file is not a JSON object: {path}")
-    if data.get("version") != SCHEMA_VERSION:
-        # Forward-compatible: keep loading, just don't trust unknown fields.
-        pass
 
     history = History()
     sp = data.get("system_prompt")
@@ -140,10 +196,46 @@ def load_conversation(path: Path) -> LoadedConversation:
     if isinstance(msgs, list):
         history.messages = [m for m in msgs if isinstance(m, dict)]
 
-    model = data.get("model") if data.get("model") in ("deepseek-v4-flash", "deepseek-v4-pro") else DEFAULT_MODEL
-    thinking = data.get("thinking") if data.get("thinking") in ("off", "high", "max") else DEFAULT_THINKING
+    valid_models = ("deepseek-v4-flash", "deepseek-v4-pro")
+    valid_thinking = ("off", "high", "max")
 
-    return LoadedConversation(history=history, model=model, thinking=thinking, path=path)
+    model = data.get("model") if data.get("model") in valid_models else DEFAULT_MODEL
+    thinking = data.get("thinking") if data.get("thinking") in valid_thinking else DEFAULT_THINKING
+
+    version = data.get("version")
+    if version == 2:
+        pwm = bool(data.get("planner_worker_mode", False))
+        planner_model = data.get("planner_model") if data.get("planner_model") in valid_models else model
+        worker_model = data.get("worker_model") if data.get("worker_model") in valid_models else DEFAULT_WORKER_MODEL
+        planner_thinking = data.get("planner_thinking") if data.get("planner_thinking") in valid_thinking else thinking
+        worker_thinking = data.get("worker_thinking") if data.get("worker_thinking") in valid_thinking else DEFAULT_WORKER_THINKING
+        raw_dispatches = data.get("worker_dispatches") or []
+        dispatches = [
+            WorkerDispatchRecord.from_dict(d)
+            for d in raw_dispatches
+            if isinstance(d, dict)
+        ]
+    else:
+        # v1 (or unversioned): treat as single-model.
+        pwm = False
+        planner_model = model
+        worker_model = DEFAULT_WORKER_MODEL
+        planner_thinking = thinking
+        worker_thinking = DEFAULT_WORKER_THINKING
+        dispatches = []
+
+    return LoadedConversation(
+        history=history,
+        model=model,
+        thinking=thinking,
+        path=path,
+        planner_worker_mode=pwm,
+        planner_model=planner_model,
+        worker_model=worker_model,
+        planner_thinking=planner_thinking,
+        worker_thinking=worker_thinking,
+        worker_dispatches=dispatches,
+    )
 
 
 def list_conversations(workspace_root: Path) -> list[Path]:
@@ -166,5 +258,4 @@ def _utc_iso() -> str:
 
 
 def _file_timestamp() -> str:
-    # Filename-safe ISO timestamp, e.g. 2026-05-05T13-42-17Z.
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")

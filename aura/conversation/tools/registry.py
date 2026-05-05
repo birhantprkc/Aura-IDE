@@ -1,10 +1,15 @@
 """Tool registry — workspace-jailed dispatch and OpenAI tool definitions.
 
 The registry is the only place that:
-- builds the API tool list (read_only switches off write tools)
+- builds the API tool list (mode + read_only swap which tools are exposed)
 - resolves and validates filesystem paths against workspace_root
 - calls the GUI approval callback for writes
 - creates timestamped backups before approved writes
+
+Modes:
+- "single"  — legacy / planner-worker disabled: read + write tools.
+- "planner" — read tools + dispatch_to_worker; the planner cannot write.
+- "worker"  — read + write tools, no dispatch (workers don't dispatch).
 """
 from __future__ import annotations
 
@@ -18,6 +23,7 @@ from aura.conversation.tools.fs_read import glob_files, list_directory, read_fil
 from aura.conversation.tools.fs_write import propose_edit, propose_write
 
 ApprovalAction = Literal["approve", "reject", "reject_all"]
+RegistryMode = Literal["single", "planner", "worker"]
 
 
 @dataclass
@@ -103,6 +109,51 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
     },
 ]
 
+DISPATCH_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "dispatch_to_worker",
+        "description": (
+            "Dispatch a coding task to a worker model with file write access. Use this when "
+            "the user has agreed to a code change and you have enough information to specify "
+            "the change precisely. The worker has tools to read and edit files in the "
+            "workspace. Provide a complete, self-contained spec — the worker does not see "
+            "this conversation. Include: goal, files involved (use exact paths from your "
+            "earlier read_file calls), the specific change to make, any constraints. The "
+            "worker will return a summary of what it did."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "One-sentence statement of what the change accomplishes.",
+                },
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Workspace-relative paths the worker should read and/or modify.",
+                },
+                "spec": {
+                    "type": "string",
+                    "description": (
+                        "Full prose specification of the change. Be specific. Reference "
+                        "function names, line behavior, error cases. The worker has not "
+                        "seen the conversation, so include necessary context."
+                    ),
+                },
+                "acceptance": {
+                    "type": "string",
+                    "description": (
+                        "How the worker (and the user) knows the task is done. Concrete, checkable."
+                    ),
+                },
+            },
+            "required": ["goal", "files", "spec", "acceptance"],
+        },
+    },
+}
+
 WRITE_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -180,9 +231,15 @@ class ToolRegistry:
     propose edits. Toggle it via `set_read_only` between turns.
     """
 
-    def __init__(self, workspace_root: Path, read_only: bool = False) -> None:
+    def __init__(
+        self,
+        workspace_root: Path,
+        read_only: bool = False,
+        mode: RegistryMode = "single",
+    ) -> None:
         self._root = workspace_root.resolve()
         self._read_only = read_only
+        self._mode: RegistryMode = mode
 
     @property
     def workspace_root(self) -> Path:
@@ -198,9 +255,22 @@ class ToolRegistry:
     def set_read_only(self, value: bool) -> None:
         self._read_only = value
 
+    @property
+    def mode(self) -> RegistryMode:
+        return self._mode
+
+    def set_mode(self, mode: RegistryMode) -> None:
+        self._mode = mode
+
     def tool_defs(self) -> list[dict[str, Any]]:
+        # Read-only is the safety floor — strips writes AND dispatch (since
+        # there's nothing for a worker to do without writes).
         if self._read_only:
             return list(READ_TOOL_DEFS)
+        if self._mode == "planner":
+            return list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)]
+        if self._mode == "worker":
+            return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS)
         return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS)
 
     # ---- path resolution ---------------------------------------------------
@@ -260,6 +330,17 @@ class ToolRegistry:
                         payload={
                             "ok": False,
                             "error": "Read-Only Mode is enabled — write tools are disabled.",
+                        },
+                    )
+                if self._mode == "planner":
+                    return ToolExecResult(
+                        ok=False,
+                        payload={
+                            "ok": False,
+                            "error": (
+                                "Planner cannot write directly — call dispatch_to_worker with "
+                                "a spec instead."
+                            ),
                         },
                     )
                 return self._handle_write(name, args, approval_cb, reject_all)
