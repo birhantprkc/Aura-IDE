@@ -1,0 +1,33 @@
+# === Universal ===
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.local
+
+# === Windows artifacts (reserved names) ===
+nul
+con
+aux
+prn
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# === Claude Code Bridge ===
+_claude_prompt.txt
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/

@@ -257,6 +257,16 @@ class InputPanel(QFrame):
     def current_thinking(self) -> ThinkingMode:
         return self._thinking_combo.currentData()
 
+    def set_model(self, model: ModelId) -> None:
+        keys = list(MODELS.keys())
+        if model in keys:
+            self._model_combo.setCurrentIndex(keys.index(model))
+
+    def set_thinking(self, thinking: ThinkingMode) -> None:
+        keys = ["off", "high", "max"]
+        if thinking in keys:
+            self._thinking_combo.setCurrentIndex(keys.index(thinking))
+
     def set_streaming(self, streaming: bool) -> None:
         self._streaming = streaming
         self._send_btn.setVisible(not streaming)

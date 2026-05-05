@@ -178,6 +178,7 @@ class ConversationBridge(QObject):
     started = Signal()
     finished = Signal()
     usageEmitted = Signal(int, int, int, int)
+    usageWithModel = Signal(str, int, int, int, int)  # model_id, prompt, completion, hit, miss
 
     def __init__(self, parent_widget) -> None:
         super().__init__()
@@ -196,6 +197,7 @@ class ConversationBridge(QObject):
         # Pending approval correlation: when worker's tool_call_id is unknown to
         # _ApprovalProxy, we match by rel_path and most-recent worker tool id.
         self._last_proposed_tool_call_id: str | None = None
+        self._active_model: str = ""
 
     # ---- config -----------------------------------------------------------
 
@@ -232,6 +234,7 @@ class ConversationBridge(QObject):
         self._cancel = threading.Event()
         self._index_to_id.clear()
         self._index_to_name.clear()
+        self._active_model = str(model)
         self._thread = QThread()
         self._worker = _Worker(
             manager=self._manager,
@@ -252,6 +255,7 @@ class ConversationBridge(QObject):
         self._worker.streamDone.connect(self.streamDone)
         self._worker.toolResultEmitted.connect(self._on_tool_result)
         self._worker.usageEmitted.connect(self.usageEmitted)
+        self._worker.usageEmitted.connect(self._forward_usage_with_model)
         self._worker.finished.connect(self._on_finished)
 
         self._thread.started.connect(self._worker.run)
@@ -300,6 +304,12 @@ class ConversationBridge(QObject):
             )
             self._approval_proxy.last_event = None
         self.toolResult.emit(tool_id, name, ok, result, extras)
+
+    @Slot(int, int, int, int)
+    def _forward_usage_with_model(
+        self, prompt: int, completion: int, hit: int, miss: int
+    ) -> None:
+        self.usageWithModel.emit(self._active_model, prompt, completion, hit, miss)
 
     @Slot()
     def _on_finished(self) -> None:

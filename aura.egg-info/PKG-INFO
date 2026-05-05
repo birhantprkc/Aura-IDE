@@ -8,3 +8,4 @@ Requires-Dist: openai>=1.40
 Requires-Dist: pydantic>=2.5
 Requires-Dist: platformdirs>=4.0
 Requires-Dist: pillow>=10.0
+Requires-Dist: pygments>=2.17

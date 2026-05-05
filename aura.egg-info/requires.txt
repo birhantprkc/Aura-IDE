@@ -3,3 +3,4 @@ openai>=1.40
 pydantic>=2.5
 platformdirs>=4.0
 pillow>=10.0
+pygments>=2.17
