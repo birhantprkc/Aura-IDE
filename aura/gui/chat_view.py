@@ -208,8 +208,8 @@ class UserCard(QFrame):
         super().__init__()
         self.setObjectName("userCard")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 12)
-        layout.setSpacing(4)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(6)
 
         header = QLabel("You")
         header.setObjectName("userHeader")
@@ -291,8 +291,8 @@ class AssistantCard(QFrame):
         super().__init__()
         self.setObjectName("assistantCard")
         self._outer = QVBoxLayout(self)
-        self._outer.setContentsMargins(14, 10, 14, 12)
-        self._outer.setSpacing(4)
+        self._outer.setContentsMargins(16, 14, 16, 14)
+        self._outer.setSpacing(6)
 
         header = QLabel("Aura")
         header.setObjectName("assistantHeader")
@@ -463,7 +463,7 @@ class ToolCallCard(QFrame):
         self._result_text = ""
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(5)
 
         self._header = QToolButton()
@@ -592,7 +592,7 @@ class CodeWriterCard(QFrame):
         self._last_content_len = 0
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(5)
 
         # Header
@@ -827,7 +827,7 @@ class DiffCard(QFrame):
         super().__init__()
         self.setObjectName("card")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(6)
 
         title_color = {
@@ -928,13 +928,14 @@ class SpecCard(QFrame):
         self._worker_running = False
 
         self.setStyleSheet(
-            f"QFrame#specCard {{ background: {BG_ALT}; border: 1px solid {BORDER}; "
+            f"QFrame#specCard {{ background: {BG_ALT}; "
+            f"border: 1px solid rgba(255, 255, 255, 0.08); "
             f"border-left: 3px solid {ACCENT}; border-radius: 8px; }}"
         )
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 10, 14, 12)
-        outer.setSpacing(6)
+        outer.setContentsMargins(16, 14, 16, 16)
+        outer.setSpacing(8)
 
         header = QLabel("⚡ Dispatch to Worker")
         header.setStyleSheet(f"color: {ACCENT}; font-weight: 700; font-size: 12px;")
@@ -1080,7 +1081,7 @@ class ErrorCard(QFrame):
         super().__init__()
         self.setObjectName("errorCard")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(4)
         head = QLabel(title)
         head.setStyleSheet(f"color: {DANGER}; font-weight: 600;")
@@ -1305,12 +1306,13 @@ class ChatView(QScrollArea):
         card = QFrame()
         card.setObjectName("card")
         card.setStyleSheet(
-            f"QFrame#card {{ background: {BG_ALT}; border: 1px solid {BORDER}; "
+            f"QFrame#card {{ background: {BG_ALT}; "
+            f"border: 1px solid rgba(255, 255, 255, 0.08); "
             f"border-left: 3px solid {SUCCESS if ok else DANGER}; border-radius: 8px; }}"
         )
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 10, 14, 12)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
 
         # Header
         status_icon = "✅" if ok else "⚠️"

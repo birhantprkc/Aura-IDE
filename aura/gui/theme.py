@@ -6,9 +6,9 @@ from PySide6.QtWidgets import QApplication
 
 
 # ---- color tokens ---------------------------------------------------------
-BG = "#181a20"           # window background
-BG_ALT = "#1f222a"       # panels / generic cards
-BG_RAISED = "#262a33"    # input field, pressed buttons
+BG = "#1e1e1e"           # window background (was #181a20)
+BG_ALT = "#25252d"       # panels / generic cards (was #1f222a)
+BG_RAISED = "#2a2a33"    # input field, pressed buttons (was #262a33)
 BORDER = "#2e333d"
 BORDER_STRONG = "#3a4050"
 
@@ -243,23 +243,23 @@ QFrame#leftPane {{
 
 QFrame#card {{
     background: {BG_ALT};
-    border: 1px solid {BORDER};
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
 }}
 QFrame#userCard {{
     background: {BG_USER_CARD};
-    border: 1px solid {BORDER_STRONG};
+    border: 1px solid rgba(255, 255, 255, 0.10);
     border-left: 3px solid {ACCENT};
     border-radius: 8px;
 }}
 QFrame#assistantCard {{
     background: {BG_ASSISTANT_CARD};
-    border: 1px solid {BORDER};
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
 }}
 QFrame#toolCard {{
     background: {BG_TOOL_CARD};
-    border: 1px solid {BORDER};
+    border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 6px;
 }}
 QFrame#toolCluster {{
