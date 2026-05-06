@@ -353,6 +353,7 @@ class AssistantCard(QFrame):
         # Reasoning: lazy — created on first reasoning delta.
         self._reasoning_section: _CollapsibleSection | None = None
         self._reasoning_label: _StreamLabel | None = None
+        self._reasoning_scroll_area: QScrollArea | None = None
 
         # Content: the streamed answer.
         self._content_label = _StreamLabel(italic=False)
@@ -382,13 +383,23 @@ class AssistantCard(QFrame):
     def append_reasoning(self, text: str) -> None:
         if self._reasoning_label is None:
             self._reasoning_label = _StreamLabel(italic=True)
+            scroll_area = QScrollArea()
+            scroll_area.setWidgetResizable(True)
+            scroll_area.setWidget(self._reasoning_label)
+            scroll_area.setMaximumHeight(250)
+            scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+            self._reasoning_scroll_area = scroll_area
             section = _CollapsibleSection(
-                "Thinking…", self._reasoning_label, start_open=True, prominent=True
+                "Thinking…", scroll_area, start_open=True, prominent=True
             )
             self._reasoning_section = section
             # Insert reasoning at the top, after header (index 1).
             self._outer.insertWidget(1, section)
         self._reasoning_label.append(text)
+        # Auto-scroll the reasoning box to the bottom
+        if self._reasoning_scroll_area is not None:
+            sb = self._reasoning_scroll_area.verticalScrollBar()
+            sb.setValue(sb.maximum())
 
     def reasoning_done(self) -> None:
         if self._reasoning_section is not None:
@@ -1315,7 +1326,7 @@ class ChatView(QScrollArea):
 
     def append_reasoning(self, text: str) -> None:
         self.current_assistant().append_reasoning(text)
-        self._scroll_to_bottom(force=True)
+        self._scroll_to_bottom()
 
     def append_content(self, text: str) -> None:
         ac = self.current_assistant()
