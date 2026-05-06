@@ -479,19 +479,18 @@ class _DispatchProxy(QObject):
         )
         self._records.append(record)
 
-        # Auto-commit if worker made changes
+        # Auto-commit if worker made changes — fire in background so dispatch isn't blocked.
         if self._workspace_root is not None and write_results:
             try:
                 from aura.git import auto_commit
 
                 written_files = [w["path"] for w in write_results if isinstance(w.get("path"), str) and w.get("path")]
                 if written_files:
-                    auto_commit(
-                        workspace_root=self._workspace_root,
-                        goal=req.goal,
-                        files=written_files,
-                        summary=summary,
-                    )
+                    threading.Thread(
+                        target=auto_commit,
+                        args=(self._workspace_root, req.goal, written_files, summary),
+                        daemon=True,
+                    ).start()
             except Exception:
                 pass  # Never block the chat on git failures
 
