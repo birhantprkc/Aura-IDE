@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -107,9 +107,6 @@ class MainWindow(QMainWindow):
         # Session usage accumulators (per-model so cost is exact when mixing).
         self._session_usage: dict[str, dict[str, int]] = {}
 
-        # Worker pop-out windows keyed by tool_call_id.
-        self._worker_windows: dict[str, WorkerWindow] = {}
-
         # Queued messages sent while worker is running.
         self._message_queue: list[SendPayload] = []
 
@@ -158,6 +155,15 @@ class MainWindow(QMainWindow):
 
         # ----- status bar -----
         self._build_status_bar()
+
+        # Persistent worker window — pinned to the main window as a tool window.
+        self._worker_window = WorkerWindow(parent=self)
+        self._worker_window.setWindowFlags(
+            self._worker_window.windowFlags() | Qt.Tool
+        )
+        self._worker_window.show()
+        # Position it to the right of the main window.
+        QTimer.singleShot(0, self._position_worker_window)
 
         # ----- wire bridge ↔ view -----
         self._bridge.started.connect(self._on_started)
@@ -292,6 +298,11 @@ class MainWindow(QMainWindow):
         self._status_cost.setObjectName("statusCost")
         bar.addPermanentWidget(self._status_cost)
 
+    def _position_worker_window(self) -> None:
+        geo = self.geometry()
+        self._worker_window.move(geo.x() + geo.width() + 10, geo.y())
+        self._worker_window.resize(700, geo.height())
+
     def _refresh_status_bar(self) -> None:
         # Left: workspace path (truncated), model, thinking
         ws = str(self._workspace_root) if self._workspace_root else "(none)"
@@ -366,9 +377,7 @@ class MainWindow(QMainWindow):
         self._chat.reset()
         self._current_conversation_path = None
         self._reset_session_usage()
-        for w in list(self._worker_windows.values()):
-            w.shutdown()
-        self._worker_windows.clear()
+        self._worker_window.clear()
         self._message_queue.clear()
         self._input.set_queued_messages(0)
 
@@ -613,20 +622,14 @@ class MainWindow(QMainWindow):
         self._bridge.user_cancelled_dispatch(tool_call_id)
 
     def _on_worker_started(self, tool_call_id: str) -> None:
-        card = self._chat.get_spec_card(tool_call_id)
-        goal = card.current_spec()[0] if card else "Worker task"
-        window = WorkerWindow(tool_call_id, goal, parent=self)
-        window.closed.connect(self._on_worker_window_closed)
-        self._worker_windows[tool_call_id] = window
-        window.begin_assistant()
-        window.show()
-        # Re-enable input so the user can queue messages while the worker works.
+        self._worker_window.show()
+        self._worker_window.raise_()
+        self._worker_window.activateWindow()
+        self._worker_window.begin_assistant()
         self._input.set_streaming(False)
 
     def _on_worker_finished(self, tool_call_id: str, ok: bool, summary: str) -> None:
-        w = self._worker_windows.get(tool_call_id)
-        if w:
-            w.worker_finished(ok, summary)
+        self._worker_window.worker_finished(ok, summary)
         card = self._chat.get_spec_card(tool_call_id)
         if card:
             card.worker_finished(ok, summary)
@@ -634,32 +637,22 @@ class MainWindow(QMainWindow):
             self._chat.add_worker_summary(tool_call_id, goal, ok, summary)
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
-        w = self._worker_windows.get(tool_call_id)
-        if w:
-            w.worker_cancelled()
+        self._worker_window.worker_cancelled()
         card = self._chat.get_spec_card(tool_call_id)
         if card:
             card.disable_buttons()
 
     def _on_worker_reasoning(self, tool_call_id: str, text: str) -> None:
-        w = self._worker_windows.get(tool_call_id)
-        if w:
-            w.append_reasoning(text)
+        self._worker_window.append_reasoning(text)
 
     def _on_worker_content(self, tool_call_id: str, text: str) -> None:
-        w = self._worker_windows.get(tool_call_id)
-        if w:
-            w.append_content(text)
+        self._worker_window.append_content(text)
 
     def _on_worker_tool_call_start(self, tool_call_id: str, worker_tool_id: str, name: str) -> None:
-        w = self._worker_windows.get(tool_call_id)
-        if w:
-            w.add_tool_call(worker_tool_id, name)
+        self._worker_window.add_tool_call(worker_tool_id, name)
 
     def _on_worker_tool_args(self, tool_call_id: str, worker_tool_id: str, fragment: str) -> None:
-        w = self._worker_windows.get(tool_call_id)
-        if w:
-            w.append_tool_args(worker_tool_id, fragment)
+        self._worker_window.append_tool_args(worker_tool_id, fragment)
 
     def _on_worker_tool_result(
         self,
@@ -670,9 +663,7 @@ class MainWindow(QMainWindow):
         result: str,
         extras: dict,
     ) -> None:
-        w = self._worker_windows.get(parent_tool_id)
-        if w:
-            w.set_tool_result(worker_tool_id, ok, result)
+        self._worker_window.set_tool_result(worker_tool_id, ok, result)
 
     def _on_worker_diff_decided(
         self,
@@ -684,26 +675,16 @@ class MainWindow(QMainWindow):
         new: str,
         is_new_file: bool,
     ) -> None:
-        w = self._worker_windows.get(parent_tool_id)
-        if w:
-            w.add_diff_card(worker_tool_id, rel_path, old, new, decision, is_new_file)
+        self._worker_window.add_diff_card(worker_tool_id, rel_path, old, new, decision, is_new_file)
 
     def _on_worker_api_error(self, tool_call_id: str, status: int, message: str) -> None:
-        w = self._worker_windows.get(tool_call_id)
-        if w:
-            title = f"API Error {status}" if status > 0 else "Worker Error"
-            w.add_error(f"{title}: {message}")
-
-    def _on_worker_window_closed(self, tool_call_id: str) -> None:
-        # Window was closed by user — remove from dict but keep SpecCard's "View Worker" button.
-        self._worker_windows.pop(tool_call_id, None)
+        title = f"API Error {status}" if status > 0 else "Worker Error"
+        self._worker_window.add_error(f"{title}: {message}")
 
     def _on_view_worker_clicked(self, tool_call_id: str) -> None:
-        w = self._worker_windows.get(tool_call_id)
-        if w is not None:
-            w.show()
-            w.raise_()
-            w.activateWindow()
+        self._worker_window.show()
+        self._worker_window.raise_()
+        self._worker_window.activateWindow()
 
     def _on_worker_usage(
         self,

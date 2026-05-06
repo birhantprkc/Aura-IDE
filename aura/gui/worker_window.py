@@ -1,14 +1,12 @@
-"""Pop-out window for worker dispatch output.
+"""Persistent tool window for worker dispatch output.
 
-Shows worker streaming (reasoning, tool calls, diffs, code) with auto-scroll.
-Stays open after completion so the user can review.
+Shows worker streaming (reasoning, tool calls, diffs, code) with auto-scroll
+for every dispatch in a single, persistent window pinned to the main window.
 """
 
 from __future__ import annotations
 
-import json
-
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -33,22 +31,14 @@ CODE_WRITER_NAMES = frozenset({"write_file", "edit_file"})
 
 
 class WorkerWindow(QMainWindow):
-    """Separate OS-level window showing live worker activity."""
+    """Persistent OS-level window showing live worker activity for all dispatches."""
 
-    closed = Signal(str)  # tool_call_id
-
-    def __init__(self, tool_call_id: str, goal: str, parent=None) -> None:
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._tool_call_id = tool_call_id
-        self._goal = goal
         self._shutting_down: bool = False
 
-        title = goal if len(goal) <= 80 else goal[:77] + "…"
-        self.setWindowTitle(f"Worker — {title}")
+        self.setWindowTitle("Worker Activity")
         self.resize(800, 700)
-        if parent is not None:
-            geo = parent.geometry()
-            self.move(geo.x() + 40, geo.y() + 40)
 
         # Dark themed
         self.setStyleSheet(f"QMainWindow {{ background: {BG}; }}")
@@ -170,12 +160,7 @@ class WorkerWindow(QMainWindow):
         # Finalize the last assistant card's markdown
         ac = self._current_assistant
         if ac is not None:
-            from aura.gui.chat_view import _render_markdown_with_code
-            text = ac._content_label.text_buffer()
-            if text:
-                html = _render_markdown_with_code(text)
-                ac._content_label.setTextFormat(Qt.TextFormat.RichText)
-                ac._content_label.setText(html)
+            ac.finalize_content()
             self._current_assistant = None
 
         if ok:
@@ -189,6 +174,19 @@ class WorkerWindow(QMainWindow):
         self._status_label.setText("Cancelled")
         self._status_label.setStyleSheet(f"color: {DANGER};")
 
+    def clear(self) -> None:
+        """Remove all cards and reset state (called on New Conversation)."""
+        # Remove every widget from the layout except the trailing stretch.
+        while self._layout.count() > 1:
+            item = self._layout.takeAt(0)
+            if item is not None:
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
+        self._current_assistant = None
+        self._tool_cards.clear()
+        self._tool_owner.clear()
+
     def shutdown(self) -> None:
         """Permanently close and destroy this window (used on New Conversation)."""
         self._shutting_down = True
@@ -200,7 +198,6 @@ class WorkerWindow(QMainWindow):
         if self._shutting_down:
             event.accept()
             return
-        # Don't delete — just hide so it can be re-shown.
+        # Just hide — the window can be re-shown via "View Worker".
         self.hide()
-        self.closed.emit(self._tool_call_id)
         event.ignore()
