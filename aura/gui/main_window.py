@@ -110,6 +110,9 @@ class MainWindow(QMainWindow):
         # Worker pop-out windows keyed by tool_call_id.
         self._worker_windows: dict[str, WorkerWindow] = {}
 
+        # Queued messages sent while worker is running.
+        self._message_queue: list[SendPayload] = []
+
         # ----- toolbar ----
         self._toolbar = QToolBar("Main")
         self._toolbar.setMovable(False)
@@ -124,7 +127,7 @@ class MainWindow(QMainWindow):
         self._left_pane = self._build_left_pane()
         splitter.addWidget(self._left_pane)
 
-        # Right pane = chat view + input panel
+        # Right pane = chat | planner log | input panel
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -366,6 +369,8 @@ class MainWindow(QMainWindow):
         for w in list(self._worker_windows.values()):
             w.shutdown()
         self._worker_windows.clear()
+        self._message_queue.clear()
+        self._input.set_queued_messages(0)
 
     def _on_open_conversation(self) -> None:
         if self._bridge.is_running():
@@ -430,7 +435,15 @@ class MainWindow(QMainWindow):
         self._refresh_status_bar()
 
     def _on_send(self, payload: SendPayload) -> None:
+        # Intercept /undo command
+        if payload.text.strip().lower() == "/undo":
+            self._chat.add_user("/undo")
+            self._on_undo()
+            return
+
         if self._bridge.is_running():
+            self._message_queue.append(payload)
+            self._input.set_queued_messages(len(self._message_queue))
             return
         # Prepare history append: image attachments go via multimodal content array.
         text = payload.text
@@ -522,6 +535,8 @@ class MainWindow(QMainWindow):
 
     def _on_stop(self) -> None:
         self._bridge.request_cancel()
+        self._message_queue.clear()
+        self._input.set_queued_messages(0)
 
     def _on_started(self) -> None:
         self._input.set_streaming(True)
@@ -530,6 +545,15 @@ class MainWindow(QMainWindow):
         self._input.set_streaming(False)
         self._chat.assistant_done()
         self._input.focus_editor()
+        self._process_message_queue()
+
+    def _process_message_queue(self) -> None:
+        """Send the next queued message, if any."""
+        if not self._message_queue:
+            return
+        payload = self._message_queue.pop(0)
+        self._input.set_queued_messages(len(self._message_queue))
+        self._on_send(payload)
 
     def _on_stream_done(self, finish_reason: str, full_message: dict) -> None:
         # Render markdown for the final answer.
@@ -596,6 +620,8 @@ class MainWindow(QMainWindow):
         self._worker_windows[tool_call_id] = window
         window.begin_assistant()
         window.show()
+        # Re-enable input so the user can queue messages while the worker works.
+        self._input.set_streaming(False)
 
     def _on_worker_finished(self, tool_call_id: str, ok: bool, summary: str) -> None:
         w = self._worker_windows.get(tool_call_id)
@@ -697,6 +723,24 @@ class MainWindow(QMainWindow):
         bucket["miss"] += miss
         bucket["out"] += completion
         self._refresh_status_bar()
+
+    def _on_undo(self) -> None:
+        """Handle /undo command — git reset the last commit."""
+        if self._workspace_root is None:
+            self._chat.add_error("Undo", "No workspace root set.")
+            return
+
+        from aura.git import undo_last_commit
+
+        ok, message = undo_last_commit(self._workspace_root)
+
+        if ok:
+            # Show a brief assistant response
+            ac = self._chat.begin_assistant()
+            ac.append_content(f"✅ {message}")
+            self._chat.assistant_done()
+        else:
+            self._chat.add_error("Undo failed", message)
 
     def _on_api_error(self, status: int, message: str) -> None:
         title = f"API Error {status}" if status > 0 else "Error"
