@@ -311,16 +311,40 @@ class _StreamLabel(QLabel):
 
 
 class AssistantCard(QFrame):
-    def __init__(self) -> None:
+    def __init__(self, compact_tools: bool = False) -> None:
         super().__init__()
         self.setObjectName("assistantCard")
+        self._compact_tools = compact_tools
+        self._compact_tool_active: int = 0
+        self._compact_tool_names: list[str] = []
+
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(16, 14, 16, 14)
         self._outer.setSpacing(6)
 
+        # Header row: "Aura" on left, tool status on right.
+        header_row = QWidget()
+        header_row.setStyleSheet("background: transparent;")
+        header_layout = QHBoxLayout(header_row)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(0)
+
         header = QLabel("Aura")
         header.setObjectName("assistantHeader")
-        self._outer.addWidget(header)
+        header_layout.addWidget(header)
+
+        header_layout.addStretch(1)
+
+        self._tool_status = QLabel("")
+        self._tool_status.setObjectName("toolStatus")
+        font = self._tool_status.font()
+        font.setPointSize(10)
+        self._tool_status.setFont(font)
+        self._tool_status.setTextFormat(Qt.TextFormat.RichText)
+        self._tool_status.setVisible(False)
+        header_layout.addWidget(self._tool_status)
+
+        self._outer.addWidget(header_row)
 
         # Reasoning: lazy — created on first reasoning delta.
         self._reasoning_section: _CollapsibleSection | None = None
@@ -377,7 +401,35 @@ class AssistantCard(QFrame):
                 self._reasoning_section.set_open(False)
         self._content_label.append(text)
 
-    def add_tool_card(self, tool_call_id: str, name: str) -> "ToolCallCard":
+    # ---- compact tool status --------------------------------------------
+
+    def notify_compact_tool_start(self, name: str) -> None:
+        self._compact_tool_active += 1
+        self._tool_status.setVisible(True)
+        self._tool_status.setText(
+            f"<span style='color:{WARN};'>📄 Reading files…</span>"
+        )
+
+    def notify_compact_tool_done(self, name: str) -> None:
+        self._compact_tool_active = max(0, self._compact_tool_active - 1)
+        self._compact_tool_names.append(name)
+        if self._compact_tool_active == 0:
+            n = len(self._compact_tool_names)
+            self._tool_status.setText(
+                f"<span style='color:{SUCCESS_DIM};'>✓ {n} tool{'s' if n != 1 else ''}</span>"
+            )
+
+    def reset_compact_tool_state(self) -> None:
+        self._compact_tool_active = 0
+        self._compact_tool_names.clear()
+        self._tool_status.setVisible(False)
+
+    # ---- tool cards -----------------------------------------------------
+
+    def add_tool_card(self, tool_call_id: str, name: str) -> "ToolCallCard | None":
+        if self._compact_tools:
+            self.notify_compact_tool_start(name)
+            return None
         card = ToolCallCard(name)
         self._tool_cards[tool_call_id] = card
         if not self._tool_cluster.isVisible():
@@ -387,6 +439,8 @@ class AssistantCard(QFrame):
         return card
 
     def get_tool_card(self, tool_call_id: str) -> "ToolCallCard | None":
+        if self._compact_tools:
+            return None
         return self._tool_cards.get(tool_call_id)
 
     def add_footer_widget(self, w: QWidget) -> None:
@@ -1168,6 +1222,8 @@ class ChatView(QScrollArea):
         self._spec_cards: dict[str, SpecCard] = {}
         self._empty_hint: QLabel | None = None
         self._scroll_anim: QPropertyAnimation | None = None
+        self._compact_tools: bool = False
+        self._compact_tool_names: dict[str, str] = {}
         self._show_empty_hint()
 
     # ---- container management --------------------------------------------
@@ -1199,6 +1255,9 @@ class ChatView(QScrollArea):
         self._scroll_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._scroll_anim.start()
 
+    def set_compact_tools(self, enabled: bool) -> None:
+        self._compact_tools = enabled
+
     def _show_empty_hint(self) -> None:
         hint = QLabel(
             "Start by describing the bug, dragging in code, or pasting a screenshot."
@@ -1220,6 +1279,7 @@ class ChatView(QScrollArea):
         self._current_assistant = None
         self._tool_owner.clear()
         self._spec_cards.clear()
+        self._compact_tool_names.clear()
         self._empty_hint = None
         self._show_empty_hint()
 
@@ -1237,7 +1297,7 @@ class ChatView(QScrollArea):
         self._current_assistant = None  # next assistant turn opens a new card
 
     def begin_assistant(self) -> AssistantCard:
-        card = AssistantCard()
+        card = AssistantCard(compact_tools=self._compact_tools)
         self._current_assistant = card
         self._add_card(card)
         return card
@@ -1259,18 +1319,31 @@ class ChatView(QScrollArea):
         self._scroll_to_bottom(force=True)
 
     def add_tool_call(self, tool_call_id: str, name: str) -> None:
+        if self._compact_tools:
+            ac = self.current_assistant()
+            ac.notify_compact_tool_start(name)
+            self._compact_tool_names[tool_call_id] = name
+            self._scroll_to_bottom()
+            return
         ac = self.current_assistant()
         ac.add_tool_card(tool_call_id, name)
         self._tool_owner[tool_call_id] = ac
         self._scroll_to_bottom()
 
     def append_tool_args(self, tool_call_id: str, fragment: str) -> None:
+        if self._compact_tools:
+            return
         ac = self._tool_owner.get(tool_call_id) or self.current_assistant()
         card = ac.get_tool_card(tool_call_id)
         if card is not None:
             card.append_args(fragment)
 
     def set_tool_result(self, tool_call_id: str, ok: bool, result_text: str) -> None:
+        if self._compact_tools:
+            name = self._compact_tool_names.pop(tool_call_id, "tool")
+            ac = self.current_assistant()
+            ac.notify_compact_tool_done(name)
+            return
         ac = self._tool_owner.get(tool_call_id) or self.current_assistant()
         card = ac.get_tool_card(tool_call_id)
         if card is not None:

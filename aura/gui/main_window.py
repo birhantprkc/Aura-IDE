@@ -131,6 +131,8 @@ class MainWindow(QMainWindow):
         center_layout.setSpacing(0)
 
         self._chat = ChatView()
+        if self._settings.planner_worker_mode:
+            self._chat.set_compact_tools(True)
         center_layout.addWidget(self._chat, 1)
 
         self._input = InputPanel(self._workspace_root)
@@ -434,6 +436,7 @@ class MainWindow(QMainWindow):
         self._bridge.set_system_prompt(
             PLANNER_SYSTEM_PROMPT if enabled else SYSTEM_PROMPT
         )
+        self._chat.set_compact_tools(enabled)
 
     def _on_worker_model_changed(self, model: str) -> None:
         self._bridge.set_worker_model(model)  # type: ignore[arg-type]
