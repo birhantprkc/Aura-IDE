@@ -3,6 +3,7 @@ read-only environment / workspace facts.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -15,7 +16,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -63,7 +63,6 @@ class SettingsDialog(QDialog):
 
         self._settings = AppSettings(
             provider=settings.provider,
-            api_keys=dict(settings.api_keys),
             default_model=settings.default_model,
             default_thinking=settings.default_thinking,
             restore_last_conversation=settings.restore_last_conversation,
@@ -98,23 +97,11 @@ class SettingsDialog(QDialog):
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         form.addRow("Provider:", self._provider_combo)
 
-        # ---- API Key input ----
-        self._api_key_input = QLineEdit()
-        self._api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._api_key_input.setPlaceholderText("sk-...  Paste your API key here")
-        api_key_row = QHBoxLayout()
-        api_key_row.setSpacing(8)
-        api_key_row.addWidget(self._api_key_input, 1)
+        # ---- API Key status ----
         self._api_key_status = QLabel("")
-        api_key_row.addWidget(self._api_key_status)
-        form.addRow("API Key:", api_key_row)
+        form.addRow("API Key:", self._api_key_status)
 
-        # Populate API key input
         current_provider = self._settings.provider
-        stored_key = self._settings.api_keys.get(current_provider, "")
-        env_key = os_environ_get(PROVIDERS[current_provider].env_key)
-        if stored_key:
-            self._api_key_input.setText(stored_key)
         self._refresh_api_key_status(current_provider)
 
         # ---- Model combos ----
@@ -227,32 +214,17 @@ class SettingsDialog(QDialog):
 
     def _on_provider_changed(self, _index: int) -> None:
         provider_id: ProviderId = self._provider_combo.currentData()
-        cfg = PROVIDERS[provider_id]
         self._populate_model_combos(provider_id)
         self._refresh_api_key_status(provider_id)
 
-        # Pre-fill API key from stored settings or env var.
-        stored = self._settings.api_keys.get(provider_id, "")
-        env_val = os_environ_get(cfg.env_key)
-        if stored:
-            self._api_key_input.setText(stored)
-        elif env_val:
-            self._api_key_input.setText(env_val)
-        else:
-            self._api_key_input.clear()
-
     def _refresh_api_key_status(self, provider_id: ProviderId) -> None:
         cfg = PROVIDERS[provider_id]
-        env_val = os_environ_get(cfg.env_key)
-        stored = self._settings.api_keys.get(provider_id, "")
+        env_val = os.environ.get(cfg.env_key)
         if env_val:
-            self._api_key_status.setText("✓ from env")
-            self._api_key_status.setStyleSheet(f"color: {SUCCESS};")
-        elif stored:
-            self._api_key_status.setText("✓ stored")
+            self._api_key_status.setText(f"{cfg.env_key}: ✓ set")
             self._api_key_status.setStyleSheet(f"color: {SUCCESS};")
         else:
-            self._api_key_status.setText("missing")
+            self._api_key_status.setText(f"{cfg.env_key}: missing — set in your shell and restart")
             self._api_key_status.setStyleSheet(f"color: {WARN};")
 
     # ---- Model combo helpers ----------------------------------------------
@@ -324,17 +296,8 @@ class SettingsDialog(QDialog):
         """Read the current widget values and return a fresh AppSettings."""
         provider_id: ProviderId = self._provider_combo.currentData()
 
-        # Build api_keys dict: preserve keys for other providers, update current
-        api_keys = dict(self._settings.api_keys)
-        new_key = self._api_key_input.text().strip()
-        if new_key:
-            api_keys[provider_id] = new_key
-        else:
-            api_keys.pop(provider_id, None)
-
         return AppSettings(
             provider=provider_id,
-            api_keys=api_keys,
             default_model=self._model_combo.currentData(),
             default_thinking=self._thinking_combo.currentData(),
             restore_last_conversation=self._restore_chk.isChecked(),
@@ -356,7 +319,4 @@ class SettingsDialog(QDialog):
         super().accept()
 
 
-def os_environ_get(key: str) -> str:
-    """Read an environment variable, returning empty string if not set."""
-    import os
-    return os.environ.get(key, "")
+

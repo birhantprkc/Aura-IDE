@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -174,16 +174,9 @@ def get_provider(provider_id: ProviderId) -> ProviderConfig:
 
 
 def get_api_key(provider_id: ProviderId) -> str | None:
-    """Check env var first, then stored settings (AppSettings.api_keys)."""
+    """Check env var only — API keys are never stored in config.json."""
     cfg = PROVIDERS[provider_id]
-    key = os.environ.get(cfg.env_key)
-    if key:
-        return key
-    # Lazy-import AppSettings to avoid circular imports at module level.
-    from aura.config import load_settings  # noqa: F811
-
-    settings = load_settings()
-    return settings.api_keys.get(provider_id)
+    return os.environ.get(cfg.env_key) or None
 
 
 def resolve_api_key(provider_id: ProviderId) -> str:
@@ -193,7 +186,7 @@ def resolve_api_key(provider_id: ProviderId) -> str:
         cfg = PROVIDERS[provider_id]
         raise RuntimeError(
             f"No API key found for {cfg.label}. "
-            f"Set the {cfg.env_key} environment variable or paste the key in Settings."
+            f"Set the {cfg.env_key} environment variable."
         )
     return key
 
@@ -289,7 +282,6 @@ DEFAULT_WORKER_THINKING: ThinkingMode = "high"
 @dataclass
 class AppSettings:
     provider: ProviderId = DEFAULT_PROVIDER
-    api_keys: dict[str, str] = field(default_factory=dict)
     default_model: str = DEFAULT_MODEL
     default_thinking: ThinkingMode = DEFAULT_THINKING
     restore_last_conversation: bool = True
@@ -308,9 +300,6 @@ class AppSettings:
         # Provider
         if isinstance(data.get("provider"), str) and data["provider"] in PROVIDERS:
             s.provider = data["provider"]  # type: ignore[assignment]
-        # API keys
-        if isinstance(data.get("api_keys"), dict):
-            s.api_keys = dict(data["api_keys"])
         # Models — accept any string now
         if isinstance(data.get("default_model"), str):
             s.default_model = data["default_model"]
