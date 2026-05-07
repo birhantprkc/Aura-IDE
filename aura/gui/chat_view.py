@@ -759,7 +759,7 @@ class CodeWriterCard(QFrame):
         self._code_view = QPlainTextEdit()
         self._code_view.setReadOnly(True)
         self._code_view.setFont(_mono_font(10))
-        self._code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self._code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._code_view.setStyleSheet(
             f"background: {BG}; color: {FG}; border: 1px solid {BORDER}; "
             "border-radius: 4px; padding: 6px;"
@@ -933,7 +933,7 @@ class CodeBlockCard(QFrame):
         code_view = QPlainTextEdit()
         code_view.setReadOnly(True)
         code_view.setFont(_mono_font(10))
-        code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         code_view.setStyleSheet(
             f"QPlainTextEdit {{ background: {BG}; color: {FG}; border: none; "
             f"padding: 8px; border-radius: 4px; }}"
@@ -997,7 +997,7 @@ class DiffCard(QFrame):
         diff_view = QPlainTextEdit()
         diff_view.setReadOnly(True)
         diff_view.setFont(_mono_font(9))
-        diff_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        diff_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         diff_view.setMaximumHeight(360)
         diff_view.setStyleSheet(
             f"background: {BG}; color: {FG}; border: 1px solid {BORDER}; "
