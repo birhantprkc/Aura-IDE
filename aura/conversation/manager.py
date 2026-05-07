@@ -16,6 +16,7 @@ the supplied DispatchCallback rather than the registry.
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 from typing import Any, Callable
 
@@ -26,6 +27,7 @@ from aura.client import (
     Done,
     Event,
     ReasoningDelta,
+    TerminalOutput,
     ToolCallArgsDelta,
     ToolCallEnd,
     ToolCallStart,
@@ -167,6 +169,15 @@ class ConversationManager:
                         args=args,
                         on_event=on_event,
                         model=model,
+                        cancel_event=cancel_event,
+                    )
+                    continue
+
+                if name == "run_terminal_command":
+                    self._handle_terminal_command(
+                        tool_call_id=tool_call_id,
+                        args=args,
+                        on_event=on_event,
                         cancel_event=cancel_event,
                     )
                     continue
@@ -360,6 +371,106 @@ class ConversationManager:
             )
         )
 
+    def _handle_terminal_command(
+        self,
+        tool_call_id: str,
+        args: dict[str, Any],
+        on_event: EventCallback,
+        cancel_event: threading.Event,
+    ) -> None:
+        command = args.get("command", "")
+        if not command:
+            payload = json.dumps({"ok": False, "error": "command is required"})
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(
+                ToolResult(
+                    tool_call_id=tool_call_id,
+                    name="run_terminal_command",
+                    ok=False,
+                    result=payload,
+                )
+            )
+            return
+
+        timeout = int(args.get("timeout", 120))
+
+        # Emit ToolCallStart so the GUI can create a TerminalCard
+        on_event(ToolCallStart(index=0, id=tool_call_id, name="run_terminal_command"))
+
+        output_lines: list[str] = []
+
+        try:
+            proc = subprocess.Popen(
+                command,
+                shell=True,
+                cwd=str(self._tools.workspace_root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+
+            try:
+                for line in iter(proc.stdout.readline, ""):
+                    if cancel_event.is_set():
+                        proc.kill()
+                        proc.wait()
+                        payload = json.dumps(
+                            {
+                                "ok": False,
+                                "exit_code": -1,
+                                "output": "".join(output_lines),
+                                "command": command,
+                                "error": "Cancelled.",
+                            }
+                        )
+                        self._history.append_tool_result(tool_call_id, payload)
+                        on_event(
+                            ToolResult(
+                                tool_call_id=tool_call_id,
+                                name="run_terminal_command",
+                                ok=False,
+                                result=payload,
+                                extras={"cancelled": True},
+                            )
+                        )
+                        return
+                    output_lines.append(line)
+                    on_event(TerminalOutput(tool_call_id=tool_call_id, text=line))
+
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                output_lines.append("\n[ERROR: Command timed out after {} seconds]\n".format(timeout))
+
+            exit_code = proc.returncode
+        except Exception as exc:
+            exit_code = -1
+            output_lines.append(f"\n[ERROR: {type(exc).__name__}: {exc}]\n")
+
+        full_output = "".join(output_lines)
+        ok = exit_code == 0
+        payload = json.dumps(
+            {
+                "ok": ok,
+                "exit_code": exit_code,
+                "output": full_output,
+                "command": command,
+            },
+            ensure_ascii=False,
+        )
+
+        self._history.append_tool_result(tool_call_id, payload)
+        on_event(
+            ToolResult(
+                tool_call_id=tool_call_id,
+                name="run_terminal_command",
+                ok=ok,
+                result=payload,
+            )
+        )
+
     def _cleanup_cancelled(self, on_event: EventCallback) -> None:
         on_event(ApiError(status_code=None, message="Cancelled."))
 
@@ -381,6 +492,7 @@ __all__ = [
     "ApiError",
     "ToolResult",
     "WorkerDispatchRequested",
+    "TerminalOutput",
     "DispatchCallback",
     "WorkerDispatchRequest",
     "WorkerDispatchResult",

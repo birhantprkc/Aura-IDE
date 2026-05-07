@@ -86,6 +86,12 @@ class WorkerDispatchRequested:
     acceptance: str
 
 
+@dataclass
+class TerminalOutput:
+    tool_call_id: str
+    text: str  # chunk of stdout/stderr output
+
+
 Event = (
     ReasoningDelta
     | ContentDelta
@@ -97,4 +103,5 @@ Event = (
     | ApiError
     | ToolResult
     | WorkerDispatchRequested
+    | TerminalOutput
 )

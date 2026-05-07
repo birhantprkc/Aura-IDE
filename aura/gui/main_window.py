@@ -200,6 +200,8 @@ class MainWindow(QMainWindow):
         self._bridge.workerApiError.connect(self._on_worker_api_error)
         self._bridge.workerUsage.connect(self._on_worker_usage)
         self._bridge.workerTodoListUpdated.connect(self._on_worker_todo_list_updated)
+        self._bridge.workerTerminalOutput.connect(self._on_worker_terminal_output)
+        self._bridge.terminalOutput.connect(self._on_terminal_output)
 
         self._update_workspace_label()
         self._refresh_status_bar()
@@ -558,6 +560,7 @@ class MainWindow(QMainWindow):
     def _on_finished(self) -> None:
         self._input.set_streaming(False)
         self._chat.assistant_done()
+        self._chat.stop_current_aura()
         self._input.focus_editor()
         self._process_message_queue()
 
@@ -696,6 +699,14 @@ class MainWindow(QMainWindow):
     def _on_worker_todo_list_updated(self, tool_call_id: str, tasks: list) -> None:
         """Route the worker's TODO list update to the WorkerWindow's pinned widget."""
         self._worker_window.update_todo_list(tasks)
+
+    def _on_terminal_output(self, tool_call_id: str, text: str) -> None:
+        """Route terminal output (single mode) to the ChatView's TerminalCard."""
+        self._chat.append_terminal_output(tool_call_id, text)
+
+    def _on_worker_terminal_output(self, parent_tool_id: str, worker_tool_id: str, text: str) -> None:
+        """Route terminal output (worker mode) to the WorkerWindow's TerminalCard."""
+        self._worker_window.append_terminal_output(worker_tool_id, text)
 
     def _on_undo(self) -> None:
         """Handle /undo command — git reset the last commit."""

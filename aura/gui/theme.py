@@ -30,6 +30,9 @@ SUCCESS_DIM = "#82a35a"    # tool-card supporting state (desaturated)
 DANGER = "#f7768e"         # diff removals, errors, rejection
 WARN = "#e0af68"           # warning, read-only badge
 
+# Terminal card background
+TERMINAL_BG = "#0a0a0a"
+
 # Diff hunk backgrounds (low-saturation)
 DIFF_ADD_BG = "#1d2a1f"
 DIFF_DEL_BG = "#2a1d20"

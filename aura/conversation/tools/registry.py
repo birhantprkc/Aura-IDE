@@ -311,6 +311,39 @@ WORKER_TODO_TOOL_DEF: dict[str, Any] = {
     },
 }
 
+TERMINAL_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "run_terminal_command",
+        "description": (
+            "Execute a shell command in the workspace directory and stream its output. "
+            "Use this to run linters (e.g. 'ruff check .'), type checkers ('mypy .'), "
+            "test suites ('pytest'), install dependencies ('pip install requests'), or "
+            "any other CLI tool. The command runs with the workspace as its working "
+            "directory. Stdout and stderr are both captured and streamed in real-time. "
+            "Returns the exit code and complete output on completion. "
+            "IMPORTANT: If the user specifies a test or lint command, you MUST run it "
+            "after modifying files. If the command fails, analyze the output and fix the "
+            "code before finishing."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The shell command to execute, e.g. 'pytest tests/' or 'mypy .' or 'pip install requests'. Executed via the system shell.",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Maximum seconds to wait before killing the command. Default: 120.",
+                    "default": 120,
+                },
+            },
+            "required": ["command"],
+        },
+    },
+}
+
 WEB_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -412,8 +445,8 @@ class ToolRegistry:
         if self._mode == "planner":
             return list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)] + list(RESEARCH_TOOL_DEFS)
         if self._mode == "worker":
-            return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(WORKER_TODO_TOOL_DEF)]
-        return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS)
+            return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(WORKER_TODO_TOOL_DEF)] + [dict(TERMINAL_TOOL_DEF)]
+        return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(TERMINAL_TOOL_DEF)]
 
     # ---- path resolution ---------------------------------------------------
 

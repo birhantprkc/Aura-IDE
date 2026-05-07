@@ -36,6 +36,7 @@ from aura.client import (
     Done,
     Event,
     ReasoningDelta,
+    TerminalOutput,
     ToolCallArgsDelta,
     ToolCallEnd,
     ToolCallStart,
@@ -97,7 +98,12 @@ WORKER_SYSTEM_PROMPT = (
     "3. Implementation Integrity: Write complete, production-ready code. Do not use placeholders, elisions, "
     "or comments such as `// ... existing code`.\n"
     "4. Resolution Report: Upon completion, output a concise, structured technical summary of all modifications. "
-    "If a technical blocker is encountered, detail the exact failure mechanism."
+    "If a technical blocker is encountered, detail the exact failure mechanism.\n"
+    "5. Validation & Testing: If the user specifies a test or lint command, or if the project has a standard "
+    "test/lint setup (e.g., pyproject.toml with pytest/ruff config), you MUST run the appropriate command "
+    "via run_terminal_command after modifying files. If the command fails, analyze the output and fix the "
+    "code before finishing. When projects lack tests, at minimum run a linter or type checker if the "
+    "ecosystem supports it (e.g., 'ruff check .' or 'mypy .' for Python)."
 )
 
 
@@ -114,6 +120,7 @@ class _Worker(QObject):
     streamDone = Signal(str, dict)
     toolResultEmitted = Signal(str, str, bool, str, dict)
     workerDispatchRequested = Signal(str, str, list, str, str)
+    terminalOutput = Signal(str, str)  # (tool_call_id, text)
     finished = Signal()
 
     def __init__(
@@ -182,6 +189,8 @@ class _Worker(QObject):
             self.workerDispatchRequested.emit(
                 ev.tool_call_id, ev.goal, list(ev.files), ev.spec, ev.acceptance
             )
+        elif isinstance(ev, TerminalOutput):
+            self.terminalOutput.emit(ev.tool_call_id, ev.text)
 
 
 class _ApprovalProxy(QObject):
@@ -257,6 +266,7 @@ class _DispatchProxy(QObject):
     workerApiError = Signal(str, int, str)
     workerUsage = Signal(str, str, int, int, int, int)  # tool_id, model, prompt, comp, hit, miss
     workerTodoListUpdated = Signal(str, list)  # tool_call_id, tasks
+    workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
 
     def __init__(
         self,
@@ -459,6 +469,8 @@ class _DispatchProxy(QObject):
                             "is_new_file": parsed.get("is_new_file", False),
                         }
                     )
+            elif isinstance(ev, TerminalOutput):
+                self.workerTerminalOutput.emit(tool_call_id, ev.tool_call_id, ev.text)
 
         try:
             worker_manager.send(
@@ -603,6 +615,10 @@ class ConversationBridge(QObject):
     workerApiError = Signal(str, int, str)
     workerUsage = Signal(str, str, int, int, int, int)
     workerTodoListUpdated = Signal(str, list)
+    workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
+
+    # Terminal output (single mode)
+    terminalOutput = Signal(str, str)  # tool_call_id, text
 
     def __init__(self, parent_widget) -> None:
         super().__init__()
@@ -647,6 +663,7 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.workerApiError.connect(self.workerApiError)
         self._dispatch_proxy.workerUsage.connect(self.workerUsage)
         self._dispatch_proxy.workerTodoListUpdated.connect(self.workerTodoListUpdated)
+        self._dispatch_proxy.workerTerminalOutput.connect(self.workerTerminalOutput)
 
     # ---- config -----------------------------------------------------------
 
@@ -762,6 +779,7 @@ class ConversationBridge(QObject):
         self._worker.workerDispatchRequested.connect(self._on_worker_dispatch_requested)
         self._worker.usageEmitted.connect(self.usageEmitted)
         self._worker.usageEmitted.connect(self._forward_usage_with_model)
+        self._worker.terminalOutput.connect(self.terminalOutput)
         self._worker.finished.connect(self._on_finished)
 
         self._thread.started.connect(self._worker.run)

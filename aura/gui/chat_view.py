@@ -51,6 +51,7 @@ from aura.gui.theme import (
     FG_MUTED,
     SUCCESS,
     SUCCESS_DIM,
+    TERMINAL_BG,
     WARN,
 )
 
@@ -1213,6 +1214,114 @@ class SpecCard(QFrame):
         # Keep "View Worker" button visible for later review.
 
 
+class TerminalCard(QFrame):
+    """Collapsible card showing streaming terminal output from run_terminal_command.
+
+    Header: "> $ command" with state indicator: (running), (done ✓), (failed ✗)
+    Body: dark monospace output area that auto-scrolls.
+    """
+
+    STATE_RUNNING = "running"
+    STATE_DONE = "done"
+    STATE_FAILED = "failed"
+
+    def __init__(self, command: str) -> None:
+        super().__init__()
+        self.setObjectName("terminalCard")
+        self._command = command
+        self._state = self.STATE_RUNNING
+        self._output_buf = ""
+
+        self.setStyleSheet(
+            f"QFrame#terminalCard {{"
+            f"  background: {TERMINAL_BG};"
+            f"  border: 1px solid rgba(255, 255, 255, 0.06);"
+            f"  border-left: 3px solid {SUCCESS};"
+            f"  border-radius: 8px;"
+            f"}}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(5)
+
+        # Header toggle
+        self._header = QToolButton()
+        self._header.setObjectName("sectionToggle")
+        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._header.clicked.connect(self._toggle_body)
+        layout.addWidget(self._header)
+
+        # Body: output view
+        self._body = QWidget()
+        body_layout = QVBoxLayout(self._body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+
+        self._output_view = QPlainTextEdit()
+        self._output_view.setReadOnly(True)
+        self._output_view.setFont(_mono_font(9))
+        self._output_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._output_view.setStyleSheet(
+            f"background: {TERMINAL_BG}; color: {FG}; border: 1px solid {BORDER}; "
+            "border-radius: 4px; padding: 6px; "
+            "font-family: 'Cascadia Mono', Consolas, monospace;"
+        )
+        self._output_view.setMaximumHeight(400)
+        body_layout.addWidget(self._output_view)
+
+        self._body.setVisible(True)  # Open by default for streaming
+        layout.addWidget(self._body)
+
+        self._refresh_header()
+
+    def _toggle_body(self) -> None:
+        self._body.setVisible(not self._body.isVisible())
+        self._refresh_header()
+
+    def _refresh_header(self) -> None:
+        chev = "v" if self._body.isVisible() else ">"
+        state_str = {
+            self.STATE_RUNNING: "(running)",
+            self.STATE_DONE: "(done ✓)",
+            self.STATE_FAILED: "(failed ✗)",
+        }[self._state]
+        state_color = {
+            self.STATE_RUNNING: WARN,
+            self.STATE_DONE: SUCCESS,
+            self.STATE_FAILED: DANGER,
+        }[self._state]
+        self._header.setText(f"{chev} > $ {self._command}  {state_str}")
+        self._header.setStyleSheet(
+            f"QToolButton#sectionToggle {{ color: {state_color}; }}"
+        )
+
+    def set_command(self, command: str) -> None:
+        """Update the command shown in the header."""
+        if command and command != "...":
+            self._command = command
+            self._refresh_header()
+
+    def append_output(self, text: str) -> None:
+        """Append a chunk of stdout/stderr text and auto-scroll."""
+        self._output_buf += text
+        self._output_view.insertPlainText(text)
+        # Auto-scroll to bottom
+        sb = self._output_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def set_result(self, exit_code: int) -> None:
+        """Set the final state based on the exit code."""
+        self._state = self.STATE_DONE if exit_code == 0 else self.STATE_FAILED
+        if exit_code != 0:
+            # Auto-expand on failure
+            self._body.setVisible(True)
+        else:
+            # Collapse on success (user can toggle to view)
+            self._body.setVisible(False)
+        self._refresh_header()
+
+
 class ErrorCard(QFrame):
     retry_clicked = Signal()
 
@@ -1277,6 +1386,8 @@ class ChatView(QScrollArea):
         self._tool_owner: dict[str, AssistantCard] = {}
         # Map dispatch tool_call_id -> SpecCard.
         self._spec_cards: dict[str, SpecCard] = {}
+        # Map tool_call_id -> TerminalCard.
+        self._terminal_cards: dict[str, TerminalCard] = {}
         self._empty_hint: QLabel | None = None
         self._scroll_anim: QPropertyAnimation | None = None
         self._compact_tools: bool = False
@@ -1336,6 +1447,7 @@ class ChatView(QScrollArea):
         self._current_assistant = None
         self._tool_owner.clear()
         self._spec_cards.clear()
+        self._terminal_cards.clear()
         self._compact_tool_names.clear()
         self._empty_hint = None
         self._show_empty_hint()
@@ -1385,12 +1497,34 @@ class ChatView(QScrollArea):
             self._scroll_to_bottom()
             return
         ac = self.current_assistant()
+        if name == "run_terminal_command":
+            card = TerminalCard(command="...")
+            self._terminal_cards[tool_call_id] = card
+            if not ac._tool_cluster.isVisible():
+                ac._tool_cluster.setVisible(True)
+            ac._tool_cluster_layout.addWidget(card)
+            _fade_in_widget(card)
+            self._tool_owner[tool_call_id] = ac
+            self._scroll_to_bottom()
+            return
         ac.add_tool_card(tool_call_id, name)
         self._tool_owner[tool_call_id] = ac
         self._scroll_to_bottom()
 
     def append_tool_args(self, tool_call_id: str, fragment: str) -> None:
         if self._compact_tools:
+            return
+        # Check for terminal card first
+        term_card = self._terminal_cards.get(tool_call_id)
+        if term_card is not None:
+            # Try to extract command from partial/complete JSON
+            import json as _json
+            import re as _re
+            m = _re.search(r'"command"\s*:\s*"([^"]*)', fragment)
+            if m:
+                cmd = m.group(1)
+                if cmd and cmd != "...":
+                    term_card.set_command(cmd)
             return
         ac = self._tool_owner.get(tool_call_id) or self.current_assistant()
         card = ac.get_tool_card(tool_call_id)
@@ -1403,10 +1537,27 @@ class ChatView(QScrollArea):
             ac = self.current_assistant()
             ac.notify_compact_tool_done(name)
             return
+        # Check for terminal card first
+        term_card = self._terminal_cards.get(tool_call_id)
+        if term_card is not None:
+            try:
+                parsed = json.loads(result_text)
+                exit_code = parsed.get("exit_code", -1)
+                term_card.set_result(exit_code)
+            except (json.JSONDecodeError, TypeError):
+                term_card.set_result(-1)
+            return
         ac = self._tool_owner.get(tool_call_id) or self.current_assistant()
         card = ac.get_tool_card(tool_call_id)
         if card is not None:
             card.set_result(ok, result_text)
+
+    def append_terminal_output(self, tool_call_id: str, text: str) -> None:
+        """Append a chunk of stdout/stderr to the TerminalCard."""
+        card = self._terminal_cards.get(tool_call_id)
+        if card is not None:
+            card.append_output(text)
+        self._scroll_to_bottom()
 
     def add_diff_card(
         self,
@@ -1435,7 +1586,12 @@ class ChatView(QScrollArea):
         if ac is None:
             return
         ac.finalize_content()
-        # Stop the spinning aura on the wrapper
+
+    def stop_current_aura(self) -> None:
+        """Stop the breathing glow on the current assistant card without finalizing content."""
+        ac = self._current_assistant
+        if ac is None:
+            return
         wrapper = ac.parentWidget()
         if isinstance(wrapper, AuraWidget):
             wrapper.stop_aura()

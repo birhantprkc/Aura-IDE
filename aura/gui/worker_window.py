@@ -23,6 +23,7 @@ from aura.gui.chat_view import (
     CodeWriterCard,
     DiffCard,
     ErrorCard,
+    TerminalCard,
     ToolCallCard,
     _fade_in_widget,
 )
@@ -189,6 +190,7 @@ class WorkerWindow(QWidget):
         # Internal state
         self._current_assistant: AssistantCard | None = None
         self._tool_cards: dict[str, ToolCallCard | CodeWriterCard] = {}
+        self._terminal_cards: dict[str, TerminalCard] = {}
         self._tool_owner: dict[str, AssistantCard] = {}
 
     # ---- helpers -----------------------------------------------------------
@@ -239,6 +241,17 @@ class WorkerWindow(QWidget):
         if name == "update_todo_list":
             return  # Pinned todo widget handles this, don't render a tool card.
         ac = self._current_or_new_assistant()
+        if name == "run_terminal_command":
+            card: TerminalCard = TerminalCard(command="...")
+            ac._tool_cards[worker_tool_id] = card  # type: ignore[assignment]
+            if not ac._tool_cluster.isVisible():
+                ac._tool_cluster.setVisible(True)
+            ac._tool_cluster_layout.addWidget(card)
+            _fade_in_widget(card)
+            self._terminal_cards[worker_tool_id] = card
+            self._tool_owner[worker_tool_id] = ac
+            self._scroll_to_bottom()
+            return
         if name in CODE_WRITER_NAMES:
             card: ToolCallCard | CodeWriterCard = CodeWriterCard(name)
         else:
@@ -255,12 +268,34 @@ class WorkerWindow(QWidget):
         self._scroll_to_bottom()
 
     def append_tool_args(self, worker_tool_id: str, fragment: str) -> None:
+        # Check for terminal card first
+        term_card = self._terminal_cards.get(worker_tool_id)
+        if term_card is not None:
+            import re as _re
+            m = _re.search(r'"command"\s*:\s*"([^"]*)', fragment)
+            if m:
+                cmd = m.group(1)
+                if cmd and cmd != "...":
+                    term_card.set_command(cmd)
+            return
         card = self._tool_cards.get(worker_tool_id)
         if card is not None:
             card.append_args(fragment)
         self._scroll_to_bottom()
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str) -> None:
+        # Check for terminal card first
+        term_card = self._terminal_cards.get(worker_tool_id)
+        if term_card is not None:
+            try:
+                import json as _json
+                parsed = _json.loads(result)
+                exit_code = parsed.get("exit_code", -1)
+                term_card.set_result(exit_code)
+            except Exception:
+                term_card.set_result(-1)
+            self._scroll_to_bottom()
+            return
         card = self._tool_cards.get(worker_tool_id)
         if card is not None:
             card.set_result(ok, result)
@@ -331,5 +366,6 @@ class WorkerWindow(QWidget):
                     w.deleteLater()
         self._current_assistant = None
         self._tool_cards.clear()
+        self._terminal_cards.clear()
         self._tool_owner.clear()
         self._todo_widget.update_tasks([])
