@@ -402,6 +402,7 @@ class AssistantCard(QFrame):
             scroll_area.setWidgetResizable(True)
             scroll_area.setWidget(self._reasoning_label)
             scroll_area.setMaximumHeight(500)
+            scroll_area.setMinimumHeight(190)
             scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
             self._reasoning_scroll_area = scroll_area
             section = _CollapsibleSection(
