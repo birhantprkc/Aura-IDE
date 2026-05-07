@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -52,7 +53,7 @@ from aura.conversation.persistence import (
 from aura.gui.chat_view import ChatView
 from aura.gui.input_panel import Attachment, InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
-from aura.gui.spec_edit_dialog import SpecEditDialog
+from aura.gui.spec_edit_dialog import SpecApprovalDialog, SpecEditDialog
 from aura.gui.theme import BG, BG_ALT, BORDER, FG, FG_DIM, FG_MUTED, WARN
 from aura.gui.worker_window import WorkerWindow
 from aura.gui.workspace_tree import WorkspaceTree
@@ -717,9 +718,13 @@ class MainWindow(QMainWindow):
         spec: str,
         acceptance: str,
     ) -> None:
-        # Auto-dispatch immediately — the user already confirmed the plan in conversation.
-        # Worker progress appears in the WorkerWindow right pane.
-        self._bridge.user_dispatched(tool_call_id, goal, list(files), spec, acceptance)
+        dlg = SpecApprovalDialog(goal, list(files), spec, acceptance, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._bridge.user_dispatched(
+                tool_call_id, dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance()
+            )
+        else:
+            self._bridge.user_cancelled_dispatch(tool_call_id)
 
     def _on_dispatch_clicked(self, tool_call_id: str) -> None:
         card = self._chat.get_spec_card(tool_call_id)

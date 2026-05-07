@@ -70,7 +70,7 @@ class DiffApprovalDialog(QDialog):
 
         self._diff_view = QPlainTextEdit(self)
         self._diff_view.setReadOnly(True)
-        self._diff_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self._diff_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         mono = QFont("Cascadia Mono, Consolas, Menlo, monospace")
         mono.setStyleHint(QFont.StyleHint.Monospace)
         mono.setFixedPitch(True)
