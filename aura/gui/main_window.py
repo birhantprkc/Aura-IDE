@@ -118,7 +118,7 @@ class MainWindow(QMainWindow):
 
         # ----- splitter ----
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(1)
+        splitter.setHandleWidth(3)
 
         # Left pane: workspace label + change root + tree.
         self._left_pane = self._build_left_pane()
