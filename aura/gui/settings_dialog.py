@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -22,15 +23,22 @@ from PySide6.QtWidgets import (
 
 from aura.config import (
     APP_NAME,
+    PROVIDERS,
     AppSettings,
-    ENV_API_KEY,
-    MODELS,
-    ModelId,
+    ProviderId,
     ThinkingMode,
-    has_api_key,
+    get_api_key,
+    get_provider,
+    icon_path,
     save_settings,
 )
 from aura.gui.theme import DANGER, FG_DIM, SUCCESS, WARN
+
+_THINKING_ITEMS: list[tuple[str, str]] = [
+    ("Off", "off"),
+    ("High", "high"),
+    ("Max", "max"),
+]
 
 
 class SettingsDialog(QDialog):
@@ -51,9 +59,11 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — Settings")
         self.setModal(True)
-        self.resize(560, 0)
+        self.resize(580, 0)
 
         self._settings = AppSettings(
+            provider=settings.provider,
+            api_keys=dict(settings.api_keys),
             default_model=settings.default_model,
             default_thinking=settings.default_thinking,
             restore_last_conversation=settings.restore_last_conversation,
@@ -77,21 +87,43 @@ class SettingsDialog(QDialog):
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(10)
 
-        self._model_combo = QComboBox()
-        for mid, info in MODELS.items():
-            self._model_combo.addItem(info.label, mid)
-        self._model_combo.setCurrentIndex(
-            list(MODELS.keys()).index(self._settings.default_model)
+        # ---- Provider selection ----
+        self._provider_combo = QComboBox()
+        for pid in ("deepseek", "openai", "google"):
+            cfg = PROVIDERS[pid]  # type: ignore[literal-required]
+            self._provider_combo.addItem(cfg.label, pid)
+        self._provider_combo.setCurrentIndex(
+            list(PROVIDERS.keys()).index(self._settings.provider)
         )
+        self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        form.addRow("Provider:", self._provider_combo)
+
+        # ---- API Key input ----
+        self._api_key_input = QLineEdit()
+        self._api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._api_key_input.setPlaceholderText("sk-...  Paste your API key here")
+        api_key_row = QHBoxLayout()
+        api_key_row.setSpacing(8)
+        api_key_row.addWidget(self._api_key_input, 1)
+        self._api_key_status = QLabel("")
+        api_key_row.addWidget(self._api_key_status)
+        form.addRow("API Key:", api_key_row)
+
+        # Populate API key input
+        current_provider = self._settings.provider
+        stored_key = self._settings.api_keys.get(current_provider, "")
+        env_key = os_environ_get(PROVIDERS[current_provider].env_key)
+        if stored_key:
+            self._api_key_input.setText(stored_key)
+        self._refresh_api_key_status(current_provider)
+
+        # ---- Model combos ----
+        self._model_combo = QComboBox()
         form.addRow("Default model:", self._model_combo)
 
         self._thinking_combo = QComboBox()
-        self._thinking_combo.addItem("Off", "off")
-        self._thinking_combo.addItem("High", "high")
-        self._thinking_combo.addItem("Max", "max")
-        self._thinking_combo.setCurrentIndex(
-            ["off", "high", "max"].index(self._settings.default_thinking)
-        )
+        for label, val in _THINKING_ITEMS:
+            self._thinking_combo.addItem(label, val)
         form.addRow("Default thinking:", self._thinking_combo)
 
         self._restore_chk = QCheckBox("Restore most-recent conversation on launch")
@@ -106,40 +138,25 @@ class SettingsDialog(QDialog):
         form.addRow("", self._pw_mode_chk)
 
         self._planner_model_combo = QComboBox()
-        for mid, info in MODELS.items():
-            self._planner_model_combo.addItem(info.label, mid)
-        self._planner_model_combo.setCurrentIndex(
-            list(MODELS.keys()).index(self._settings.default_planner_model)
-        )
         form.addRow("Planner model:", self._planner_model_combo)
 
         self._planner_thinking_combo = QComboBox()
-        self._planner_thinking_combo.addItem("Off", "off")
-        self._planner_thinking_combo.addItem("High", "high")
-        self._planner_thinking_combo.addItem("Max", "max")
-        self._planner_thinking_combo.setCurrentIndex(
-            ["off", "high", "max"].index(self._settings.default_planner_thinking)
-        )
+        for label, val in _THINKING_ITEMS:
+            self._planner_thinking_combo.addItem(label, val)
         form.addRow("Planner thinking:", self._planner_thinking_combo)
 
         self._worker_model_combo = QComboBox()
-        for mid, info in MODELS.items():
-            self._worker_model_combo.addItem(info.label, mid)
-        self._worker_model_combo.setCurrentIndex(
-            list(MODELS.keys()).index(self._settings.default_worker_model)
-        )
         form.addRow("Worker model:", self._worker_model_combo)
 
         self._worker_thinking_combo = QComboBox()
-        self._worker_thinking_combo.addItem("Off", "off")
-        self._worker_thinking_combo.addItem("High", "high")
-        self._worker_thinking_combo.addItem("Max", "max")
-        self._worker_thinking_combo.setCurrentIndex(
-            ["off", "high", "max"].index(self._settings.default_worker_thinking)
-        )
+        for label, val in _THINKING_ITEMS:
+            self._worker_thinking_combo.addItem(label, val)
         form.addRow("Worker thinking:", self._worker_thinking_combo)
 
         self._refresh_pw_enabled()
+
+        # Populate model combos for the current provider
+        self._populate_model_combos(current_provider)
 
         # --- Vision settings ---
         vision_sep = QLabel("Vision (Local Model)")
@@ -183,18 +200,6 @@ class SettingsDialog(QDialog):
         ws_widget.setLayout(ws_row)
         form.addRow("Workspace root:", ws_widget)
 
-        # API key status
-        if has_api_key():
-            api_label = QLabel(f"{ENV_API_KEY}: set")
-            api_label.setStyleSheet(f"color: {SUCCESS};")
-        else:
-            api_label = QLabel(
-                f"{ENV_API_KEY}: NOT SET — run `setx {ENV_API_KEY} <key>` and restart."
-            )
-            api_label.setStyleSheet(f"color: {DANGER};")
-        api_label.setWordWrap(True)
-        form.addRow("API key:", api_label)
-
         # Backups info
         if workspace_root is not None:
             backup_path = workspace_root / ".aura" / "backups"
@@ -218,6 +223,85 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
+    # ---- Provider change handler ------------------------------------------
+
+    def _on_provider_changed(self, _index: int) -> None:
+        provider_id: ProviderId = self._provider_combo.currentData()
+        cfg = PROVIDERS[provider_id]
+        self._populate_model_combos(provider_id)
+        self._refresh_api_key_status(provider_id)
+
+        # Pre-fill API key from stored settings or env var.
+        stored = self._settings.api_keys.get(provider_id, "")
+        env_val = os_environ_get(cfg.env_key)
+        if stored:
+            self._api_key_input.setText(stored)
+        elif env_val:
+            self._api_key_input.setText(env_val)
+        else:
+            self._api_key_input.clear()
+
+    def _refresh_api_key_status(self, provider_id: ProviderId) -> None:
+        cfg = PROVIDERS[provider_id]
+        env_val = os_environ_get(cfg.env_key)
+        stored = self._settings.api_keys.get(provider_id, "")
+        if env_val:
+            self._api_key_status.setText("✓ from env")
+            self._api_key_status.setStyleSheet(f"color: {SUCCESS};")
+        elif stored:
+            self._api_key_status.setText("✓ stored")
+            self._api_key_status.setStyleSheet(f"color: {SUCCESS};")
+        else:
+            self._api_key_status.setText("missing")
+            self._api_key_status.setStyleSheet(f"color: {WARN};")
+
+    # ---- Model combo helpers ----------------------------------------------
+
+    def _populate_model_combos(self, provider_id: ProviderId) -> None:
+        cfg = PROVIDERS[provider_id]
+        models = cfg.models
+
+        def _fill(combo: QComboBox, current_val: str | None = None) -> None:
+            combo.blockSignals(True)
+            combo.clear()
+            for mid, info in models.items():
+                combo.addItem(info.label, mid)
+            if current_val is not None:
+                idx = combo.findData(current_val)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+                else:
+                    # Fall back to provider default
+                    default_idx = combo.findData(cfg.default_model)
+                    if default_idx >= 0:
+                        combo.setCurrentIndex(default_idx)
+            combo.blockSignals(False)
+
+        _fill(self._model_combo, self._settings.default_model)
+        _fill(self._planner_model_combo, self._settings.default_planner_model)
+        _fill(self._worker_model_combo, self._settings.default_worker_model)
+
+        # Reset thinking combos to provider defaults.
+        self._thinking_combo.blockSignals(True)
+        self._thinking_combo.setCurrentIndex(
+            [v for _, v in _THINKING_ITEMS].index(cfg.default_thinking)
+        )
+        self._thinking_combo.blockSignals(False)
+
+        self._planner_thinking_combo.blockSignals(True)
+        self._planner_thinking_combo.setCurrentIndex(
+            [v for _, v in _THINKING_ITEMS].index(self._settings.default_planner_thinking)
+        )
+        self._planner_thinking_combo.blockSignals(False)
+
+        self._worker_thinking_combo.blockSignals(True)
+        self._worker_thinking_combo.setCurrentIndex(
+            [v for _, v in _THINKING_ITEMS].index(self._settings.default_worker_thinking)
+        )
+        self._worker_thinking_combo.blockSignals(False)
+
+    # ---- Change root ------------------------------------------------------
+
     def _on_change_root_clicked(self) -> None:
         self._on_change_root()
         # Host updated the workspace root — refresh display from the host:
@@ -238,7 +322,19 @@ class SettingsDialog(QDialog):
 
     def result_settings(self) -> AppSettings:
         """Read the current widget values and return a fresh AppSettings."""
+        provider_id: ProviderId = self._provider_combo.currentData()
+
+        # Build api_keys dict: preserve keys for other providers, update current
+        api_keys = dict(self._settings.api_keys)
+        new_key = self._api_key_input.text().strip()
+        if new_key:
+            api_keys[provider_id] = new_key
+        else:
+            api_keys.pop(provider_id, None)
+
         return AppSettings(
+            provider=provider_id,
+            api_keys=api_keys,
             default_model=self._model_combo.currentData(),
             default_thinking=self._thinking_combo.currentData(),
             restore_last_conversation=self._restore_chk.isChecked(),
@@ -258,3 +354,9 @@ class SettingsDialog(QDialog):
         save_settings(new_settings)
         self._settings = new_settings
         super().accept()
+
+
+def os_environ_get(key: str) -> str:
+    """Read an environment variable, returning empty string if not set."""
+    import os
+    return os.environ.get(key, "")

@@ -1,9 +1,8 @@
-"""Streaming DeepSeek V4 client.
+"""Streaming DeepSeek (and generic OpenAI-compatible) client.
 
 Yields events; never raises. Honors thinking mode rules:
-- thinking on:  pass extra_body={"thinking":{"type":"enabled"}}, reasoning_effort
-                in ("high","max"); do NOT pass temperature/top_p/penalties
-- thinking off: pass extra_body={"thinking":{"type":"disabled"}} for clarity
+- DeepSeek:    extra_body={"thinking":...} for thinking control
+- OpenAI/Gemini: reasoning_effort at top level; no extra_body when thinking is off
 """
 from __future__ import annotations
 
@@ -25,21 +24,40 @@ from aura.client.events import (
     ToolCallStart,
     Usage,
 )
-from aura.config import DEEPSEEK_BASE_URL, ModelId, ThinkingMode, require_api_key
+from aura.config import (
+    ProviderId,
+    ThinkingMode,
+    get_provider,
+    resolve_api_key,
+)
 
 
 class DeepSeekClient:
-    """Wraps the OpenAI-compatible DeepSeek endpoint as an event stream."""
+    """Wraps an OpenAI-compatible endpoint as an event stream.
 
-    def __init__(self, api_key: str | None = None) -> None:
-        key = api_key if api_key is not None else require_api_key()
-        self._client = OpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL)
+    Accepts an optional provider parameter to select the backend.
+    The class name is preserved for backward compatibility.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        provider: ProviderId = "deepseek",
+    ) -> None:
+        self._provider = provider
+        cfg = get_provider(provider)
+        key = api_key if api_key is not None else resolve_api_key(provider)
+        self._client = OpenAI(api_key=key, base_url=cfg.base_url)
+
+    @property
+    def provider(self) -> ProviderId:
+        return self._provider
 
     def stream(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
-        model: ModelId,
+        model: str,
         thinking: ThinkingMode,
         cancel_event: threading.Event | None = None,
     ) -> Iterator[Event]:
@@ -53,13 +71,20 @@ class DeepSeekClient:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        if thinking == "off":
-            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-            kwargs["temperature"] = 0.7
+        if self._provider == "deepseek":
+            if thinking == "off":
+                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+                kwargs["temperature"] = 0.7
+            else:
+                kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+                kwargs["reasoning_effort"] = "high" if thinking == "high" else "max"
+                # Per docs: temperature/top_p/penalties silently ignored. Skip them.
         else:
-            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
-            kwargs["reasoning_effort"] = "high" if thinking == "high" else "max"
-            # Per docs: temperature/top_p/penalties silently ignored. Skip them.
+            # OpenAI / Google Gemini: no extra_body thinking param.
+            if thinking == "off":
+                kwargs["temperature"] = 0.7
+            else:
+                kwargs["reasoning_effort"] = "high" if thinking == "high" else "max"
 
         # Accumulators reproduce the streamed assistant message exactly.
         reasoning_buf: list[str] = []
@@ -109,7 +134,7 @@ class DeepSeekClient:
                 if choice.finish_reason:
                     finish_reason = choice.finish_reason
 
-                # Reasoning text (CoT) — the V4 thinking-mode field.
+                # Reasoning text (CoT) — the thinking-mode field.
                 rc = getattr(delta, "reasoning_content", None)
                 if rc:
                     reasoning_buf.append(rc)

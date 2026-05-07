@@ -28,15 +28,16 @@ from aura.bridge import ConversationBridge
 from aura.bridge.qt_bridge import PLANNER_SYSTEM_PROMPT
 from aura.config import (
     APP_NAME,
+    PROVIDERS,
     AppSettings,
     DEFAULT_MODEL,
     DEFAULT_THINKING,
     DEFAULT_WORKER_MODEL,
     DEFAULT_WORKER_THINKING,
-    MODELS,
-    ModelId,
+    ProviderId,
     ThinkingMode,
     cost_usd,
+    get_provider,
     icon_path,
     load_settings,
     load_workspace_root,
@@ -98,8 +99,11 @@ class MainWindow(QMainWindow):
         if self._workspace_root is None:
             self._workspace_root = Path.cwd()
 
-        # Bridge.
-        self._bridge = ConversationBridge(parent_widget=self)
+        # Bridge — provider-aware.
+        self._bridge = ConversationBridge(
+            parent_widget=self,
+            provider=self._settings.provider,
+        )
         self._bridge.set_workspace_root(self._workspace_root)
         self._apply_planner_worker_mode_to_bridge(self._settings.planner_worker_mode)
         self._bridge.set_worker_model(self._settings.default_worker_model)
@@ -300,9 +304,8 @@ class MainWindow(QMainWindow):
         planner_model_label.setStyleSheet(f"color: {FG_DIM};")
         planner_model_row.addWidget(planner_model_label)
         self._planner_model_combo = QComboBox()
-        for mid, info in MODELS.items():
-            self._planner_model_combo.addItem(info.label, mid)
-        self._planner_model_combo.setCurrentIndex(list(MODELS.keys()).index(DEFAULT_MODEL))
+        self._populate_model_combos(self._settings.provider)
+        self._planner_model_combo.setCurrentIndex(-1)  # will be set below
         self._planner_model_combo.currentIndexChanged.connect(self._refresh_status_bar)
         planner_model_row.addWidget(self._planner_model_combo, 1)
         layout.addLayout(planner_model_row)
@@ -329,9 +332,9 @@ class MainWindow(QMainWindow):
         self._worker_model_label.setStyleSheet(f"color: {FG_DIM};")
         worker_model_row.addWidget(self._worker_model_label)
         self._worker_model_combo = QComboBox()
-        for mid, info in MODELS.items():
-            self._worker_model_combo.addItem(info.label, mid)
-        self._worker_model_combo.setCurrentIndex(list(MODELS.keys()).index(DEFAULT_WORKER_MODEL))
+        # Same models as planner (same provider)
+        self._populate_model_combos(self._settings.provider, combo=self._worker_model_combo)
+        self._worker_model_combo.setCurrentIndex(-1)  # will be set below
         self._worker_model_combo.currentIndexChanged.connect(self._on_sidebar_worker_model_changed)
         worker_model_row.addWidget(self._worker_model_combo, 1)
         layout.addLayout(worker_model_row)
@@ -353,34 +356,70 @@ class MainWindow(QMainWindow):
 
         return frame
 
+    # ----- provider-aware model combo helpers -----------------------------
+
+    def _populate_model_combos(
+        self,
+        provider_id: ProviderId,
+        combo: QComboBox | None = None,
+    ) -> None:
+        """Fill a model combo (or both planner & worker) from the provider's catalog."""
+        cfg = PROVIDERS[provider_id]
+        if combo is not None:
+            combo.blockSignals(True)
+            combo.clear()
+            for mid, info in cfg.models.items():
+                combo.addItem(info.label, mid)
+            combo.blockSignals(False)
+        else:
+            # Fill both combos
+            self._planner_model_combo.blockSignals(True)
+            self._planner_model_combo.clear()
+            for mid, info in cfg.models.items():
+                self._planner_model_combo.addItem(info.label, mid)
+            self._planner_model_combo.blockSignals(False)
+
+            self._worker_model_combo.blockSignals(True)
+            self._worker_model_combo.clear()
+            for mid, info in cfg.models.items():
+                self._worker_model_combo.addItem(info.label, mid)
+            self._worker_model_combo.blockSignals(False)
+
+    def _model_label(self, model_id: str) -> str:
+        """Look up a model's human-readable label from any provider."""
+        for cfg in PROVIDERS.values():
+            if model_id in cfg.models:
+                return cfg.models[model_id].label
+        return model_id
+
     # ----- model / thinking accessors ------------------------------------
 
-    def current_model(self) -> ModelId:
+    def current_model(self) -> str:
         return self._planner_model_combo.currentData()
 
     def current_thinking(self) -> ThinkingMode:
         return self._planner_thinking_combo.currentData()
 
-    def current_worker_model(self) -> ModelId:
+    def current_worker_model(self) -> str:
         return self._worker_model_combo.currentData()
 
     def current_worker_thinking(self) -> ThinkingMode:
         return self._worker_thinking_combo.currentData()
 
-    def set_model(self, model: ModelId) -> None:
-        keys = list(MODELS.keys())
-        if model in keys:
-            self._planner_model_combo.setCurrentIndex(keys.index(model))
+    def set_model(self, model: str) -> None:
+        idx = self._planner_model_combo.findData(model)
+        if idx >= 0:
+            self._planner_model_combo.setCurrentIndex(idx)
 
     def set_thinking(self, thinking: ThinkingMode) -> None:
         keys = ["off", "high", "max"]
         if thinking in keys:
             self._planner_thinking_combo.setCurrentIndex(keys.index(thinking))
 
-    def set_worker_model(self, model: ModelId) -> None:
-        keys = list(MODELS.keys())
-        if model in keys:
-            self._worker_model_combo.setCurrentIndex(keys.index(model))
+    def set_worker_model(self, model: str) -> None:
+        idx = self._worker_model_combo.findData(model)
+        if idx >= 0:
+            self._worker_model_combo.setCurrentIndex(idx)
 
     def set_worker_thinking(self, thinking: ThinkingMode) -> None:
         keys = ["off", "high", "max"]
@@ -429,8 +468,8 @@ class MainWindow(QMainWindow):
         ws = str(self._workspace_root) if self._workspace_root else "(none)"
         if len(ws) > 64:
             ws = "…" + ws[-63:]
-        model_label = MODELS[self.current_model()].label
-        thinking_label = _THINKING_LABEL[self.current_thinking()]
+        model_label = self._model_label(self.current_model())
+        thinking_label = _THINKING_LABEL.get(self.current_thinking(), "Off")
         self._status_left.setText(f"{ws}    ·    {model_label}    ·    Thinking: {thinking_label}")
 
         # Right: totals + cost (sum across models)
@@ -440,7 +479,7 @@ class MainWindow(QMainWindow):
         total_cost = 0.0
         for model_id, u in self._session_usage.items():
             try:
-                total_cost += cost_usd(model_id, u["hit"], u["miss"], u["out"])  # type: ignore[arg-type]
+                total_cost += cost_usd(model_id, u["hit"], u["miss"], u["out"])
             except KeyError:
                 pass
         self._status_tokens.setText(
@@ -534,7 +573,12 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
+            old_provider = self._settings.provider
             self._settings = dlg.result_settings()
+            # If provider changed, refresh model combos and recreate the bridge client.
+            if self._settings.provider != old_provider:
+                self._populate_model_combos(self._settings.provider)
+                self._bridge.set_provider(self._settings.provider)
             # Apply to current widgets.
             if self._settings.planner_worker_mode:
                 self.set_model(self._settings.default_planner_model)
@@ -559,7 +603,7 @@ class MainWindow(QMainWindow):
             self._chat.set_compact_tools(enabled)
 
     def _on_worker_model_changed(self, model: str) -> None:
-        self._bridge.set_worker_model(model)  # type: ignore[arg-type]
+        self._bridge.set_worker_model(model)
         self._refresh_status_bar()
 
     def _on_worker_thinking_changed(self, thinking: str) -> None:
@@ -618,7 +662,7 @@ class MainWindow(QMainWindow):
             if vision_error:
                 vision_block += f"\n\n[Vision error: {vision_error}]"
 
-            # Final text for DeepSeek
+            # Final text for the model
             if text:
                 final_text = f"{vision_block}\n\n[User's question:]\n{text}"
             else:
@@ -894,6 +938,7 @@ class MainWindow(QMainWindow):
                 planner_thinking=self.current_thinking(),
                 worker_thinking=self.current_worker_thinking(),
                 worker_dispatches=self._bridge.dispatch_records,
+                provider=self._settings.provider,
             )
         except OSError as exc:
             # Disk error — surface but don't crash the chat.
@@ -920,6 +965,13 @@ class MainWindow(QMainWindow):
         self._bridge.history.messages = list(loaded.history.messages)
         self._current_conversation_path = loaded.path
         self._reset_session_usage()
+
+        # If the loaded conversation has a different provider, update the bridge.
+        if loaded.provider != self._settings.provider:
+            self._settings.provider = loaded.provider
+            self._bridge.set_provider(loaded.provider)
+            self._populate_model_combos(loaded.provider)
+
         # Sync mode (without overwriting the system prompt we just set).
         self._bridge.set_planner_worker_mode(pwm)
         if pwm:

@@ -48,7 +48,10 @@ from aura.config import (
     DEFAULT_WORKER_MODEL,
     DEFAULT_WORKER_THINKING,
     ModelId,
+    ProviderId,
     ThinkingMode,
+    get_api_key,
+    get_provider,
 )
 from aura.conversation import (
     ConversationManager,
@@ -276,6 +279,7 @@ class _DispatchProxy(QObject):
         registry_factory,
         approval_proxy: _ApprovalProxy,
         workspace_root: Path | None = None,
+        provider: ProviderId = "deepseek",
     ) -> None:
         super().__init__()
         self._parent_widget = parent_widget
@@ -283,6 +287,7 @@ class _DispatchProxy(QObject):
         self._registry_factory = registry_factory
         self._approval_proxy = approval_proxy
         self._workspace_root = workspace_root
+        self._provider = provider
 
         self._worker_model: ModelId = DEFAULT_WORKER_MODEL
         self._worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
@@ -621,9 +626,14 @@ class ConversationBridge(QObject):
     # Terminal output (single mode)
     terminalOutput = Signal(str, str)  # tool_call_id, text
 
-    def __init__(self, parent_widget) -> None:
+    def __init__(
+        self,
+        parent_widget,
+        provider: ProviderId = "deepseek",
+    ) -> None:
         super().__init__()
-        self._client = DeepSeekClient()
+        self._provider = provider
+        self._client = DeepSeekClient(provider=provider)
         self._history = History()
         self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="single")
         self._manager = ConversationManager(self._client, self._history, self._registry)
@@ -637,6 +647,7 @@ class ConversationBridge(QObject):
             registry_factory=self._make_worker_registry,
             approval_proxy=self._approval_proxy,
             workspace_root=self._registry.workspace_root,
+            provider=provider,
         )
 
         self._cancel: threading.Event = threading.Event()
@@ -711,6 +722,36 @@ class ConversationBridge(QObject):
 
     def set_worker_thinking(self, thinking: ThinkingMode) -> None:
         self._dispatch_proxy.set_worker_thinking(thinking)
+
+    def set_provider(self, provider: ProviderId) -> None:
+        """Recreate the internal client for a new provider."""
+        self._provider = provider
+        self._client = DeepSeekClient(provider=provider)
+        self._manager = ConversationManager(self._client, self._history, self._registry)
+        self._dispatch_proxy = _DispatchProxy(
+            parent_widget=self._parent_widget,
+            client=self._client,
+            registry_factory=self._make_worker_registry,
+            approval_proxy=self._approval_proxy,
+            workspace_root=self._registry.workspace_root,
+            provider=provider,
+        )
+        # Re-wire dispatch proxy signals.
+        self._dispatch_proxy.showSpecCard.connect(self.workerDispatchRequested)
+        self._dispatch_proxy.workerStarted.connect(self.workerStarted)
+        self._dispatch_proxy.workerFinished.connect(self.workerFinished)
+        self._dispatch_proxy.workerCancelled.connect(self.workerCancelled)
+        self._dispatch_proxy.workerReasoningDelta.connect(self.workerReasoningDelta)
+        self._dispatch_proxy.workerContentDelta.connect(self.workerContentDelta)
+        self._dispatch_proxy.workerToolCallStart.connect(self.workerToolCallStart)
+        self._dispatch_proxy.workerToolCallArgs.connect(self.workerToolCallArgs)
+        self._dispatch_proxy.workerToolCallEnd.connect(self.workerToolCallEnd)
+        self._dispatch_proxy.workerToolResult.connect(self.workerToolResult)
+        self._dispatch_proxy.workerDiffDecided.connect(self.workerDiffDecided)
+        self._dispatch_proxy.workerApiError.connect(self.workerApiError)
+        self._dispatch_proxy.workerUsage.connect(self.workerUsage)
+        self._dispatch_proxy.workerTodoListUpdated.connect(self.workerTodoListUpdated)
+        self._dispatch_proxy.workerTerminalOutput.connect(self.workerTerminalOutput)
 
     def reset_history(self) -> None:
         self._history.messages.clear()

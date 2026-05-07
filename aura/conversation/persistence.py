@@ -7,6 +7,7 @@ Schema:
   worker_model, planner_thinking, worker_thinking, and an optional
   worker_dispatches list. Loading v1 is backward-compatible: it's treated as
   planner_worker_mode=False with a single set of messages on the planner.
+- v2 + provider: v2 schema extended with a `provider` field.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ from aura.config import (
     DEFAULT_THINKING,
     DEFAULT_WORKER_MODEL,
     DEFAULT_WORKER_THINKING,
-    ModelId,
+    ProviderId,
     ThinkingMode,
 )
 from aura.conversation.history import History
@@ -39,7 +40,7 @@ class ConversationMeta:
     path: Path
     created_at: str
     title: str
-    model: ModelId
+    model: str
     thinking: ThinkingMode
 
 
@@ -107,17 +108,18 @@ def _first_user_text(history: History) -> str:
 def save_conversation(
     history: History,
     workspace_root: Path,
-    model: ModelId,
+    model: str,
     thinking: ThinkingMode,
     *,
     title: str | None = None,
     existing_path: Path | None = None,
     planner_worker_mode: bool = False,
-    planner_model: ModelId | None = None,
-    worker_model: ModelId | None = None,
+    planner_model: str | None = None,
+    worker_model: str | None = None,
     planner_thinking: ThinkingMode | None = None,
     worker_thinking: ThinkingMode | None = None,
     worker_dispatches: list[WorkerDispatchRecord] | None = None,
+    provider: ProviderId | None = None,
 ) -> Path:
     """Write the conversation to disk and return the file path."""
     target_dir = conversations_dir(workspace_root)
@@ -147,6 +149,7 @@ def save_conversation(
         "worker_dispatches": [
             d.to_dict() for d in (worker_dispatches or [])
         ],
+        "provider": provider or "deepseek",
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
@@ -172,12 +175,13 @@ def _read_created_at(path: Path) -> str | None:
 @dataclass
 class LoadedConversation:
     history: History
-    model: ModelId
+    model: str
     thinking: ThinkingMode
     path: Path
+    provider: ProviderId = "deepseek"
     planner_worker_mode: bool = False
-    planner_model: ModelId = DEFAULT_PLANNER_MODEL
-    worker_model: ModelId = DEFAULT_WORKER_MODEL
+    planner_model: str = DEFAULT_PLANNER_MODEL
+    worker_model: str = DEFAULT_WORKER_MODEL
     planner_thinking: ThinkingMode = DEFAULT_PLANNER_THINKING
     worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
     worker_dispatches: list[WorkerDispatchRecord] = field(default_factory=list)
@@ -196,17 +200,23 @@ def load_conversation(path: Path) -> LoadedConversation:
     if isinstance(msgs, list):
         history.messages = [m for m in msgs if isinstance(m, dict)]
 
-    valid_models = ("deepseek-v4-flash", "deepseek-v4-pro")
+    # Any string is now valid as a model ID — no hardcoded valid_models list.
     valid_thinking = ("off", "high", "max")
 
-    model = data.get("model") if data.get("model") in valid_models else DEFAULT_MODEL
+    model = data.get("model") if isinstance(data.get("model"), str) else DEFAULT_MODEL
     thinking = data.get("thinking") if data.get("thinking") in valid_thinking else DEFAULT_THINKING
+
+    # Provider: default to "deepseek" for backward compat with v1/v2 files.
+    provider_raw = data.get("provider")
+    provider: ProviderId = "deepseek"
+    if isinstance(provider_raw, str) and provider_raw in ("deepseek", "openai", "google"):
+        provider = provider_raw  # type: ignore[assignment]
 
     version = data.get("version")
     if version == 2:
         pwm = bool(data.get("planner_worker_mode", False))
-        planner_model = data.get("planner_model") if data.get("planner_model") in valid_models else model
-        worker_model = data.get("worker_model") if data.get("worker_model") in valid_models else DEFAULT_WORKER_MODEL
+        planner_model = data.get("planner_model") if isinstance(data.get("planner_model"), str) else model
+        worker_model = data.get("worker_model") if isinstance(data.get("worker_model"), str) else DEFAULT_WORKER_MODEL
         planner_thinking = data.get("planner_thinking") if data.get("planner_thinking") in valid_thinking else thinking
         worker_thinking = data.get("worker_thinking") if data.get("worker_thinking") in valid_thinking else DEFAULT_WORKER_THINKING
         raw_dispatches = data.get("worker_dispatches") or []
@@ -229,6 +239,7 @@ def load_conversation(path: Path) -> LoadedConversation:
         model=model,
         thinking=thinking,
         path=path,
+        provider=provider,
         planner_worker_mode=pwm,
         planner_model=planner_model,
         worker_model=worker_model,
