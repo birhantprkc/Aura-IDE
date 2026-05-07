@@ -3,7 +3,7 @@
 Verifies:
 - read_file / list_directory / glob basic correctness
 - write_file approval flow + backup creation
-- edit_file: error on 0 / 2+ matches; success on exactly 1
+- edit_file: 3-tier fallback (exact -> line-exact -> fuzzy); tolerates whitespace mismatches
 - jail: rejects '..', absolute path outside root, escape attempts
 - read-only mode disables write tools entirely (and removes them from defs)
 """
@@ -127,7 +127,7 @@ def main() -> int:
         print("-- edit_file zero matches --")
         r = reg.execute(
             "edit_file",
-            {"path": "src/a.py", "old_str": "NOT THERE", "new_str": "X"},
+            {"path": "src/a.py", "old_str": "XYZZY_PLUGH_QUUX_BAZ_42", "new_str": "X"},
             auto_approve,
         )
         expect("edit_file 0 matches errors", not r.ok and "not found" in r.payload["error"])
@@ -138,7 +138,36 @@ def main() -> int:
             {"path": "twice.py", "old_str": "x = 1", "new_str": "x = 2"},
             auto_approve,
         )
-        expect("edit_file 2+ matches errors", not r.ok and "match" in r.payload["error"])
+        expect("edit_file 2+ matches succeeds via fuzzy tier", r.ok)
+        expect(
+            "edit_file 2+ matches actually changed content",
+            "x = 2" in (root / "twice.py").read_text(),
+        )
+
+        print("-- edit_file fuzzy match with whitespace errors --")
+        (root / "src" / "fuzzy.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
+        r = reg.execute(
+            "edit_file",
+            {"path": "src/fuzzy.py", "old_str": "def foo():  \n    return 1", "new_str": "def foo():\n    return 42"},
+            auto_approve,
+        )
+        expect("edit_file fuzzy match approved", r.ok)
+        expect(
+            "edit_file fuzzy match applied",
+            "return 42" in (root / "src" / "fuzzy.py").read_text(),
+        )
+
+        print("-- edit_file match_tier present in result --")
+        r = reg.execute(
+            "edit_file",
+            {"path": "src/a.py", "old_str": "def foo():\n    return 42", "new_str": "def foo():\n    return 99"},
+            auto_approve,
+        )
+        expect("edit_file match_tier succeeded", r.ok)
+        expect(
+            "edit_file changed content",
+            "return 99" in (root / "src" / "a.py").read_text(),
+        )
 
         print("-- read-only mode --")
         reg.set_read_only(True)

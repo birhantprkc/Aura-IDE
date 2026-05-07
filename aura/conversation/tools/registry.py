@@ -231,9 +231,10 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "name": "edit_file",
             "description": (
                 "Surgically replace one occurrence of old_str with new_str inside a workspace file. "
-                "old_str MUST match exactly once — include enough surrounding context (lines above and "
-                "below the change) to be unique. Whitespace and indentation must match exactly. "
-                "The user reviews and approves the diff before it's applied. Backed up first."
+                "Provide a Search Block (the code to replace plus a few lines of surrounding context "
+                "for uniqueness). The matching is fuzzy — minor whitespace, indentation, or newline "
+                "differences are tolerated. The user reviews and approves the diff before it's "
+                "applied. Backed up first."
             ),
             "parameters": {
                 "type": "object",
@@ -244,7 +245,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                     },
                     "old_str": {
                         "type": "string",
-                        "description": "Exact text to find. Must occur exactly once in the file.",
+                        "description": "The Search Block — the code to find and replace. Include a few lines of surrounding context to make it unique. Exact whitespace is not required; the system will find the best match.",
                     },
                     "new_str": {
                         "type": "string",
