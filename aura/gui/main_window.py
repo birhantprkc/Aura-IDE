@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -140,14 +141,14 @@ class MainWindow(QMainWindow):
         self._input = InputPanel(self._workspace_root)
         # Apply default model / thinking from settings.
         if self._settings.planner_worker_mode:
-            self._input.set_model(self._settings.default_planner_model)
-            self._input.set_thinking(self._settings.default_planner_thinking)
+            self.set_model(self._settings.default_planner_model)
+            self.set_thinking(self._settings.default_planner_thinking)
         else:
-            self._input.set_model(self._settings.default_model)
-            self._input.set_thinking(self._settings.default_thinking)
-        self._input.set_worker_model(self._settings.default_worker_model)
-        self._input.set_worker_thinking(self._settings.default_worker_thinking)
-        self._input.set_planner_worker_mode(self._settings.planner_worker_mode)
+            self.set_model(self._settings.default_model)
+            self.set_thinking(self._settings.default_thinking)
+        self.set_worker_model(self._settings.default_worker_model)
+        self.set_worker_thinking(self._settings.default_worker_thinking)
+        self._set_sidebar_planner_worker_mode(self._settings.planner_worker_mode)
         center_layout.addWidget(self._input)
 
         splitter.addWidget(center)
@@ -183,10 +184,6 @@ class MainWindow(QMainWindow):
 
         self._input.sent.connect(self._on_send)
         self._input.stop_requested.connect(self._on_stop)
-        self._input.model_changed.connect(lambda _m: self._refresh_status_bar())
-        self._input.thinking_changed.connect(lambda _t: self._refresh_status_bar())
-        self._input.worker_model_changed.connect(self._on_worker_model_changed)
-        self._input.worker_thinking_changed.connect(self._on_worker_thinking_changed)
 
         # Planner / worker dispatch flow.
         self._bridge.workerDispatchRequested.connect(self._on_worker_dispatch_requested)
@@ -285,7 +282,123 @@ class MainWindow(QMainWindow):
         self._tree = WorkspaceTree(self._workspace_root)
         layout.addWidget(self._tree, 1)
 
+        # --- Model Config section ---
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"QFrame {{ color: {BORDER}; }}")
+        layout.addWidget(sep)
+
+        model_label = QLabel("Model Configuration")
+        model_label.setObjectName("paneTitle")
+        layout.addWidget(model_label)
+
+        # Planner model
+        planner_model_row = QHBoxLayout()
+        planner_model_row.setSpacing(4)
+        planner_model_label = QLabel("Planner:")
+        planner_model_label.setStyleSheet(f"color: {FG_DIM};")
+        planner_model_row.addWidget(planner_model_label)
+        self._planner_model_combo = QComboBox()
+        for mid, info in MODELS.items():
+            self._planner_model_combo.addItem(info.label, mid)
+        self._planner_model_combo.setCurrentIndex(list(MODELS.keys()).index(DEFAULT_MODEL))
+        self._planner_model_combo.currentIndexChanged.connect(self._refresh_status_bar)
+        planner_model_row.addWidget(self._planner_model_combo, 1)
+        layout.addLayout(planner_model_row)
+
+        # Planner thinking
+        planner_think_row = QHBoxLayout()
+        planner_think_row.setSpacing(4)
+        planner_think_label = QLabel("Thinking:")
+        planner_think_label.setStyleSheet(f"color: {FG_DIM};")
+        planner_think_row.addWidget(planner_think_label)
+        self._planner_thinking_combo = QComboBox()
+        self._planner_thinking_combo.addItem("Off", "off")
+        self._planner_thinking_combo.addItem("High", "high")
+        self._planner_thinking_combo.addItem("Max", "max")
+        self._planner_thinking_combo.setCurrentIndex(["off", "high", "max"].index(DEFAULT_THINKING))
+        self._planner_thinking_combo.currentIndexChanged.connect(self._refresh_status_bar)
+        planner_think_row.addWidget(self._planner_thinking_combo, 1)
+        layout.addLayout(planner_think_row)
+
+        # Worker model
+        worker_model_row = QHBoxLayout()
+        worker_model_row.setSpacing(4)
+        self._worker_model_label = QLabel("Worker:")
+        self._worker_model_label.setStyleSheet(f"color: {FG_DIM};")
+        worker_model_row.addWidget(self._worker_model_label)
+        self._worker_model_combo = QComboBox()
+        for mid, info in MODELS.items():
+            self._worker_model_combo.addItem(info.label, mid)
+        self._worker_model_combo.setCurrentIndex(list(MODELS.keys()).index(DEFAULT_WORKER_MODEL))
+        self._worker_model_combo.currentIndexChanged.connect(self._on_sidebar_worker_model_changed)
+        worker_model_row.addWidget(self._worker_model_combo, 1)
+        layout.addLayout(worker_model_row)
+
+        # Worker thinking
+        worker_think_row = QHBoxLayout()
+        worker_think_row.setSpacing(4)
+        self._worker_thinking_label = QLabel("Thinking:")
+        self._worker_thinking_label.setStyleSheet(f"color: {FG_DIM};")
+        worker_think_row.addWidget(self._worker_thinking_label)
+        self._worker_thinking_combo = QComboBox()
+        self._worker_thinking_combo.addItem("Off", "off")
+        self._worker_thinking_combo.addItem("High", "high")
+        self._worker_thinking_combo.addItem("Max", "max")
+        self._worker_thinking_combo.setCurrentIndex(["off", "high", "max"].index(DEFAULT_WORKER_THINKING))
+        self._worker_thinking_combo.currentIndexChanged.connect(self._on_sidebar_worker_thinking_changed)
+        worker_think_row.addWidget(self._worker_thinking_combo, 1)
+        layout.addLayout(worker_think_row)
+
         return frame
+
+    # ----- model / thinking accessors ------------------------------------
+
+    def current_model(self) -> ModelId:
+        return self._planner_model_combo.currentData()
+
+    def current_thinking(self) -> ThinkingMode:
+        return self._planner_thinking_combo.currentData()
+
+    def current_worker_model(self) -> ModelId:
+        return self._worker_model_combo.currentData()
+
+    def current_worker_thinking(self) -> ThinkingMode:
+        return self._worker_thinking_combo.currentData()
+
+    def set_model(self, model: ModelId) -> None:
+        keys = list(MODELS.keys())
+        if model in keys:
+            self._planner_model_combo.setCurrentIndex(keys.index(model))
+
+    def set_thinking(self, thinking: ThinkingMode) -> None:
+        keys = ["off", "high", "max"]
+        if thinking in keys:
+            self._planner_thinking_combo.setCurrentIndex(keys.index(thinking))
+
+    def set_worker_model(self, model: ModelId) -> None:
+        keys = list(MODELS.keys())
+        if model in keys:
+            self._worker_model_combo.setCurrentIndex(keys.index(model))
+
+    def set_worker_thinking(self, thinking: ThinkingMode) -> None:
+        keys = ["off", "high", "max"]
+        if thinking in keys:
+            self._worker_thinking_combo.setCurrentIndex(keys.index(thinking))
+
+    def _on_sidebar_worker_model_changed(self, _index: int) -> None:
+        self._bridge.set_worker_model(self.current_worker_model())
+        self._refresh_status_bar()
+
+    def _on_sidebar_worker_thinking_changed(self, _index: int) -> None:
+        self._bridge.set_worker_thinking(self.current_worker_thinking())
+        self._refresh_status_bar()
+
+    def _set_sidebar_planner_worker_mode(self, enabled: bool) -> None:
+        self._worker_model_label.setVisible(enabled)
+        self._worker_model_combo.setVisible(enabled)
+        self._worker_thinking_label.setVisible(enabled)
+        self._worker_thinking_combo.setVisible(enabled)
 
     # ----- status bar -----------------------------------------------------
 
@@ -315,8 +428,8 @@ class MainWindow(QMainWindow):
         ws = str(self._workspace_root) if self._workspace_root else "(none)"
         if len(ws) > 64:
             ws = "…" + ws[-63:]
-        model_label = MODELS[self._input.current_model()].label
-        thinking_label = _THINKING_LABEL[self._input.current_thinking()]
+        model_label = MODELS[self.current_model()].label
+        thinking_label = _THINKING_LABEL[self.current_thinking()]
         self._status_left.setText(f"{ws}    ·    {model_label}    ·    Thinking: {thinking_label}")
 
         # Right: totals + cost (sum across models)
@@ -423,14 +536,14 @@ class MainWindow(QMainWindow):
             self._settings = dlg.result_settings()
             # Apply to current widgets.
             if self._settings.planner_worker_mode:
-                self._input.set_model(self._settings.default_planner_model)
-                self._input.set_thinking(self._settings.default_planner_thinking)
+                self.set_model(self._settings.default_planner_model)
+                self.set_thinking(self._settings.default_planner_thinking)
             else:
-                self._input.set_model(self._settings.default_model)
-                self._input.set_thinking(self._settings.default_thinking)
-            self._input.set_worker_model(self._settings.default_worker_model)
-            self._input.set_worker_thinking(self._settings.default_worker_thinking)
-            self._input.set_planner_worker_mode(self._settings.planner_worker_mode)
+                self.set_model(self._settings.default_model)
+                self.set_thinking(self._settings.default_thinking)
+            self.set_worker_model(self._settings.default_worker_model)
+            self.set_worker_thinking(self._settings.default_worker_thinking)
+            self._set_sidebar_planner_worker_mode(self._settings.planner_worker_mode)
             self._apply_planner_worker_mode_to_bridge(self._settings.planner_worker_mode)
             self._bridge.set_worker_model(self._settings.default_worker_model)
             self._bridge.set_worker_thinking(self._settings.default_worker_thinking)
@@ -547,8 +660,8 @@ class MainWindow(QMainWindow):
         self._chat.begin_assistant()
 
         self._bridge.send(
-            model=self._input.current_model(),
-            thinking=self._input.current_thinking(),
+            model=self.current_model(),
+            thinking=self.current_thinking(),
         )
 
     def _on_stop(self) -> None:
@@ -738,8 +851,8 @@ class MainWindow(QMainWindow):
             return
         self._chat.begin_assistant()
         self._bridge.send(
-            model=self._input.current_model(),
-            thinking=self._input.current_thinking(),
+            model=self.current_model(),
+            thinking=self.current_thinking(),
         )
 
     def _on_usage(
@@ -767,14 +880,14 @@ class MainWindow(QMainWindow):
             self._current_conversation_path = save_conversation(
                 history=self._bridge.history,
                 workspace_root=self._workspace_root,
-                model=self._input.current_model(),
-                thinking=self._input.current_thinking(),
+                model=self.current_model(),
+                thinking=self.current_thinking(),
                 existing_path=self._current_conversation_path,
                 planner_worker_mode=self._bridge.planner_worker_mode,
-                planner_model=self._input.current_model(),
-                worker_model=self._input.current_worker_model(),
-                planner_thinking=self._input.current_thinking(),
-                worker_thinking=self._input.current_worker_thinking(),
+                planner_model=self.current_model(),
+                worker_model=self.current_worker_model(),
+                planner_thinking=self.current_thinking(),
+                worker_thinking=self.current_worker_thinking(),
                 worker_dispatches=self._bridge.dispatch_records,
             )
         except OSError as exc:
@@ -805,16 +918,16 @@ class MainWindow(QMainWindow):
         # Sync mode (without overwriting the system prompt we just set).
         self._bridge.set_planner_worker_mode(pwm)
         if pwm:
-            self._input.set_model(loaded.planner_model)
-            self._input.set_thinking(loaded.planner_thinking)
-            self._input.set_worker_model(loaded.worker_model)
-            self._input.set_worker_thinking(loaded.worker_thinking)
+            self.set_model(loaded.planner_model)
+            self.set_thinking(loaded.planner_thinking)
+            self.set_worker_model(loaded.worker_model)
+            self.set_worker_thinking(loaded.worker_thinking)
             self._bridge.set_worker_model(loaded.worker_model)
             self._bridge.set_worker_thinking(loaded.worker_thinking)
         else:
-            self._input.set_model(loaded.model)
-            self._input.set_thinking(loaded.thinking)
-        self._input.set_planner_worker_mode(pwm)
+            self.set_model(loaded.model)
+            self.set_thinking(loaded.thinking)
+        self._set_sidebar_planner_worker_mode(pwm)
         self._chat.reset()
         self._replay_history_into_view()
         self._refresh_status_bar()
