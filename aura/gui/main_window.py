@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QRadialGradient, QShortcut
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QRadialGradient
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStatusBar,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -30,32 +31,28 @@ from aura.config import (
     APP_NAME,
     PROVIDERS,
     AppSettings,
-    DEFAULT_MODEL,
     DEFAULT_THINKING,
-    DEFAULT_WORKER_MODEL,
     DEFAULT_WORKER_THINKING,
     ProviderId,
     ThinkingMode,
     cost_usd,
-    get_provider,
     icon_path,
     load_settings,
     load_workspace_root,
-    save_settings,
+    media_path,
     save_workspace_root,
 )
 from aura.conversation.persistence import (
     LoadedConversation,
-    list_conversations,
     load_conversation,
     most_recent_conversation,
     save_conversation,
 )
 from aura.gui.chat_view import ChatView
-from aura.gui.input_panel import Attachment, InputPanel, SendPayload
+from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.spec_edit_dialog import SpecApprovalDialog, SpecEditDialog
-from aura.gui.theme import BG, BG_ALT, BORDER, FG, FG_DIM, FG_MUTED, WARN
+from aura.gui.theme import BORDER, FG_DIM
 from aura.gui.worker_window import WorkerWindow
 from aura.gui.workspace_tree import WorkspaceTree
 
@@ -249,6 +246,11 @@ class MainWindow(QMainWindow):
         if event.button() == Qt.MouseButton.LeftButton:
             tb_geo = self._toolbar.geometry()
             if tb_geo.contains(event.position().toPoint()):
+                # Don't drag if clicking on a toolbar button
+                child = self._toolbar.childAt(self._toolbar.mapFrom(self, event.position().toPoint()))
+                if child is not None and isinstance(child, QToolButton):
+                    super().mousePressEvent(event)
+                    return
                 self._drag_start_pos = event.globalPosition().toPoint()
                 self._dragging = True
                 event.accept()
@@ -275,18 +277,18 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self) -> None:
         # Group 1: conversation actions
-        new_act = QAction("New Conversation", self)
+        new_act = QAction(QIcon(str(media_path("new_conv.svg"))), "New Conversation", self)
         new_act.triggered.connect(self._on_new_conversation)
         self._toolbar.addAction(new_act)
 
-        open_act = QAction("Open Conversation...", self)
+        open_act = QAction(QIcon(str(media_path("open_conversation.svg"))), "Open Conversation...", self)
         open_act.triggered.connect(self._on_open_conversation)
         self._toolbar.addAction(open_act)
 
         self._toolbar.addWidget(_toolbar_separator())
 
         # Group 2: read-only
-        self._read_only_act = QAction("Read-Only Mode", self)
+        self._read_only_act = QAction(QIcon(str(media_path("read_only.svg"))), "Read-Only Mode", self)
         self._read_only_act.setCheckable(True)
         self._read_only_act.setChecked(False)
         self._read_only_act.triggered.connect(self._on_read_only_toggled)
@@ -299,9 +301,12 @@ class MainWindow(QMainWindow):
         self._toolbar.addWidget(_toolbar_separator())
 
         # Group 3: settings
-        settings_act = QAction("Settings", self)
+        settings_act = QAction(QIcon(str(media_path("settings_24dp.svg"))), "Settings", self)
         settings_act.triggered.connect(self._on_open_settings)
         self._toolbar.addAction(settings_act)
+
+        # Icon-only style.
+        self._toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
 
         # Spacer.
         spacer = QWidget()
@@ -312,6 +317,49 @@ class MainWindow(QMainWindow):
         self._toolbar_workspace_label = QLabel("")
         self._toolbar_workspace_label.setStyleSheet(f"color: {FG_DIM};")
         self._toolbar.addWidget(self._toolbar_workspace_label)
+
+        # Small spacer before window controls.
+        win_spacer = QWidget()
+        win_spacer.setFixedWidth(8)
+        self._toolbar.addWidget(win_spacer)
+
+        # Window control buttons.
+        min_btn = QToolButton()
+        min_btn.setText("\u2500")  # ─
+        min_btn.setObjectName("winMinBtn")
+        min_btn.clicked.connect(self.showMinimized)
+        self._toolbar.addWidget(min_btn)
+
+        self._max_btn = QToolButton()
+        self._max_btn.setText("\u25a1")  # □
+        self._max_btn.setObjectName("winMaxBtn")
+        self._max_btn.clicked.connect(self._toggle_maximize)
+        self._toolbar.addWidget(self._max_btn)
+
+        close_btn = QToolButton()
+        close_btn.setText("\u2715")  # ✕
+        close_btn.setObjectName("winCloseBtn")
+        close_btn.clicked.connect(self.close)
+        self._toolbar.addWidget(close_btn)
+
+    # ----- window state helpers -------------------------------------------
+
+    def _toggle_maximize(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+            self._max_btn.setText("\u25a1")  # □
+        else:
+            self.showMaximized()
+            self._max_btn.setText("\u2750")  # ❐
+
+    def changeEvent(self, event) -> None:
+        if event.type() == event.Type.WindowStateChange:
+            if hasattr(self, '_max_btn'):
+                if self.isMaximized():
+                    self._max_btn.setText("\u2750")  # ❐
+                else:
+                    self._max_btn.setText("\u25a1")  # □
+        super().changeEvent(event)
 
     # ----- left pane ------------------------------------------------------
 

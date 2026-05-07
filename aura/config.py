@@ -368,6 +368,11 @@ def icon_path() -> Path:
     return Path(__file__).resolve().parent / "icon.ico"
 
 
+def media_path(name: str) -> Path:
+    """Return the absolute path to a file in the project media/ directory."""
+    return Path(__file__).resolve().parent.parent / "media" / name
+
+
 # ---- settings persistence -------------------------------------------------
 
 

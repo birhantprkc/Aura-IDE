@@ -101,6 +101,34 @@ QToolBar QToolButton:checked {{
     border-color: {BORDER_STRONG};
     color: {FG};
 }}
+QToolBar QToolButton#winMinBtn,
+QToolBar QToolButton#winMaxBtn {{
+    background: transparent;
+    color: {FG_DIM};
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 14px;
+    font-family: "Segoe UI", system-ui, sans-serif;
+}}
+QToolBar QToolButton#winMinBtn:hover,
+QToolBar QToolButton#winMaxBtn:hover {{
+    background: {BG_RAISED};
+    color: {FG};
+}}
+QToolBar QToolButton#winCloseBtn {{
+    background: transparent;
+    color: {FG_DIM};
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 14px;
+    font-family: "Segoe UI", system-ui, sans-serif;
+}}
+QToolBar QToolButton#winCloseBtn:hover {{
+    background: {DANGER};
+    color: #ffffff;
+}}
 QToolBar QLabel {{
     color: {FG_DIM};
     padding: 0 4px;
