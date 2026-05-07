@@ -8,9 +8,10 @@ from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QImage, QKeySequence, QPixmap, QShortcut, QTextOption
+from PySide6.QtGui import QColor, QImage, QKeySequence, QPixmap, QShortcut, QTextOption
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -21,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.gui.theme import BG_RAISED, BORDER, DANGER, FG, FG_DIM
+from aura.gui.theme import BG_RAISED, DANGER, FG, FG_DIM
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -168,12 +169,25 @@ class InputPanel(QFrame):
 
     def __init__(self, workspace_root: Path | None) -> None:
         super().__init__()
-        self.setStyleSheet(f"QFrame {{ background: {BG_RAISED}; border-top: 1px solid {BORDER}; }}")
+        self.setStyleSheet(
+            "QFrame {"
+            "  background: rgba(42, 42, 51, 0.85);"
+            "  border: 1px solid rgba(255, 255, 255, 0.08);"
+            "  border-radius: 18px;"
+            "}"
+        )
+        # Drop shadow for floating pill effect
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(40)
+        shadow.setOffset(0, 8)
+        shadow.setColor(QColor(0, 0, 0, 180))
+        self.setGraphicsEffect(shadow)
+
         self._workspace_root = workspace_root
         self._streaming = False
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 8, 12, 10)
+        outer.setContentsMargins(16, 12, 16, 14)
         outer.setSpacing(6)
 
         # Attachment chips row (hidden when empty).

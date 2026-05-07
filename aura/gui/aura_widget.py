@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QAbstractAnimation, QRectF, QVariantAnimation
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QRectF, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QRadialGradient
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
@@ -54,6 +54,35 @@ class AuraWidget(QWidget):
         self._animation.stop()
         self._breath = 0.0
         self.update()
+
+    def transition_glow_color(self, new_color: str, duration: int = 600) -> None:
+        \"\"\"Animate the glow color from its current value to *new_color*.\"\"\"
+        target = QColor(new_color)
+        start = QColor(self._glow_color)
+        anim = QVariantAnimation(self)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setDuration(duration)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        def _on_value(v: float) -> None:
+            r = int(start.red() + (target.red() - start.red()) * v)
+            g = int(start.green() + (target.green() - start.green()) * v)
+            b = int(start.blue() + (target.blue() - start.blue()) * v)
+            a = int(start.alpha() + (target.alpha() - start.alpha()) * v)
+            self._glow_color = QColor(r, g, b, a)
+            self.update()
+        anim.valueChanged.connect(_on_value)
+        anim.start()
+
+    def set_glow_state(self, state: str) -> None:
+        \"\"\"Transition the glow to a semantic colour state.\"\"\"
+        colors = {
+            "thinking": "#9b30ff",
+            "coding": "#00e5ff",
+        }
+        color = colors.get(state)
+        if color is not None:
+            self.transition_glow_color(color)
 
     def paintEvent(self, event) -> None:
         if self._animation.state() != QAbstractAnimation.State.Running:

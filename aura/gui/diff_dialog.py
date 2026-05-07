@@ -41,7 +41,13 @@ def render_unified_diff(old: str, new: str, rel_path: str) -> str:
         lineterm="",
         n=3,
     )
-    return "\n".join(diff)
+    lines = list(diff)
+    # Filter out metadata lines — keep only code additions/deletions/context
+    cleaned = [
+        line for line in lines
+        if not (line.startswith("--- ") or line.startswith("+++ ") or line.startswith("@@ "))
+    ]
+    return "\n".join(cleaned)
 
 
 class DiffApprovalDialog(QDialog):
@@ -71,7 +77,7 @@ class DiffApprovalDialog(QDialog):
         self._diff_view = QPlainTextEdit(self)
         self._diff_view.setReadOnly(True)
         self._diff_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-        mono = QFont("Cascadia Mono, Consolas, Menlo, monospace")
+        mono = QFont("Geist Mono, JetBrains Mono, Consolas, Menlo, monospace")
         mono.setStyleHint(QFont.StyleHint.Monospace)
         mono.setFixedPitch(True)
         mono.setPointSize(10)

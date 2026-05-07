@@ -64,12 +64,12 @@ def apply_theme(app: QApplication) -> None:
 QSS = f"""
 * {{
     color: {FG};
-    font-family: "Segoe UI", "Inter", system-ui, sans-serif;
+    font-family: "Segoe UI", "Inter", "Geist", system-ui, sans-serif;
     font-size: 13px;
 }}
 
 QMainWindow, QWidget {{
-    background: {BG};
+    background: transparent;
 }}
 
 QSplitter::handle {{
@@ -174,11 +174,11 @@ QComboBox QAbstractItemView {{
 }}
 
 QScrollArea {{
-    background: {BG};
+    background: transparent;
     border: none;
 }}
 QScrollBar:vertical {{
-    background: {BG};
+    background: transparent;
     width: 10px;
     margin: 0;
 }}
@@ -194,7 +194,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0;
 }}
 QScrollBar:horizontal {{
-    background: {BG};
+    background: transparent;
     height: 10px;
 }}
 QScrollBar::handle:horizontal {{
@@ -243,30 +243,41 @@ QLabel#workspaceHint {{
 }}
 
 QFrame#leftPane {{
-    background: {BG_ALT};
+    background: rgba(37, 37, 45, 0.70);
     border-right: 1px solid {BORDER};
 }}
 
 QFrame#card {{
-    background: {BG_ALT};
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
+    background: rgba(37, 37, 45, 0.55);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-right: 1px solid rgba(0, 0, 0, 0.20);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.28);
+    border-left: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
 }}
 QFrame#userCard {{
-    background: {BG_USER_CARD};
-    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(30, 37, 54, 0.65);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-right: 1px solid rgba(0, 0, 0, 0.25);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.35);
     border-left: 3px solid {ACCENT};
-    border-radius: 8px;
+    border-radius: 10px;
 }}
 QFrame#assistantCard {{
-    background: {BG_ASSISTANT_CARD};
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
+    background: rgba(31, 31, 35, 0.60);
+    border-top: 1px solid rgba(255, 255, 255, 0.10);
+    border-right: 1px solid rgba(0, 0, 0, 0.22);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.30);
+    border-left: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 10px;
 }}
 QFrame#toolCard {{
-    background: {BG_TOOL_CARD};
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 6px;
+    background: rgba(28, 32, 38, 0.55);
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    border-right: 1px solid rgba(0, 0, 0, 0.18);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+    border-left: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
 }}
 QFrame#toolCluster {{
     background: transparent;
@@ -274,9 +285,9 @@ QFrame#toolCluster {{
     border-left: 1px solid {BORDER_STRONG};
 }}
 QFrame#errorCard {{
-    background: rgba(247, 118, 142, 0.08);
+    background: rgba(247, 118, 142, 0.12);
     border: 1px solid {DANGER};
-    border-radius: 8px;
+    border-radius: 10px;
 }}
 
 QLabel#cardHeader {{

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QRadialGradient, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -91,6 +91,10 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(str(icon_path())))
         self.resize(1400, 900)
 
+        # Drag-to-move state
+        self._dragging = False
+        self._drag_start_pos = None
+
         # Settings.
         self._settings: AppSettings = load_settings()
 
@@ -138,7 +142,7 @@ class MainWindow(QMainWindow):
         # Middle pane: chat + input
         center = QWidget()
         center_layout = QVBoxLayout(center)
-        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setContentsMargins(20, 0, 20, 16)
         center_layout.setSpacing(0)
 
         self._chat = ChatView()
@@ -172,6 +176,14 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(2, 1)  # worker gets 1/2 of stretch
 
         self.setCentralWidget(splitter)
+
+        # Make the central widget and splitter transparent so the gradient shows through
+        splitter.setStyleSheet("background: transparent;")
+        self.centralWidget().setStyleSheet("background: transparent;")
+        self.centralWidget().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+
+        # Frameless window — no native title bar
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
 
         # ----- wire bridge ↔ view -----
         self._bridge.started.connect(self._on_started)
@@ -214,6 +226,50 @@ class MainWindow(QMainWindow):
         # Restore most recent conversation if enabled.
         if self._settings.restore_last_conversation:
             self._maybe_restore_last_conversation()
+
+    # ----- paintEvent: radial gradient background --------------------------
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        center = self.rect().center()
+        center.setY(int(self.height() * 0.15))
+        radius = max(self.width(), self.height()) * 0.8
+        gradient = QRadialGradient(center, radius)
+        gradient.setColorAt(0.0, QColor(40, 45, 60, 255))
+        gradient.setColorAt(0.4, QColor(25, 28, 35, 255))
+        gradient.setColorAt(1.0, QColor(10, 12, 16, 255))
+        painter.fillRect(self.rect(), gradient)
+        painter.end()
+        super().paintEvent(event)
+
+    # ----- drag-to-move on toolbar -----------------------------------------
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            tb_geo = self._toolbar.geometry()
+            if tb_geo.contains(event.position().toPoint()):
+                self._drag_start_pos = event.globalPosition().toPoint()
+                self._dragging = True
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if getattr(self, '_dragging', False):
+            delta = event.globalPosition().toPoint() - self._drag_start_pos
+            self.move(self.pos() + delta)
+            self._drag_start_pos = event.globalPosition().toPoint()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if getattr(self, '_dragging', False):
+            self._dragging = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     # ----- toolbar build --------------------------------------------------
 
@@ -455,7 +511,7 @@ class MainWindow(QMainWindow):
         bar.addPermanentWidget(self._status_cost)
 
         # Monospace for numbers — prevents jitter as digit widths change.
-        mono_font = QFont("Consolas, 'Cascadia Mono', monospace")
+        mono_font = QFont("Geist Mono, JetBrains Mono, Consolas, monospace")
         mono_font.setStyleHint(QFont.StyleHint.Monospace)
         mono_font.setPointSize(11)
         self._status_tokens.setFont(mono_font)

@@ -73,25 +73,24 @@ def _render_code_block(lang: str, code: str) -> str:
     if not _HAVE_PYGMENTS:
         escaped = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         return (
-            f'<pre style="background:{BG}; color:{FG}; '
-            f'border:1px solid {BORDER}; border-radius:6px; padding:8px; '
-            f'font-family:Consolas,\'Cascadia Mono\',monospace;">{escaped}</pre>'
+            f'<pre style="background: transparent; color:{FG}; '
+            f'border: none; border-radius:6px; padding:8px; '
+            f'font-family:\'Geist Mono\',\'JetBrains Mono\',monospace;\">{escaped}</pre>'
         )
     try:
         lexer = get_lexer_by_name(lang) if lang else TextLexer()
     except ClassNotFound:
         lexer = TextLexer()
     formatter = HtmlFormatter(
-        style="monokai",
+        style="dracula",
         noclasses=True,
         nowrap=False,
         prestyles=(
-            f"background:{BG}; border:1px solid {BORDER}; border-radius:6px; "
-            "padding:8px; font-family:Consolas,'Cascadia Mono',monospace; "
+            f"background: transparent; border: none; border-radius:6px; "
+            "padding:8px; font-family:'Geist Mono','JetBrains Mono',monospace; "
             "font-size:12px; white-space:pre;"
         ),
-    )
-    return highlight(code, lexer, formatter)
+    )    return highlight(code, lexer, formatter)
 
 
 def _render_markdown_with_code(text: str) -> str:
@@ -145,7 +144,7 @@ def _wrap_body_text(text: str, color: str) -> str:
 
 
 def _mono_font(pt: int = 10) -> QFont:
-    f = QFont("Cascadia Mono, Consolas, Menlo, monospace")
+    f = QFont("Geist Mono, JetBrains Mono, Consolas, Menlo, monospace")
     f.setStyleHint(QFont.StyleHint.Monospace)
     f.setFixedPitch(True)
     f.setPointSize(pt)
@@ -768,7 +767,7 @@ class CodeWriterCard(QFrame):
         # File path subtitle
         self._path_label = QLabel("")
         self._path_label.setStyleSheet(
-            f"color: {FG_DIM}; font-family: 'Cascadia Mono', Consolas, monospace; "
+            f"color: {FG_DIM}; font-family: 'Geist Mono', 'JetBrains Mono', monospace; "
             "font-size: 10px;"
         )
         self._path_label.setVisible(False)
@@ -888,11 +887,11 @@ class CodeWriterCard(QFrame):
         except ClassNotFound:
             lexer = TextLexer()
         formatter = HtmlFormatter(
-            style="monokai",
+            style="dracula",
             noclasses=True,
             nowrap=True,
             prestyles=(
-                f"background:{BG}; border:none; "
+                f"background: transparent; border:none; "
                 "font-family:Consolas,'Cascadia Mono',monospace; "
                 "font-size:12px; line-height:1.4;"
             ),
@@ -941,7 +940,7 @@ class CodeBlockCard(QFrame):
         lang_display = language if language else "code"
         header = QLabel(f" {lang_display} ")
         header.setStyleSheet(
-            f"color: {FG_DIM}; font-family: 'Cascadia Mono', Consolas, monospace; "
+            f"color: {FG_DIM}; font-family: 'Geist Mono', 'JetBrains Mono', monospace; "
             f"font-size: 10px; padding: 3px 10px; background: {BG_ALT}; "
             f"border-top-left-radius: 6px; border-top-right-radius: 6px; "
             f"border-bottom: 1px solid {BORDER};"
@@ -978,7 +977,7 @@ class CodeBlockCard(QFrame):
                 lexer = TextLexer()
         except ClassNotFound:
             lexer = TextLexer()
-        formatter = HtmlFormatter(style="monokai", noclasses=True, nowrap=True)
+        formatter = HtmlFormatter(style="dracula", noclasses=True, nowrap=True)
         try:
             highlighted = highlight(code, lexer, formatter)
             doc = view.document()
@@ -1023,9 +1022,7 @@ class DiffCard(QFrame):
             "border-radius: 4px; padding: 6px;"
         )
         if is_new_file:
-            text = f"--- /dev/null\n+++ b/{rel_path}\n"
-            for line in new.splitlines():
-                text += f"+{line}\n"
+            text = "\n".join(f"+{line}" for line in new.splitlines())
         else:
             text = render_unified_diff(old, new, rel_path) or "(no textual difference)"
         diff_view.setPlainText(text)
@@ -1043,8 +1040,6 @@ class DiffCard(QFrame):
         del_fmt = QTextCharFormat()
         del_fmt.setBackground(QColor(DIFF_DEL_BG))
         del_fmt.setForeground(QColor(DANGER))
-        head_fmt = QTextCharFormat()
-        head_fmt.setForeground(QColor(FG_DIM))
         cursor.movePosition(QTextCursor.MoveOperation.Start)
         while True:
             cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
@@ -1052,12 +1047,10 @@ class DiffCard(QFrame):
                 QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
             )
             line = cursor.selectedText()
-            if line.startswith("+") and not line.startswith("+++"):
+            if line.startswith("+"):
                 cursor.setCharFormat(add_fmt)
-            elif line.startswith("-") and not line.startswith("---"):
+            elif line.startswith("-"):
                 cursor.setCharFormat(del_fmt)
-            elif line.startswith("@@") or line.startswith("---") or line.startswith("+++"):
-                cursor.setCharFormat(head_fmt)
             cursor.clearSelection()
             if not cursor.movePosition(QTextCursor.MoveOperation.NextBlock):
                 break
@@ -1116,7 +1109,7 @@ class SpecCard(QFrame):
         self._files_label = QLabel(self._format_files(self._files))
         self._files_label.setWordWrap(True)
         self._files_label.setStyleSheet(
-            f"color: {FG_DIM}; font-family: 'Cascadia Mono', Consolas, monospace; "
+            f"color: {FG_DIM}; font-family: 'Geist Mono', 'JetBrains Mono', monospace; "
             "font-size: 11px;"
         )
         outer.addWidget(self._files_label)
@@ -1292,7 +1285,7 @@ class TerminalCard(QFrame):
         self._output_view.setStyleSheet(
             f"background: {TERMINAL_BG}; color: {FG}; border: 1px solid {BORDER}; "
             "border-radius: 4px; padding: 6px; "
-            "font-family: 'Cascadia Mono', Consolas, monospace;"
+            "font-family: 'Geist Mono', 'JetBrains Mono', monospace;"
         )
         self._output_view.setMaximumHeight(400)
         body_layout.addWidget(self._output_view)
@@ -1409,6 +1402,7 @@ class ChatView(QScrollArea):
         self.setWidget(container)
 
         self._current_assistant: AssistantCard | None = None
+        self._current_aura: AuraWidget | None = None
         # Map tool_call_id -> the assistant card that owns it (for routing diff-after).
         self._tool_owner: dict[str, AssistantCard] = {}
         # Map dispatch tool_call_id -> SpecCard.
@@ -1472,6 +1466,7 @@ class ChatView(QScrollArea):
             if w is not None:
                 w.deleteLater()
         self._current_assistant = None
+        self._current_aura = None
         self._tool_owner.clear()
         self._spec_cards.clear()
         self._terminal_cards.clear()
@@ -1496,6 +1491,7 @@ class ChatView(QScrollArea):
         card = AssistantCard(compact_tools=self._compact_tools)
         self._current_assistant = card
         wrapper = AuraWidget(card, glow_color=ACCENT, glow_spread=16)
+        self._current_aura = wrapper
         self._add_card(wrapper)
         wrapper.start_aura()
         return card
@@ -1507,6 +1503,8 @@ class ChatView(QScrollArea):
 
     def append_reasoning(self, text: str) -> None:
         self.current_assistant().append_reasoning(text)
+        if self._current_aura is not None:
+            self._current_aura.set_glow_state("thinking")
         self._scroll_to_bottom()
 
     def append_content(self, text: str) -> None:
@@ -1517,6 +1515,8 @@ class ChatView(QScrollArea):
         self._scroll_to_bottom(force=True)
 
     def add_tool_call(self, tool_call_id: str, name: str) -> None:
+        if self._current_aura is not None:
+            self._current_aura.set_glow_state("coding")
         if self._compact_tools:
             ac = self.current_assistant()
             ac.notify_compact_tool_start(name)
@@ -1614,19 +1614,13 @@ class ChatView(QScrollArea):
             return
         ac.finalize_content()
         # Stop the breathing glow — content is complete, no need to pulse anymore.
-        wrapper = ac.parentWidget()
-        if isinstance(wrapper, AuraWidget):
-            wrapper.stop_aura()
+        if self._current_aura is not None:
+            self._current_aura.stop_aura()
 
     def stop_current_aura(self) -> None:
-        """Stop the breathing glow on the current assistant card without finalizing content."""
-        ac = self._current_assistant
-        if ac is None:
-            return
-        wrapper = ac.parentWidget()
-        if isinstance(wrapper, AuraWidget):
-            wrapper.stop_aura()
-
+        \"\"\"Stop the breathing glow on the current assistant card without finalizing content.\"\"\"
+        if self._current_aura is not None:
+            self._current_aura.stop_aura()
     # ---- spec card / worker dispatch ------------------------------------
 
     def add_spec_card(
