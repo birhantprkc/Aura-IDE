@@ -80,6 +80,7 @@ class ConversationManager:
         model: ModelId,
         thinking: ThinkingMode,
         dispatch_cb: DispatchCallback | None = None,
+        temperature: float = 0.7,
     ) -> None:
         """Run the model -> tool -> model loop until the model stops calling tools.
 
@@ -106,6 +107,7 @@ class ConversationManager:
                 model=model,
                 thinking=thinking,
                 cancel_event=cancel_event,
+                temperature=temperature,
             ):
                 on_event(ev)
                 if isinstance(ev, Done):
@@ -171,6 +173,7 @@ class ConversationManager:
                         on_event=on_event,
                         model=model,
                         cancel_event=cancel_event,
+                        temperature=temperature,
                     )
                     continue
 
@@ -295,6 +298,7 @@ class ConversationManager:
         on_event: EventCallback,
         model: ModelId,
         cancel_event: threading.Event,
+        temperature: float = 0.7,
     ) -> None:
         objective = args.get("objective") or args.get("goal") or args.get("spec") or ""
         if not objective:
@@ -348,7 +352,8 @@ class ConversationManager:
                 cancel_event=cancel_event,
                 model=model,
                 thinking="off",
-                dispatch_cb=None
+                dispatch_cb=None,
+                temperature=temperature,
             )
             
             api_msgs = research_history.for_api()

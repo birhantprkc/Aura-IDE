@@ -60,6 +60,7 @@ class DeepSeekClient:
         model: str,
         thinking: ThinkingMode,
         cancel_event: threading.Event | None = None,
+        temperature: float = 0.7,
     ) -> Iterator[Event]:
         kwargs: dict[str, Any] = {
             "model": model,
@@ -74,7 +75,7 @@ class DeepSeekClient:
         if self._provider == "deepseek":
             if thinking == "off":
                 kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-                kwargs["temperature"] = 0.7
+                kwargs["temperature"] = temperature
             else:
                 kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
                 kwargs["reasoning_effort"] = "high" if thinking == "high" else "max"
@@ -82,7 +83,7 @@ class DeepSeekClient:
         else:
             # OpenAI / Google Gemini: no extra_body thinking param.
             if thinking == "off":
-                kwargs["temperature"] = 0.7
+                kwargs["temperature"] = temperature
             else:
                 kwargs["reasoning_effort"] = "high" if thinking == "high" else "max"
 

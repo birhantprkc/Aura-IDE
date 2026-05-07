@@ -135,6 +135,7 @@ class _Worker(QObject):
         cancel_event: threading.Event,
         model: ModelId,
         thinking: ThinkingMode,
+        temperature: float = 0.7,
     ) -> None:
         super().__init__()
         self._manager = manager
@@ -143,6 +144,7 @@ class _Worker(QObject):
         self._cancel = cancel_event
         self._model = model
         self._thinking = thinking
+        self._temperature = temperature
 
     @Slot()
     def run(self) -> None:
@@ -159,6 +161,7 @@ class _Worker(QObject):
                 model=self._model,
                 thinking=self._thinking,
                 dispatch_cb=dispatch_cb,
+                temperature=self._temperature,
             )
         except Exception as exc:
             self.apiError.emit(-1, f"{type(exc).__name__}: {exc}")
@@ -291,6 +294,8 @@ class _DispatchProxy(QObject):
 
         self._worker_model: ModelId = DEFAULT_WORKER_MODEL
         self._worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
+        self._worker_temperature: float = 0.7
+        self._worker_system_prompt: str = ""
 
         # Per-call state — guarded by a lock so concurrent dispatches (which
         # shouldn't happen, but be safe) don't trample each other.
@@ -309,6 +314,12 @@ class _DispatchProxy(QObject):
 
     def set_worker_thinking(self, thinking: ThinkingMode) -> None:
         self._worker_thinking = thinking
+
+    def set_worker_temperature(self, temperature: float) -> None:
+        self._worker_temperature = temperature
+
+    def set_worker_system_prompt(self, prompt: str) -> None:
+        self._worker_system_prompt = prompt
 
     def records(self) -> list[WorkerDispatchRecord]:
         return list(self._records)
@@ -385,7 +396,7 @@ class _DispatchProxy(QObject):
         pending: "_DispatchPending",
     ) -> WorkerDispatchResult:
         worker_history = History()
-        worker_history.set_system(WORKER_SYSTEM_PROMPT)
+        worker_history.set_system(self._worker_system_prompt if self._worker_system_prompt else WORKER_SYSTEM_PROMPT)
         worker_history.append_user_text(_format_spec_as_user_message(req))
 
         worker_registry = self._registry_factory("worker")
@@ -486,6 +497,7 @@ class _DispatchProxy(QObject):
                 model=self._worker_model,
                 thinking=self._worker_thinking,
                 dispatch_cb=None,
+                temperature=self._worker_temperature,
             )
         except Exception as exc:
             api_errors.append(f"{type(exc).__name__}: {exc}")
@@ -659,6 +671,9 @@ class ConversationBridge(QObject):
         self._active_model: str = ""
 
         self._planner_worker_mode: bool = False  # configured by main_window
+        self._temperature: float = 0.7
+        self._single_system_prompt: str = ""
+        self._planner_system_prompt: str = ""
 
         # Re-emit dispatch proxy signals on the bridge so the GUI binds once.
         self._dispatch_proxy.showSpecCard.connect(self.workerDispatchRequested)
@@ -713,9 +728,32 @@ class ConversationBridge(QObject):
         if enabled:
             self._registry.set_mode("planner")
             if not self._history.system_prompt or self._history.system_prompt == "":
-                self._history.set_system(PLANNER_SYSTEM_PROMPT)
+                self._history.set_system(
+                    self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
+                )
         else:
             self._registry.set_mode("single")
+            if not self._history.system_prompt or self._history.system_prompt == "":
+                # Lazy import to avoid circular dependency at module level.
+                from aura.gui.main_window import SYSTEM_PROMPT as _SYS_PROMPT
+                self._history.set_system(
+                    self._single_system_prompt if self._single_system_prompt else _SYS_PROMPT
+                )
+
+    def set_temperature(self, temperature: float) -> None:
+        self._temperature = temperature
+
+    def set_custom_system_prompts(self, single: str, planner: str, worker: str) -> None:
+        self._single_system_prompt = single
+        self._planner_system_prompt = planner
+        self._dispatch_proxy.set_worker_system_prompt(worker)
+        # Apply to current history if appropriate
+        if self._planner_worker_mode:
+            if planner:
+                self._history.set_system(planner)
+        else:
+            if single:
+                self._history.set_system(single)
 
     def set_worker_model(self, model: ModelId) -> None:
         self._dispatch_proxy.set_worker_model(model)
@@ -725,6 +763,9 @@ class ConversationBridge(QObject):
 
     def set_provider(self, provider: ProviderId) -> None:
         """Recreate the internal client for a new provider."""
+        # Capture current dispatch proxy settings before recreating.
+        old_worker_temp = self._dispatch_proxy._worker_temperature
+        old_worker_prompt = self._dispatch_proxy._worker_system_prompt
         self._provider = provider
         self._client = DeepSeekClient(provider=provider)
         self._manager = ConversationManager(self._client, self._history, self._registry)
@@ -736,6 +777,9 @@ class ConversationBridge(QObject):
             workspace_root=self._registry.workspace_root,
             provider=provider,
         )
+        # Propagate saved settings to the new dispatch proxy.
+        self._dispatch_proxy.set_worker_temperature(old_worker_temp)
+        self._dispatch_proxy.set_worker_system_prompt(old_worker_prompt)
         # Re-wire dispatch proxy signals.
         self._dispatch_proxy.showSpecCard.connect(self.workerDispatchRequested)
         self._dispatch_proxy.workerStarted.connect(self.workerStarted)
@@ -807,6 +851,7 @@ class ConversationBridge(QObject):
             cancel_event=self._cancel,
             model=model,
             thinking=thinking,
+            temperature=self._temperature,
         )
         self._worker.moveToThread(self._thread)
 

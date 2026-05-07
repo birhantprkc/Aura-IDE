@@ -109,6 +109,12 @@ class MainWindow(QMainWindow):
         self._apply_planner_worker_mode_to_bridge(self._settings.planner_worker_mode)
         self._bridge.set_worker_model(self._settings.default_worker_model)
         self._bridge.set_worker_thinking(self._settings.default_worker_thinking)
+        self._bridge.set_temperature(self._settings.temperature)
+        self._bridge.set_custom_system_prompts(
+            self._settings.system_prompt,
+            self._settings.planner_system_prompt,
+            self._settings.worker_system_prompt,
+        )
 
         # Persistence state.
         self._current_conversation_path: Path | None = None
@@ -698,9 +704,11 @@ class MainWindow(QMainWindow):
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
         self._bridge.set_planner_worker_mode(enabled)
-        self._bridge.set_system_prompt(
-            PLANNER_SYSTEM_PROMPT if enabled else SYSTEM_PROMPT
-        )
+        if enabled:
+            prompt = self._settings.planner_system_prompt or PLANNER_SYSTEM_PROMPT
+        else:
+            prompt = self._settings.system_prompt or SYSTEM_PROMPT
+        self._bridge.set_system_prompt(prompt)
         if hasattr(self, "_chat"):
             self._chat.set_compact_tools(enabled)
 

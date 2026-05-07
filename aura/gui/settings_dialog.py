@@ -13,9 +13,11 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -74,6 +76,10 @@ class SettingsDialog(QDialog):
             vision_enabled=settings.vision_enabled,
             vision_model=settings.vision_model,
             vision_endpoint=settings.vision_endpoint,
+            temperature=settings.temperature,
+            system_prompt=settings.system_prompt,
+            planner_system_prompt=settings.planner_system_prompt,
+            worker_system_prompt=settings.worker_system_prompt,
         )
         self._on_change_root = on_change_root
 
@@ -172,6 +178,90 @@ class SettingsDialog(QDialog):
         self._vision_endpoint_combo.addItems(["http://localhost:11434/v1"])
         self._vision_endpoint_combo.setCurrentText(self._settings.vision_endpoint)
         form.addRow("Vision endpoint:", self._vision_endpoint_combo)
+
+        # --- Temperature ---
+        temp_sep = QLabel("Temperature")
+        temp_sep.setStyleSheet(
+            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
+            " text-transform: uppercase; letter-spacing: 0.04em;"
+        )
+        form.addRow("", temp_sep)
+
+        self._temperature_spin = QDoubleSpinBox()
+        self._temperature_spin.setRange(0.0, 2.0)
+        self._temperature_spin.setSingleStep(0.1)
+        self._temperature_spin.setDecimals(1)
+        self._temperature_spin.setToolTip(
+            "Controls response randomness. 0 = deterministic, 2 = maximum creativity. "
+            "Only applied when thinking is Off."
+        )
+        self._temperature_spin.setValue(self._settings.temperature)
+        form.addRow("Temperature:", self._temperature_spin)
+
+        # --- System Prompts ---
+        prompts_sep = QLabel("System Prompts")
+        prompts_sep.setStyleSheet(
+            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
+            " text-transform: uppercase; letter-spacing: 0.04em;"
+        )
+        form.addRow("", prompts_sep)
+
+        prompts_note = QLabel(
+            "Leave blank to use the built-in default. "
+            "Custom prompts take effect on the next conversation turn."
+        )
+        prompts_note.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        prompts_note.setWordWrap(True)
+        form.addRow("", prompts_note)
+
+        # Lazy import to avoid circular dependency at module level.
+        from aura.bridge.qt_bridge import PLANNER_SYSTEM_PROMPT as _PLANNER_PROMPT, WORKER_SYSTEM_PROMPT as _WORKER_PROMPT
+        from aura.gui.main_window import SYSTEM_PROMPT as _SINGLE_PROMPT
+
+        # Single-mode prompt
+        self._single_prompt_edit = QPlainTextEdit()
+        self._single_prompt_edit.setFixedHeight(80)
+        self._single_prompt_edit.setPlaceholderText(_SINGLE_PROMPT[:80] + "...")
+        self._single_prompt_edit.setPlainText(self._settings.system_prompt)
+        single_reset_btn = QPushButton("Reset")
+        single_reset_btn.clicked.connect(lambda: self._single_prompt_edit.clear())
+        single_row = QHBoxLayout()
+        single_row.setSpacing(6)
+        single_row.addWidget(self._single_prompt_edit, 1)
+        single_row.addWidget(single_reset_btn)
+        single_widget = QWidget()
+        single_widget.setLayout(single_row)
+        form.addRow("Single mode:", single_widget)
+
+        # Planner prompt
+        self._planner_prompt_edit = QPlainTextEdit()
+        self._planner_prompt_edit.setFixedHeight(80)
+        self._planner_prompt_edit.setPlaceholderText(_PLANNER_PROMPT[:80] + "...")
+        self._planner_prompt_edit.setPlainText(self._settings.planner_system_prompt)
+        planner_reset_btn = QPushButton("Reset")
+        planner_reset_btn.clicked.connect(lambda: self._planner_prompt_edit.clear())
+        planner_row = QHBoxLayout()
+        planner_row.setSpacing(6)
+        planner_row.addWidget(self._planner_prompt_edit, 1)
+        planner_row.addWidget(planner_reset_btn)
+        planner_widget = QWidget()
+        planner_widget.setLayout(planner_row)
+        form.addRow("Planner:", planner_widget)
+
+        # Worker prompt
+        self._worker_prompt_edit = QPlainTextEdit()
+        self._worker_prompt_edit.setFixedHeight(80)
+        self._worker_prompt_edit.setPlaceholderText(_WORKER_PROMPT[:80] + "...")
+        self._worker_prompt_edit.setPlainText(self._settings.worker_system_prompt)
+        worker_reset_btn = QPushButton("Reset")
+        worker_reset_btn.clicked.connect(lambda: self._worker_prompt_edit.clear())
+        worker_row = QHBoxLayout()
+        worker_row.setSpacing(6)
+        worker_row.addWidget(self._worker_prompt_edit, 1)
+        worker_row.addWidget(worker_reset_btn)
+        worker_widget = QWidget()
+        worker_widget.setLayout(worker_row)
+        form.addRow("Worker:", worker_widget)
 
         # Workspace
         ws_row = QHBoxLayout()
@@ -309,6 +399,10 @@ class SettingsDialog(QDialog):
             vision_enabled=self._vision_enabled_chk.isChecked(),
             vision_model=self._vision_model_combo.currentText(),
             vision_endpoint=self._vision_endpoint_combo.currentText(),
+            temperature=self._temperature_spin.value(),
+            system_prompt=self._single_prompt_edit.toPlainText().strip(),
+            planner_system_prompt=self._planner_prompt_edit.toPlainText().strip(),
+            worker_system_prompt=self._worker_prompt_edit.toPlainText().strip(),
         )
 
     def accept(self) -> None:  # type: ignore[override]

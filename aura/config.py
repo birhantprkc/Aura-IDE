@@ -293,6 +293,10 @@ class AppSettings:
     vision_enabled: bool = DEFAULT_VISION_ENABLED
     vision_model: str = DEFAULT_VISION_MODEL
     vision_endpoint: str = DEFAULT_VISION_ENDPOINT
+    temperature: float = 0.7
+    system_prompt: str = ""
+    planner_system_prompt: str = ""
+    worker_system_prompt: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
@@ -323,6 +327,18 @@ class AppSettings:
             s.vision_model = data["vision_model"]
         if isinstance(data.get("vision_endpoint"), str):
             s.vision_endpoint = data["vision_endpoint"]
+        # Temperature
+        if "temperature" in data:
+            raw = data["temperature"]
+            if isinstance(raw, (int, float)):
+                s.temperature = max(0.0, min(2.0, float(raw)))
+        # System prompts
+        if isinstance(data.get("system_prompt"), str):
+            s.system_prompt = data["system_prompt"]
+        if isinstance(data.get("planner_system_prompt"), str):
+            s.planner_system_prompt = data["planner_system_prompt"]
+        if isinstance(data.get("worker_system_prompt"), str):
+            s.worker_system_prompt = data["worker_system_prompt"]
         return s
 
 
