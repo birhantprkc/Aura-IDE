@@ -6,16 +6,16 @@ from PySide6.QtWidgets import QApplication
 
 
 # ---- color tokens ---------------------------------------------------------
-BG = "#1e1e1e"           # window background (was #181a20)
-BG_ALT = "#25252d"       # panels / generic cards (was #1f222a)
-BG_RAISED = "#2a2a33"    # input field, pressed buttons (was #262a33)
-BORDER = "#2e333d"
-BORDER_STRONG = "#3a4050"
+BG = "#141418"           # window background (was #1e1e1e)
+BG_ALT = "#1c1c22"       # panels / generic cards (was #25252d)
+BG_RAISED = "#222228"    # input field, pressed buttons (was #2a2a33)
+BORDER = "#252830"
+BORDER_STRONG = "#2e3340"
 
 # Message-card backgrounds — distinct so user/assistant turns separate at a glance.
-BG_USER_CARD = "#1e2536"        # cool blue tint (user — feels like input)
-BG_ASSISTANT_CARD = "#1f1f23"   # warm neutral (assistant — feels like output)
-BG_TOOL_CARD = "#1c2026"        # supporting info, slightly recessed
+BG_USER_CARD = "#151b28"        # cool blue tint (user — feels like input)
+BG_ASSISTANT_CARD = "#16161a"   # warm neutral (assistant — feels like output)
+BG_TOOL_CARD = "#13171c"        # supporting info, slightly recessed
 
 FG = "#eaecef"           # primary text — bumped for chat readability
 FG_BODY_USER = "#dde0e6"  # user message body
@@ -31,11 +31,11 @@ DANGER = "#f7768e"         # diff removals, errors, rejection
 WARN = "#e0af68"           # warning, read-only badge
 
 # Terminal card background
-TERMINAL_BG = "#0a0a0a"
+TERMINAL_BG = "#060608"
 
 # Diff hunk backgrounds (low-saturation)
-DIFF_ADD_BG = "#1d2a1f"
-DIFF_DEL_BG = "#2a1d20"
+DIFF_ADD_BG = "#151f17"
+DIFF_DEL_BG = "#1f1518"
 
 
 def apply_theme(app: QApplication) -> None:
@@ -188,7 +188,7 @@ QScrollBar::handle:vertical {{
     min-height: 30px;
 }}
 QScrollBar::handle:vertical:hover {{
-    background: #4a5263;
+    background: #3a4250;
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0;
@@ -243,40 +243,40 @@ QLabel#workspaceHint {{
 }}
 
 QFrame#leftPane {{
-    background: rgba(37, 37, 45, 0.70);
+    background: rgba(28, 28, 34, 0.65);
     border-right: 1px solid {BORDER};
 }}
 
 QFrame#card {{
-    background: rgba(37, 37, 45, 0.55);
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    border-right: 1px solid rgba(0, 0, 0, 0.20);
-    border-bottom: 1px solid rgba(0, 0, 0, 0.28);
-    border-left: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(28, 28, 34, 0.50);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-right: 1px solid rgba(0, 0, 0, 0.18);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+    border-left: 1px solid rgba(255, 255, 255, 0.04);
     border-radius: 10px;
 }}
 QFrame#userCard {{
-    background: rgba(30, 37, 54, 0.65);
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
-    border-right: 1px solid rgba(0, 0, 0, 0.25);
-    border-bottom: 1px solid rgba(0, 0, 0, 0.35);
+    background: rgba(21, 27, 40, 0.60);
+    border-top: 1px solid rgba(255, 255, 255, 0.09);
+    border-right: 1px solid rgba(0, 0, 0, 0.22);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.31);
     border-left: 3px solid {ACCENT};
     border-radius: 10px;
 }}
 QFrame#assistantCard {{
-    background: rgba(31, 31, 35, 0.60);
-    border-top: 1px solid rgba(255, 255, 255, 0.10);
-    border-right: 1px solid rgba(0, 0, 0, 0.22);
-    border-bottom: 1px solid rgba(0, 0, 0, 0.30);
-    border-left: 1px solid rgba(255, 255, 255, 0.07);
+    background: rgba(22, 22, 26, 0.55);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-right: 1px solid rgba(0, 0, 0, 0.20);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.27);
+    border-left: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 10px;
 }}
 QFrame#toolCard {{
-    background: rgba(28, 32, 38, 0.55);
-    border-top: 1px solid rgba(255, 255, 255, 0.07);
-    border-right: 1px solid rgba(0, 0, 0, 0.18);
-    border-bottom: 1px solid rgba(0, 0, 0, 0.25);
-    border-left: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(19, 23, 28, 0.50);
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    border-right: 1px solid rgba(0, 0, 0, 0.16);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.22);
+    border-left: 1px solid rgba(255, 255, 255, 0.04);
     border-radius: 8px;
 }}
 QFrame#toolCluster {{
@@ -285,7 +285,7 @@ QFrame#toolCluster {{
     border-left: 1px solid {BORDER_STRONG};
 }}
 QFrame#errorCard {{
-    background: rgba(247, 118, 142, 0.12);
+    background: rgba(247, 118, 142, 0.10);
     border: 1px solid {DANGER};
     border-radius: 10px;
 }}

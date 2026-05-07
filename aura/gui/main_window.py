@@ -236,9 +236,9 @@ class MainWindow(QMainWindow):
         center.setY(int(self.height() * 0.15))
         radius = max(self.width(), self.height()) * 0.8
         gradient = QRadialGradient(center, radius)
-        gradient.setColorAt(0.0, QColor(40, 45, 60, 255))
-        gradient.setColorAt(0.4, QColor(25, 28, 35, 255))
-        gradient.setColorAt(1.0, QColor(10, 12, 16, 255))
+        gradient.setColorAt(0.0, QColor(30, 34, 46, 255))
+        gradient.setColorAt(0.4, QColor(18, 20, 26, 255))
+        gradient.setColorAt(1.0, QColor(6, 8, 12, 255))
         painter.fillRect(self.rect(), gradient)
         painter.end()
         super().paintEvent(event)

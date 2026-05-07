@@ -171,7 +171,7 @@ class InputPanel(QFrame):
         super().__init__()
         self.setStyleSheet(
             "QFrame {"
-            "  background: rgba(42, 42, 51, 0.85);"
+            "  background: rgba(34, 34, 40, 0.85);"
             "  border: 1px solid rgba(255, 255, 255, 0.08);"
             "  border-radius: 18px;"
             "}"
@@ -220,8 +220,14 @@ class InputPanel(QFrame):
         self._stop_btn.clicked.connect(self.stop_requested.emit)
         controls.addWidget(self._stop_btn)
 
-        self._send_btn = QPushButton("Send  Ctrl+Enter")
+        self._send_btn = QPushButton("→")
         self._send_btn.setObjectName("primary")
+        font = self._send_btn.font()
+        font.setPointSize(14)
+        self._send_btn.setFont(font)
+        self._send_btn.setStyleSheet(
+            "QPushButton#primary { padding: 5px 14px; font-size: 16px; }"
+        )
         self._send_btn.clicked.connect(self._on_submit)
         controls.addWidget(self._send_btn)
 
@@ -243,9 +249,9 @@ class InputPanel(QFrame):
     def set_queued_messages(self, count: int) -> None:
         """Update the send button to show how many messages are queued."""
         if count > 0:
-            self._send_btn.setText(f"Send  Ctrl+Enter  [{count} queued]")
+            self._send_btn.setText(f"→  [{count} queued]")
         else:
-            self._send_btn.setText("Send  Ctrl+Enter")
+            self._send_btn.setText("→")
 
     # ---- attachments ------------------------------------------------------
 
