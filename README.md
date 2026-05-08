@@ -18,7 +18,7 @@ Built with [PySide6](https://pypi.org/project/PySide6/) (Qt for Python).
 
 - [Screenshots](#screenshots)
 - [Key Features](#key-features)
-- [Supported Providers & Models](#supported-providers-models)
+- [Supported Providers](#supported-providers)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Configuration](#configuration)
@@ -49,7 +49,7 @@ A two-agent system inspired by pair programming. The **Planner** reads your code
 
 ### Multi-Provider Support
 
-Choose between **DeepSeek**, **OpenAI**, **Google Gemini**, or **OpenRouter** as your AI provider. Each provider exposes multiple models with independent pricing. The Planner and Worker can use different models — for example, a fast model for the Planner and a more capable model for the Worker. See [Supported Providers & Models](#supported-providers-models) for the full catalogue.
+Choose between **DeepSeek**, **OpenAI**, **Google Gemini**, or **OpenRouter** as your AI provider. Each provider exposes multiple models with independent pricing. The Planner and Worker can use different models — for example, a fast model for the Planner and a more capable model for the Worker. See [Supported Providers](#supported-providers) for details.
 
 ### Filesystem Tools
 
@@ -105,7 +105,7 @@ Chats are saved to `.aura/conversations/` in your workspace as JSON. Restore you
 
 ### Session Cost Tracking
 
-A live status bar shows token usage (cache hit, cache miss, output tokens) and estimated cost in USD. Pricing is tracked per-model using the rates listed in [Supported Providers & Models](#supported-providers-models).
+A live status bar shows token usage (cache hit, cache miss, output tokens) and estimated cost in USD. Pricing is tracked per-model using the rates embedded in `aura/config.py`.
 
 ### Thinking Modes
 
@@ -121,58 +121,18 @@ The Worker has its own temperature setting (default 0.1) separate from the Plann
 
 ---
 
-## Supported Providers & Models
+## Supported Providers
 
-### DeepSeek
+Aura supports four AI providers. You choose one per session via the toolbar dropdown, then select any model from that provider's catalogue that the app exposes. The Planner and Worker always use the same provider but can be assigned different models and thinking modes.
 
-| Model | Label | Input (cache miss) | Input (cache hit) | Output |
-|-------|-------|--------------------|-------------------|--------|
-| `deepseek-v4-flash` | V4 Flash | $0.14 / M tokens | $0.014 / M tokens | $0.28 / M tokens |
-| `deepseek-v4-pro` | V4 Pro | $0.55 / M tokens | $0.07 / M tokens | $2.19 / M tokens |
+| Provider | Base URL | Env Var |
+|----------|----------|---------|
+| **DeepSeek** | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
+| **OpenAI** | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| **Google Gemini** | `https://generativelanguage.googleapis.com/v1beta/openai/` | `GEMINI_API_KEY` |
+| **OpenRouter** | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
 
-**Base URL:** `https://api.deepseek.com`  
-**Env var:** `DEEPSEEK_API_KEY`
-
-### OpenAI
-
-| Model | Label | Input (cache miss) | Input (cache hit) | Output |
-|-------|-------|--------------------|-------------------|--------|
-| `gpt-4o` | GPT-4o | $2.50 / M tokens | $1.25 / M tokens | $10.00 / M tokens |
-| `gpt-4o-mini` | GPT-4o Mini | $0.15 / M tokens | $0.075 / M tokens | $0.60 / M tokens |
-| `gpt-4.1` | GPT-4.1 | $2.00 / M tokens | $0.50 / M tokens | $8.00 / M tokens |
-
-**Base URL:** `https://api.openai.com/v1`  
-**Env var:** `OPENAI_API_KEY`
-
-### Google Gemini
-
-| Model | Label | Input (cache miss) | Input (cache hit) | Output |
-|-------|-------|--------------------|-------------------|--------|
-| `gemini-2.5-flash` | Gemini 2.5 Flash | $0.15 / M tokens | $0.015 / M tokens | $0.60 / M tokens |
-| `gemini-2.5-pro` | Gemini 2.5 Pro | $1.25 / M tokens | $0.25 / M tokens | $10.00 / M tokens |
-
-**Base URL:** `https://generativelanguage.googleapis.com/v1beta/openai/`  
-**Env var:** `GEMINI_API_KEY`
-
-### OpenRouter
-
-| Model | Label | Input (cache miss) | Input (cache hit) | Output |
-|-------|-------|--------------------|-------------------|--------|
-| `openai/gpt-4o` | OpenAI GPT-4o | $2.50 / M tokens | $1.25 / M tokens | $10.00 / M tokens |
-| `openai/gpt-4o-mini` | OpenAI GPT-4o Mini | $0.15 / M tokens | $0.075 / M tokens | $0.60 / M tokens |
-| `anthropic/claude-3.5-sonnet` | Claude 3.5 Sonnet | $3.00 / M tokens | $0.30 / M tokens | $15.00 / M tokens |
-| `anthropic/claude-3.7-sonnet` | Claude 3.7 Sonnet | $3.00 / M tokens | $0.30 / M tokens | $15.00 / M tokens |
-| `meta-llama/llama-3.1-8b-instruct` | Llama 3.1 8B | $0.06 / M tokens | $0.03 / M tokens | $0.06 / M tokens |
-| `meta-llama/llama-3.1-70b-instruct` | Llama 3.1 70B | $0.59 / M tokens | $0.30 / M tokens | $0.79 / M tokens |
-| `mistralai/mistral-7b-instruct` | Mistral 7B | $0.06 / M tokens | $0.03 / M tokens | $0.06 / M tokens |
-| `x-ai/grok-2-1212` | Grok 2 | $2.00 / M tokens | $1.00 / M tokens | $10.00 / M tokens |
-| `google/gemini-2.5-flash-001` | Gemini 2.5 Flash | $0.15 / M tokens | $0.015 / M tokens | $0.60 / M tokens |
-| `google/gemini-2.5-pro-001` | Gemini 2.5 Pro | $1.25 / M tokens | $0.25 / M tokens | $10.00 / M tokens |
-
-**Base URL:** `https://openrouter.ai/api/v1`  
-**Env var:** `OPENROUTER_API_KEY`
-
-> **Note:** Pricing data is sourced from official provider documentation and embedded in the app. Actual costs may vary; refer to each provider's current pricing page.
+> **Tip:** Model availability and pricing change frequently. The app embeds a current model catalogue and pricing table that you can inspect in `aura/config.py`. For the latest pricing, refer to each provider's official documentation.
 
 ---
 
