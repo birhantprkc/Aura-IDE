@@ -53,6 +53,34 @@ class DeepSeekClient:
     def provider(self) -> ProviderId:
         return self._provider
 
+    def list_models(self) -> list[str]:
+        """Fetch the list of available models from the provider's API."""
+        try:
+            models = self._client.models.list()
+            return [m.id for m in models]
+        except Exception:
+            return []
+
+    def fetch_raw_models(self) -> list[dict[str, Any]]:
+        """Fetch the raw model objects from the provider's API.
+        
+        For OpenRouter, this hits their special /models endpoint which includes 
+        pricing and capabilities.
+        """
+        try:
+            if self._provider == "openrouter":
+                # OpenRouter provides a richer metadata endpoint
+                import httpx
+                resp = httpx.get("https://openrouter.ai/api/v1/models")
+                resp.raise_for_status()
+                return resp.json().get("data", [])
+            
+            models = self._client.models.list()
+            # Convert OpenAI model objects to dicts for uniform handling
+            return [m.model_dump() for m in models]
+        except Exception:
+            return []
+
     def stream(
         self,
         messages: list[dict[str, Any]],

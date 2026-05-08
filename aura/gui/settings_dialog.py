@@ -29,9 +29,11 @@ from aura.config import (
     AppSettings,
     ProviderId,
     ThinkingMode,
+    fetch_provider_models,
     get_api_key,
     get_provider,
     icon_path,
+    save_dynamic_catalog,
     save_settings,
 )
 from aura.gui.theme import DANGER, FG_DIM, SUCCESS, WARN
@@ -93,6 +95,7 @@ class SettingsDialog(QDialog):
         form.setVerticalSpacing(10)
 
         # ---- Provider selection ----
+        provider_row = QHBoxLayout()
         self._provider_combo = QComboBox()
         for pid in ("deepseek", "openai", "google", "openrouter"):
             cfg = PROVIDERS[pid]  # type: ignore[literal-required]
@@ -101,7 +104,14 @@ class SettingsDialog(QDialog):
             list(PROVIDERS.keys()).index(self._settings.provider)
         )
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
-        form.addRow("Provider:", self._provider_combo)
+        provider_row.addWidget(self._provider_combo, 1)
+        
+        self._refresh_btn = QPushButton("Refresh")
+        self._refresh_btn.setToolTip("Fetch latest models and pricing from provider API")
+        self._refresh_btn.clicked.connect(self._on_refresh_models)
+        provider_row.addWidget(self._refresh_btn)
+        
+        form.addRow("Provider:", provider_row)
 
         # ---- API Key status ----
         self._api_key_status = QLabel("")
@@ -316,6 +326,42 @@ class SettingsDialog(QDialog):
         provider_id: ProviderId = self._provider_combo.currentData()
         self._populate_model_combos(provider_id)
         self._refresh_api_key_status(provider_id)
+
+    def _on_refresh_models(self) -> None:
+        """Trigger an async fetch of models for the current provider."""
+        provider_id: ProviderId = self._provider_combo.currentData()
+        self._refresh_btn.setEnabled(False)
+        self._refresh_btn.setText("Fetching...")
+
+        import threading
+        from PySide6.QtCore import QTimer
+
+        def _worker():
+            try:
+                models, pricing = fetch_provider_models(provider_id)
+                QTimer.singleShot(0, lambda: self._on_refresh_done(provider_id, models, pricing))
+            except Exception:
+                QTimer.singleShot(0, lambda: self._on_refresh_done(provider_id, {}, {}))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_refresh_done(self, provider_id: ProviderId, models: dict, pricing: dict) -> None:
+        self._refresh_btn.setEnabled(True)
+        self._refresh_btn.setText("Refresh")
+
+        if not models:
+            return
+
+        # Update the global PROVIDERS registry for this session
+        cfg = PROVIDERS[provider_id]
+        cfg.models.update(models)
+        cfg.pricing.update(pricing)
+        
+        # Persist to models_cache.json
+        save_dynamic_catalog(provider_id, models, pricing)
+        
+        # Re-populate the combos
+        self._populate_model_combos(provider_id)
 
     def _refresh_api_key_status(self, provider_id: ProviderId) -> None:
         cfg = PROVIDERS[provider_id]

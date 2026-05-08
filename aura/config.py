@@ -30,7 +30,7 @@ class ModelInfo:
     cache_hit_per_m_usd: float
 
 
-@dataclass(frozen=True)
+@dataclass
 class ProviderConfig:
     id: ProviderId
     label: str
@@ -311,6 +311,86 @@ def get_tavily_api_key() -> str | None:
     return os.environ.get(TAVILY_API_KEY_ENV) or None
 
 
+def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo], dict[str, dict[str, float]]]:
+    """Fetch models and pricing from the provider's API.
+    
+    Returns (models_dict, pricing_dict).
+    """
+    from aura.client.deepseek import DeepSeekClient
+    
+    try:
+        client = DeepSeekClient(provider=provider_id)
+        raw = client.fetch_raw_models()
+    except Exception:
+        return {}, {}
+        
+    models: dict[str, ModelInfo] = {}
+    pricing: dict[str, dict[str, float]] = {}
+    
+    if provider_id == "openrouter":
+        for m in raw:
+            mid = m.get("id", "")
+            if not mid:
+                continue
+            
+            # OpenRouter gives us friendly names and pricing!
+            name = m.get("name") or mid
+            # Pricing is in USD per 1k tokens in the API, we want per 1M.
+            # actually OpenRouter API returns strings for pricing sometimes or floats.
+            # Per docs: prompt, completion are in USD.
+            p = m.get("pricing", {})
+            try:
+                # Convert from price-per-token to price-per-1M-tokens
+                in_m = float(p.get("prompt", 0)) * 1_000_000
+                out_m = float(p.get("completion", 0)) * 1_000_000
+                # OpenRouter doesn't always expose cache pricing per-model in this endpoint.
+                # We'll default hit to half of miss if unknown.
+                hit_m = float(p.get("request", 0)) * 1_000_000 or (in_m * 0.5)
+            except (ValueError, TypeError):
+                in_m = out_m = hit_m = 0.0
+
+            models[mid] = ModelInfo(
+                id=mid,
+                label=name,
+                input_per_m_usd=in_m,
+                output_per_m_usd=out_m,
+                cache_hit_per_m_usd=hit_m
+            )
+            pricing[mid] = {"in_miss": in_m, "in_hit": hit_m, "out": out_m}
+    else:
+        # Standard OpenAI-compatible (DeepSeek, Google, OpenAI)
+        # These usually just give a list of IDs.
+        for m in raw:
+            mid = m.get("id") or m.get("name") # Some variants use name
+            if not mid:
+                continue
+            
+            # We don't have pricing for dynamic models on these providers 
+            # (they don't expose it via API usually). 
+            # We'll check if we have hardcoded pricing first.
+            existing_p = get_pricing(mid)
+            if existing_p:
+                in_m = existing_p["in_miss"]
+                hit_m = existing_p["in_hit"]
+                out_m = existing_p["out"]
+            else:
+                in_m = out_m = hit_m = 0.0
+            
+            # Friendly label: capitalized ID or stripped prefix
+            label = mid.split("/")[-1].replace("-", " ").title()
+            
+            models[mid] = ModelInfo(
+                id=mid,
+                label=label,
+                input_per_m_usd=in_m,
+                output_per_m_usd=out_m,
+                cache_hit_per_m_usd=hit_m
+            )
+            pricing[mid] = {"in_miss": in_m, "in_hit": hit_m, "out": out_m}
+
+    return models, pricing
+
+
 def require_tavily_api_key() -> str:
     """Like get_tavily_api_key() but raises RuntimeError if not found."""
     key = get_tavily_api_key()
@@ -537,3 +617,57 @@ def load_settings() -> AppSettings:
 def save_settings(settings: AppSettings) -> None:
     p = settings_path()
     p.write_text(json.dumps(asdict(settings), indent=2), encoding="utf-8")
+
+
+# ---- dynamic catalog persistence ------------------------------------------
+
+def catalog_cache_path() -> Path:
+    return config_dir() / "models_cache.json"
+
+
+def save_dynamic_catalog(provider_id: ProviderId, models: dict[str, ModelInfo], pricing: dict[str, dict[str, float]]) -> None:
+    """Save dynamically fetched models to a local cache file."""
+    path = catalog_cache_path()
+    data = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+    
+    # Convert ModelInfo to dict for JSON
+    models_raw = {k: asdict(v) for k, v in models.items()}
+    data[provider_id] = {
+        "models": models_raw,
+        "pricing": pricing
+    }
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def load_dynamic_catalog() -> None:
+    """Load cached models and update the PROVIDERS global registry."""
+    path = catalog_cache_path()
+    if not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+
+    for pid, entry in data.items():
+        if pid not in PROVIDERS:
+            continue
+        cfg = PROVIDERS[pid] # type: ignore[literal-required]
+        
+        cached_models = entry.get("models", {})
+        cached_pricing = entry.get("pricing", {})
+        
+        # Merge cached models into the provider's model dict
+        for mid, m_data in cached_models.items():
+            cfg.models[mid] = ModelInfo(**m_data)
+        # Merge cached pricing into the provider's pricing dict
+        for mid, p_data in cached_pricing.items():
+            cfg.pricing[mid] = p_data
+
+# Restore dynamic models on load
+load_dynamic_catalog()

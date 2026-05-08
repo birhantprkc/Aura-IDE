@@ -687,9 +687,11 @@ class MainWindow(QMainWindow):
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             old_provider = self._settings.provider
             self._settings = dlg.result_settings()
-            # If provider changed, refresh model combos and recreate the bridge client.
+            
+            # Always refresh combos to pick up dynamically fetched models
+            self._populate_model_combos(self._settings.provider)
+            
             if self._settings.provider != old_provider:
-                self._populate_model_combos(self._settings.provider)
                 self._bridge.set_provider(self._settings.provider)
             # Apply to current widgets.
             if self._settings.planner_worker_mode:
