@@ -639,8 +639,8 @@ class AuraPlayground(QWidget):
         try:
             parsed = json.loads(info["buffered_args"])
         except json.JSONDecodeError:
-            # Try regex to extract path from partial JSON
-            m = re.search(r'"path"\s*:\s*"([^"]*)', info["buffered_args"])
+            # Try regex to extract path from partial JSON (require closing quote)
+            m = re.search(r'"path"\s*:\s*"([^"]+)"', info["buffered_args"])
             if m and not info["path"]:
                 info["path"] = m.group(1)
                 # Create a placeholder card as soon as we know the path

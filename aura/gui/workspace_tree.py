@@ -20,8 +20,9 @@ from PySide6.QtCore import (
     QUrl,
     Signal,
 )
-from PySide6.QtGui import QAction, QDesktopServices, QFileIconProvider, QIcon
+from PySide6.QtGui import QAction, QDesktopServices, QIcon
 from PySide6.QtWidgets import (
+    QFileIconProvider,
     QFileSystemModel,
     QHeaderView,
     QMenu,

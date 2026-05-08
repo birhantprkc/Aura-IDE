@@ -45,8 +45,8 @@ class PygmentsHighlighter(QSyntaxHighlighter):
             
         self._format_cache: dict[tuple, QTextCharFormat] = {}
         self._lexer = TextLexer()
-        self.set_language(language)
         super().__init__(parent)
+        self.set_language(language)
 
     def set_language(self, language: str) -> None:
         """Update the lexer based on the language name or file extension."""
@@ -112,8 +112,6 @@ class DiffHighlighter(PygmentsHighlighter):
     """
 
     def __init__(self, parent, language: str = "text"):
-        super().__init__(parent, language)
-
         # Whole-line background only (token foregrounds shine through)
         self._add_bg = QTextCharFormat()
         self._add_bg.setBackground(QColor(DIFF_ADD_BG))
@@ -131,6 +129,8 @@ class DiffHighlighter(PygmentsHighlighter):
         # Hunk header format
         self._hunk_fmt = QTextCharFormat()
         self._hunk_fmt.setForeground(QColor(FG_DIM))
+
+        super().__init__(parent, language)
 
     def highlightBlock(self, text: str) -> None:
         if not text:
