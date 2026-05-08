@@ -407,7 +407,6 @@ class WorkerWindow(QWidget):
         self._card_layout = QVBoxLayout(self._card_container)
         self._card_layout.setContentsMargins(0, 0, 0, 0)
         self._card_layout.setSpacing(10)
-        self._card_layout.addStretch(1)
         scroll.setWidget(self._card_container)
         self._cards: list[CodeStreamCard] = []
         self._current_card: CodeStreamCard | None = None
@@ -425,8 +424,7 @@ class WorkerWindow(QWidget):
             self._current_card.finish()
         card = CodeStreamCard()
         self._cards.append(card)
-        # Insert before the trailing stretch
-        self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+        self._card_layout.addWidget(card, stretch=1)
         self._current_card = card
         card.begin()
         return card
