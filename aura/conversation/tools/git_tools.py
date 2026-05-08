@@ -71,11 +71,17 @@ def git_status(workspace_root: Path) -> dict[str, Any]:
 
             # Staged changes: X is not space and not "?".
             if x != " " and x != "?":
-                staged.append(raw_path)
+                if x in ("R", "C") and " -> " in raw_path:
+                    staged.append(raw_path.split(" -> ", 1)[1])
+                else:
+                    staged.append(raw_path)
 
             # Unstaged changes: Y is not space and not "?".
             if y != " " and y != "?":
-                unstaged.append(raw_path)
+                if y in ("R", "C") and " -> " in raw_path:
+                    unstaged.append(raw_path.split(" -> ", 1)[1])
+                else:
+                    unstaged.append(raw_path)
 
         # If no branch was found from ## header (empty repo), try show-current
         if not branch:
@@ -206,26 +212,200 @@ def git_diff(
 
         stdout = result.stdout
         max_bytes = 200_000
-        truncated = len(stdout.encode("utf-8")) > max_bytes
+        encoded = stdout.encode("utf-8")
+        truncated = len(encoded) > max_bytes
 
         if truncated:
-            # Truncate at byte boundary. Encode, slice, decode replacing errors.
-            encoded = stdout.encode("utf-8")
-            # Walk back to avoid splitting a multi-byte character.
-            while len(encoded) > max_bytes:
-                encoded = encoded[:max_bytes]
+            # Slice to max_bytes, then walk back to the last newline
+            sliced = encoded[:max_bytes]
+            last_nl = sliced.rfind(b"\n")
+            if last_nl > 0:
+                sliced = sliced[:last_nl]
+            # Walk back to a valid UTF-8 boundary
+            while sliced:
                 try:
-                    encoded.decode("utf-8")
-                except UnicodeDecodeError:
-                    max_bytes -= 1
-                else:
+                    sliced.decode("utf-8")
                     break
-            stdout = encoded.decode("utf-8") + "\n... [truncated at 200KB]"
+                except UnicodeDecodeError:
+                    sliced = sliced[:-1]
+            stdout = sliced.decode("utf-8") + "\n... [truncated at 200KB]\n"
 
         return {"ok": True, "diff": stdout, "truncated": truncated}
     except FileNotFoundError:
         return {"ok": False, "error": "git is not installed or not found on PATH."}
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "git diff timed out."}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def git_show(
+    workspace_root: Path,
+    commit_sha: str,
+) -> dict[str, Any]:
+    """Show the full diff and metadata for a specific commit.
+
+    Returns commit hash, author, date, message, and the diff.
+    Output is capped at 200KB.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "show", "--format=fuller", commit_sha],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(workspace_root),
+        )
+
+        if result.returncode != 0:
+            return {"ok": False, "error": result.stderr.strip() or "git show failed."}
+
+        stdout = result.stdout
+        max_bytes = 200_000
+        encoded = stdout.encode("utf-8")
+        truncated = len(encoded) > max_bytes
+
+        if truncated:
+            sliced = encoded[:max_bytes]
+            last_nl = sliced.rfind(b"\n")
+            if last_nl > 0:
+                sliced = sliced[:last_nl]
+            while sliced:
+                try:
+                    sliced.decode("utf-8")
+                    break
+                except UnicodeDecodeError:
+                    sliced = sliced[:-1]
+            stdout = sliced.decode("utf-8") + "\n... [truncated at 200KB]\n"
+
+        return {"ok": True, "output": stdout, "truncated": truncated}
+    except FileNotFoundError:
+        return {"ok": False, "error": "git is not installed or not found on PATH."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "git show timed out."}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def git_log_file(
+    workspace_root: Path,
+    path: str,
+    max_count: int = 10,
+) -> dict[str, Any]:
+    """Return the commit history for a single file, following renames.
+
+    Returns a list of commits that modified the file, each with hash,
+    message, author, and date. Uses --follow to track across renames.
+    """
+    try:
+        cmd = [
+            "git",
+            "log",
+            "--follow",
+            f"--max-count={max_count}",
+            "--format=%h||%s||%an||%ad",
+            "--date=short",
+            "--",
+            path,
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(workspace_root),
+        )
+
+        if result.returncode != 0:
+            return {"ok": False, "error": result.stderr.strip() or "git log_file failed."}
+
+        commits: list[dict[str, str]] = []
+        for line in result.stdout.strip().splitlines():
+            if not line:
+                continue
+            parts = line.split("||", 3)
+            if len(parts) >= 4:
+                commits.append({
+                    "hash": parts[0].strip(),
+                    "message": parts[1].strip(),
+                    "author": parts[2].strip(),
+                    "date": parts[3].strip(),
+                })
+            elif len(parts) >= 2:
+                commits.append({
+                    "hash": parts[0].strip(),
+                    "message": parts[1].strip(),
+                    "author": "",
+                    "date": "",
+                })
+            elif parts:
+                commits.append({
+                    "hash": parts[0].strip(),
+                    "message": "",
+                    "author": "",
+                    "date": "",
+                })
+
+        return {"ok": True, "commits": commits, "count": len(commits), "path": path}
+    except FileNotFoundError:
+        return {"ok": False, "error": "git is not installed or not found on PATH."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "git log_file timed out."}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def git_branch_list(
+    workspace_root: Path,
+) -> dict[str, Any]:
+    """List all local and remote branches with tracking info.
+
+    Returns branch names, whether each is the current HEAD, the upstream
+    tracking branch, and ahead/behind counts.
+    """
+    try:
+        # Use for-each-ref for machine-parseable output
+        # Format: name|HEAD|upstream|trackshort
+        result = subprocess.run(
+            [
+                "git",
+                "for-each-ref",
+                "--format=%(refname:short)|%(if)%(HEAD)%(then)*%(end)|%(upstream:short)|%(upstream:trackshort)",
+                "refs/heads/",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(workspace_root),
+        )
+
+        if result.returncode != 0:
+            return {"ok": False, "error": result.stderr.strip() or "git branch_list failed."}
+
+        branches: list[dict[str, Any]] = []
+        for line in result.stdout.strip().splitlines():
+            if not line:
+                continue
+            parts = line.split("|", 3)
+            if len(parts) < 1:
+                continue
+            name = parts[0].strip()
+            is_current = len(parts) > 1 and parts[1].strip() == "*"
+            upstream = parts[2].strip() if len(parts) > 2 and parts[2].strip() else None
+            trackshort = parts[3].strip() if len(parts) > 3 and parts[3].strip() else None
+
+            branches.append({
+                "name": name,
+                "current": is_current,
+                "upstream": upstream,
+                "ahead_behind": trackshort,
+            })
+
+        return {"ok": True, "branches": branches, "count": len(branches)}
+    except FileNotFoundError:
+        return {"ok": False, "error": "git is not installed or not found on PATH."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "git branch_list timed out."}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}

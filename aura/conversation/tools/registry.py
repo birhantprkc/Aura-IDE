@@ -21,7 +21,7 @@ from typing import Any, Callable, Literal
 from aura.conversation.tools.backup import backup_existing
 from aura.conversation.tools.find_usages import find_usages
 from aura.conversation.tools.fs_read import glob_files, list_directory, read_file, read_file_outline
-from aura.conversation.tools.git_tools import git_diff, git_log, git_status
+from aura.conversation.tools.git_tools import git_branch_list, git_diff, git_log, git_log_file, git_show, git_status
 from aura.conversation.tools.grep import grep_files
 from aura.conversation.tools.fs_write import propose_edit, propose_write
 from aura.conversation.tools.web import web_fetch, web_search
@@ -291,6 +291,72 @@ GIT_TOOL_DEFS: list[dict[str, Any]] = [
                         "description": "Optional workspace-relative path to show history for a single file.",
                     },
                 },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_show",
+            "description": (
+                "Show the full diff and metadata (author, date, message) "
+                "for a specific commit by its hash. Output is capped at "
+                "200KB. Use this to inspect what changed in a prior commit."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "commit_sha": {
+                        "type": "string",
+                        "description": "The full or abbreviated commit hash to show (e.g., 'abc1234' or 'HEAD~1').",
+                    },
+                },
+                "required": ["commit_sha"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_log_file",
+            "description": (
+                "Show the commit history for a single file, following "
+                "renames. Returns a list of commits that modified the file, "
+                "with hash, author, date, and message. Use this to understand "
+                "how a file has evolved over time."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path to the file (e.g., 'aura/git.py'). Required.",
+                    },
+                    "max_count": {
+                        "type": "integer",
+                        "description": "Maximum number of commits to return. Default: 10.",
+                        "default": 10,
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_branch_list",
+            "description": (
+                "List all local branches with tracking information. "
+                "Returns branch names, whether each is the current HEAD, "
+                "the upstream tracking branch, and ahead/behind counts. "
+                "Use this to see available branches and their relationship "
+                "to remotes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
                 "required": [],
             },
         },
@@ -700,6 +766,22 @@ class ToolRegistry:
                 max_count = int(args.get("max_count", 10))
                 path = args.get("path")
                 return ToolExecResult(ok=True, payload=git_log(self._root, max_count=max_count, path=path))
+
+            if name == "git_show":
+                commit_sha = args.get("commit_sha", "")
+                if not commit_sha:
+                    return ToolExecResult(ok=False, payload="Missing required parameter: commit_sha")
+                return ToolExecResult(ok=True, payload=git_show(self._root, commit_sha))
+
+            if name == "git_log_file":
+                path = args.get("path", "")
+                if not path:
+                    return ToolExecResult(ok=False, payload="Missing required parameter: path")
+                max_count = int(args.get("max_count", 10))
+                return ToolExecResult(ok=True, payload=git_log_file(self._root, path, max_count=max_count))
+
+            if name == "git_branch_list":
+                return ToolExecResult(ok=True, payload=git_branch_list(self._root))
 
             if name == "web_search":
                 query = args.get("query", "")
