@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -33,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from aura.gui.diff_dialog import render_unified_diff
 from aura.gui.aura_widget import AuraWidget
+from aura.gui.syntax import PygmentsHighlighter
 from aura.gui.theme import (
     ACCENT,
     BG,
@@ -111,6 +111,18 @@ def _render_markdown_with_code(text: str) -> str:
 
     intermediate = _CODE_FENCE_RE.sub(stash, text)
 
+    # Stash inline code (single backticks) so markdown won't touch it
+    _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+    inline_blocks: list[str] = []
+
+    def _stash_inline(match: re.Match[str]) -> str:
+        code = match.group(1)
+        idx = len(inline_blocks)
+        inline_blocks.append(code)
+        return f"AURAICODESTART{idx}AURAICODEEND"
+
+    intermediate = _INLINE_CODE_RE.sub(_stash_inline, intermediate)
+
     doc = QTextDocument()
     doc.setMarkdown(intermediate)
     html = doc.toHtml()
@@ -129,6 +141,20 @@ def _render_markdown_with_code(text: str) -> str:
             html = wrapped.sub(block, html, count=1)
         else:
             html = html.replace(token, block, 1)
+
+    # Replace inline code placeholders with styled spans
+    for i, code_text in enumerate(inline_blocks):
+        token = f"AURAICODESTART{i}AURAICODEEND"
+        escaped = _html.escape(code_text)
+        replacement = (
+            f'<span style="background-color: {BG_ALT}; '
+            f'color: {FG}; '
+            f"font-family: 'Geist Mono', 'JetBrains Mono', monospace; "
+            f'font-size: 0.95em; padding: 1px 4px; border-radius: 3px;">'
+            f'{escaped}</span>'
+        )
+        html = html.replace(token, replacement, 1)
+
     # Inject body color + line-height directly into the <body> tag of the
     # full HTML document produced by QTextDocument.toHtml(), instead of
     # wrapping it in a <div> (which would create invalid nested <html>/<body>).
@@ -778,15 +804,20 @@ class CodeWriterCard(QFrame):
         body_layout.addWidget(self._path_label)
 
         # Code view
-        self._code_view = QTextEdit()
+        self._code_view = QPlainTextEdit()
         self._code_view.setReadOnly(True)
         self._code_view.setFont(_mono_font(10))
-        self._code_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self._code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._code_view.setStyleSheet(
-            f"QTextEdit {{ background: {BG}; border: 1px solid {BORDER}; "
+            f"QPlainTextEdit {{ background: {BG}; border: 1px solid {BORDER}; "
             "border-radius: 4px; padding: 6px; }}"
         )
         body_layout.addWidget(self._code_view)
+
+        # Native syntax highlighter (language will be updated when path is known)
+        self._highlighter: PygmentsHighlighter | None = None
+        if _HAVE_PYGMENTS:
+            self._highlighter = PygmentsHighlighter(self._code_view.document(), "text")
 
         # Raw args fallback (shown when JSON can't be parsed yet)
         self._raw_view = QPlainTextEdit()
@@ -853,13 +884,16 @@ class CodeWriterCard(QFrame):
             self._path_label.setText(f"📄 {path}")
             self._path_label.setVisible(True)
             self._refresh_header()
+            # Update highlighter language from file extension
+            if self._highlighter is not None:
+                ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+                if ext:
+                    self._highlighter.set_language(ext)
 
         # Extract code content
         content = parsed.get(self._content_key, "")
         if content:
             self._code_view.setPlainText(content)
-            # Attempt Pygments highlighting
-            self._highlight_code()
             self._auto_size_code_view()
 
         # Show the body on first successful parse
@@ -877,37 +911,11 @@ class CodeWriterCard(QFrame):
                 self._path_label.setText(f"📄 {path}")
                 self._path_label.setVisible(True)
                 self._refresh_header()
-
-    def _highlight_code(self) -> None:
-        if not _HAVE_PYGMENTS or not self._path:
-            return
-        # Guess lexer from file extension
-        ext = self._path.rsplit(".", 1)[-1].lower() if "." in self._path else ""
-        try:
-            if ext:
-                lexer = get_lexer_by_name(ext)
-            else:
-                lexer = TextLexer()
-        except ClassNotFound:
-            lexer = TextLexer()
-        formatter = HtmlFormatter(
-            style="dracula",
-            noclasses=True,
-            nowrap=False,
-            prestyles=(
-                "background: transparent; border:none; "
-                "font-family:Consolas,'Cascadia Mono',monospace; "
-                "font-size:12px; line-height:1.4;"
-            ),
-        )
-        code = self._code_view.toPlainText()
-        try:
-            highlighted = highlight(code, lexer, formatter)
-            # Set as HTML in the code view via the underlying document
-            doc = self._code_view.document()
-            doc.setHtml(highlighted)
-        except Exception:
-            pass  # Fall back to plain text
+                # Also update highlighter from file extension
+                if self._highlighter is not None:
+                    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+                    if ext:
+                        self._highlighter.set_language(ext)
 
     def _auto_size_code_view(self) -> None:
         doc = self._code_view.document()
@@ -952,51 +960,24 @@ class CodeBlockCard(QFrame):
         layout.addWidget(header)
 
         # Code view
-        code_view = QTextEdit()
+        # Code view
+        code_view = QPlainTextEdit()
         code_view.setReadOnly(True)
         code_view.setFont(_mono_font(10))
-        code_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         code_view.setStyleSheet(
-            f"QTextEdit {{ background: {BG}; border: none; "
+            f"QPlainTextEdit {{ background: {BG}; border: none; "
             f"padding: 8px; border-radius: 4px; }}"
         )
         code_view.setPlainText(code)
         code_view.setMinimumHeight(40)
         code_view.setMaximumHeight(400)
-        # Auto-resize to content height (clamped by min/max)
         code_view.document().setDocumentMargin(2)
         layout.addWidget(code_view)
 
-        # Apply Pygments highlighting
-        self._highlight(code_view, language, code)
-
-    @staticmethod
-    def _highlight(view: QTextEdit, language: str, code: str) -> None:
-        if not _HAVE_PYGMENTS:
-            return
-        try:
-            if language:
-                lexer = get_lexer_by_name(language)
-            else:
-                lexer = TextLexer()
-        except ClassNotFound:
-            lexer = TextLexer()
-        formatter = HtmlFormatter(
-            style="dracula",
-            noclasses=True,
-            nowrap=False,
-            prestyles=(
-                "background: transparent; border: none; border-radius:6px; "
-                "padding:8px; font-family:'Geist Mono','JetBrains Mono',monospace; "
-                "font-size:12px; white-space:pre;"
-            ),
-        )
-        try:
-            highlighted = highlight(code, lexer, formatter)
-            doc = view.document()
-            doc.setHtml(highlighted)
-        except Exception:
-            pass  # Falls back to plain text set by caller
+        # Attach native syntax highlighter
+        if _HAVE_PYGMENTS:
+            PygmentsHighlighter(code_view.document(), language)
 
 
 class DiffCard(QFrame):

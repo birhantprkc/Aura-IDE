@@ -20,10 +20,10 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QStackedWidget,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -45,20 +45,14 @@ except (FileNotFoundError, OSError):
 
 
 # ---------------------------------------------------------------------------
-# Pygments helpers (mirrors the pattern in chat_view.py)
+# Native Pygments-based syntax highlighter (shared with chat_view)
 # ---------------------------------------------------------------------------
 
 try:
-    from pygments import highlight
-    from pygments.formatters import HtmlFormatter
-    from pygments.lexers import (
-        TextLexer,
-        get_lexer_by_name,
-    )
-    from pygments.util import ClassNotFound
-
+    from aura.gui.syntax import PygmentsHighlighter
     _HAVE_PYGMENTS = True
-except ImportError:  # pragma: no cover
+except ImportError:
+    PygmentsHighlighter = None  # type: ignore[assignment]
     _HAVE_PYGMENTS = False
 
 
@@ -83,50 +77,6 @@ def _language_from_path(path: str) -> str:
 def _is_previewable(language: str) -> bool:
     """Whether this language supports a rendered Preview toggle."""
     return language in ("html", "svg", "markdown", "mermaid")
-
-
-def _highlight_code(code: str, language: str) -> str:
-    """Return Pygments-highlighted HTML for the given code string.
-
-    Falls back to plain-text escaping when Pygments is unavailable.
-    """
-    if not _HAVE_PYGMENTS:
-        escaped = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        return (
-            f'<pre style="background:transparent; color:{FG}; '
-            f"border:none; border-radius:6px; padding:8px; "
-            f"font-family:'Geist Mono','JetBrains Mono',monospace;"
-            f'">{escaped}</pre>'
-        )
-
-    try:
-        if language:
-            lexer = get_lexer_by_name(language)
-        else:
-            lexer = TextLexer()
-    except ClassNotFound:
-        lexer = TextLexer()
-
-    formatter = HtmlFormatter(
-        style="dracula",
-        noclasses=True,
-        nowrap=False,
-        prestyles=(
-            "background: transparent; border: none; border-radius:6px; "
-            "padding:8px; font-family:'Geist Mono','JetBrains Mono',monospace; "
-            "font-size:12px; white-space:pre;"
-        ),
-    )
-    try:
-        return highlight(code, lexer, formatter)
-    except Exception:
-        escaped = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        return (
-            f'<pre style="background:transparent; color:{FG}; '
-            f"border:none; border-radius:6px; padding:8px; "
-            f"font-family:'Geist Mono','JetBrains Mono',monospace;"
-            f'">{escaped}</pre>'
-        )
 
 
 # ===========================================================================
@@ -382,19 +332,23 @@ class ArtifactCard(QFrame):
         self._stack.setStyleSheet("background: transparent;")
 
         # Page 0 — Code View
-        self._code_view = QTextEdit()
+        self._code_view = QPlainTextEdit()
         self._code_view.setReadOnly(True)
         font = QFont("Geist Mono, JetBrains Mono, Consolas, monospace")
         font.setStyleHint(QFont.StyleHint.Monospace)
         font.setPointSize(9)
         self._code_view.setFont(font)
         self._code_view.setStyleSheet(
-            f"QTextEdit {{ background: {BG}; "
+            f"QPlainTextEdit {{ background: {BG}; "
             f"border: none; padding: 8px; }}"
         )
         self._code_view.setMinimumHeight(60)
         self._code_view.setMaximumHeight(400)
         self._stack.addWidget(self._code_view)  # index 0
+
+        # Attach native syntax highlighter
+        if _HAVE_PYGMENTS:
+            PygmentsHighlighter(self._code_view.document(), language)
 
         # Page 1 — Preview View (QWebEngineView)
         self._preview_view = QWebEngineView()
@@ -495,12 +449,8 @@ class ArtifactCard(QFrame):
         self._typing_position += chunk
         partial = self._typing_target[:self._typing_position]
 
-        # Update code view with syntax-highlighted partial content
-        if _HAVE_PYGMENTS:
-            html = _highlight_code(partial, self._language)
-            self._code_view.document().setHtml(html)
-        else:
-            self._code_view.setPlainText(partial)
+        # Native highlighter applies colors automatically — no HTML needed
+        self._code_view.setPlainText(partial)
 
         # Auto-scroll to bottom
         sb = self._code_view.verticalScrollBar()
@@ -552,12 +502,8 @@ class ArtifactCard(QFrame):
     # ---- Internal refresh helpers -----------------------------------------
 
     def _refresh_code_view(self) -> None:
-        """Apply Pygments syntax highlighting to the code view."""
-        if _HAVE_PYGMENTS:
-            html = _highlight_code(self._content, self._language)
-            self._code_view.document().setHtml(html)
-        else:
-            self._code_view.setPlainText(self._content)
+        """Update the code view with current content."""
+        self._code_view.setPlainText(self._content)
 
     def _refresh_preview(self) -> None:
         """Render the preview in the QWebEngineView based on language."""
