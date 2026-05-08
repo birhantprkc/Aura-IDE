@@ -24,8 +24,9 @@ from aura.conversation.tools.fs_read import glob_files, list_directory, read_fil
 from aura.conversation.tools.git_tools import git_diff, git_status
 from aura.conversation.tools.grep import grep_files
 from aura.conversation.tools.fs_write import propose_edit, propose_write
+from aura.conversation.tools.web import web_fetch, web_search
 ApprovalAction = Literal["approve", "reject", "reject_all", "approve_all"]
-RegistryMode = Literal["single", "planner", "worker"]
+RegistryMode = Literal["single", "planner", "worker", "researcher"]
 
 
 @dataclass
@@ -427,6 +428,54 @@ WORKER_TODO_TOOL_DEF: dict[str, Any] = {
     },
 }
 
+WEB_TOOL_DEFS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the web using DuckDuckGo. Returns a list of result objects "
+                "with title, href (URL), and body (snippet)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query, e.g. 'python 3.13 features'.",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return. Default: 5.",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": (
+                "Fetch and scrape the text content of a URL. Returns the page title "
+                "and a cleaned, truncated text version of the content."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The full URL to fetch, e.g. 'https://docs.python.org/3/whatsnew/3.13.html'.",
+                    }
+                },
+                "required": ["url"],
+            },
+        },
+    },
+]
+
 TERMINAL_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -514,7 +563,7 @@ class ToolRegistry:
         if self._read_only:
             return list(READ_TOOL_DEFS) + list(GIT_TOOL_DEFS)
         if self._mode == "researcher":
-            return []  # web tools removed; awaiting rebuild
+            return list(WEB_TOOL_DEFS)
         if self._mode == "planner":
             return list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)] + list(RESEARCH_TOOL_DEFS) + list(GIT_TOOL_DEFS)
         if self._mode == "worker":
@@ -619,6 +668,14 @@ class ToolRegistry:
                 staged = bool(args.get("staged", False))
                 path = args.get("path")
                 return ToolExecResult(ok=True, payload=git_diff(self._root, staged=staged, path=path))
+
+            if name == "web_search":
+                query = args.get("query", "")
+                max_results = int(args.get("max_results", 5))
+                return ToolExecResult(ok=True, payload=web_search(query, max_results))
+            if name == "web_fetch":
+                url = args.get("url", "")
+                return ToolExecResult(ok=True, payload=web_fetch(url))
 
             if name in ("write_file", "edit_file"):
                 if self._read_only:

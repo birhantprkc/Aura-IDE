@@ -777,9 +777,8 @@ class MainWindow(QMainWindow):
                     )
                 
                 # Marshal back to GUI thread to actually send the message
-                from PySide6.QtCore import QMetaObject, Qt
-                QMetaObject.invokeMethod(self, "_on_vision_done", Qt.QueuedConnection, 
-                                        payload, vision_descriptions, vision_error)
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self._on_vision_done(payload, vision_descriptions, vision_error))
 
             import threading
             threading.Thread(target=_run_vision, daemon=True).start()
@@ -1126,12 +1125,11 @@ class MainWindow(QMainWindow):
                     provider=provider,
                 )
                 # Update the current path pointer on the GUI thread
-                from PySide6.QtCore import QMetaObject, Qt
-                QMetaObject.invokeMethod(self, "_set_current_conv_path", Qt.QueuedConnection, path)
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self._set_current_conv_path(path))
             except OSError as exc:
-                from PySide6.QtCore import QMetaObject, Qt
-                QMetaObject.invokeMethod(self._chat, "add_error", Qt.QueuedConnection, 
-                                        "Could not save conversation", str(exc))
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self._chat.add_error("Could not save conversation", str(exc)))
 
         import threading
         threading.Thread(target=_run_save, daemon=True).start()

@@ -1,0 +1,54 @@
+"""Web search and fetching tools using DuckDuckGo and BeautifulSoup."""
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import httpx
+from bs4 import BeautifulSoup
+from ddgs import DDGS
+
+
+def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
+    """Search the web using DuckDuckGo. Returns a list of result objects."""
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+        return {"ok": True, "results": results}
+    except Exception as exc:
+        return {"ok": False, "error": f"Search failed: {exc}"}
+
+
+def web_fetch(url: str) -> dict[str, Any]:
+    """Fetch and scrape the text content of a URL."""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        with httpx.Client(follow_redirects=True, timeout=15.0, headers=headers) as client:
+            resp = client.get(url)
+            resp.raise_for_status()
+            
+        soup = BeautifulSoup(resp.text, "html.parser")
+        
+        # Remove script and style elements
+        for script_or_style in soup(["script", "style", "header", "footer", "nav"]):
+            script_or_style.decompose()
+            
+        # Get text, clean up whitespace
+        text = soup.get_text(separator="\n")
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        clean_text = "\n".join(lines)
+        
+        # Cap to avoid context overflow (approx 10k chars)
+        if len(clean_text) > 10000:
+            clean_text = clean_text[:10000] + "... [truncated]"
+            
+        return {
+            "ok": True, 
+            "url": url, 
+            "title": soup.title.string if soup.title else url,
+            "content": clean_text
+        }
+    except Exception as exc:
+        return {"ok": False, "error": f"Fetch failed: {exc}"}

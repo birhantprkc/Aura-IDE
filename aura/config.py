@@ -16,7 +16,7 @@ APP_AUTHOR = "Aura"
 # Provider types and registry
 # ---------------------------------------------------------------------------
 
-ProviderId = Literal["deepseek", "openai", "google"]
+ProviderId = Literal["deepseek", "openai", "google", "openrouter"]
 ThinkingMode = Literal["off", "high", "max"]
 ModelId = str  # Any model string from any provider
 

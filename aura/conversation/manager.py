@@ -313,10 +313,75 @@ class ConversationManager:
             on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=False, result=payload))
             return
         
-        # Web search has been removed and is awaiting rebuild.
-        payload = json.dumps({"ok": False, "error": "Web search has been removed and is being rebuilt. Research is temporarily unavailable."})
-        self._history.append_tool_result(tool_call_id, payload)
-        on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=False, result=payload))
+        # Web research loop using a sub-agent
+        res_tools = ToolRegistry(self._tools.workspace_root, mode="researcher")
+        res_history = History()
+        res_history.set_system(
+            "You are a skilled Research Sub-Agent. Your goal is to answer the objective "
+            "below using web search and page fetching. Be thorough but efficient. "
+            "When you have enough information, write a detailed, synthesized report "
+            "answering the objective and STOP. Do not provide a generic summary; "
+            "answer the specific question."
+        )
+        res_history.append_user_text(f"Objective: {objective}")
+
+        final_report = "Research failed to produce a report."
+        thinking: ThinkingMode = "off" # Keep researcher fast
+        
+        try:
+            for _round in range(5): # Max 5 research steps
+                if cancel_event.is_set():
+                    break
+                
+                full_msg = None
+                for ev in self._client.stream(
+                    messages=res_history.for_api(),
+                    tools=res_tools.tool_defs(),
+                    model=model,
+                    thinking=thinking,
+                    cancel_event=cancel_event,
+                    temperature=temperature,
+                ):
+                    # For now, we don't stream researcher sub-events to the main UI
+                    # to avoid card nesting complexity.
+                    if isinstance(ev, Done):
+                        full_msg = ev.full_message
+                    if isinstance(ev, ApiError):
+                        raise Exception(f"Research API Error: {ev.message}")
+
+                if not full_msg:
+                    break
+                
+                res_history.append_assistant(full_msg)
+                tool_calls = full_msg.get("tool_calls") or []
+                
+                if not tool_calls:
+                    final_report = full_msg.get("content") or "Research complete (no content)."
+                    break
+                
+                for tc in tool_calls:
+                    if cancel_event.is_set():
+                        break
+                    tc_id = tc["id"]
+                    fn = tc["function"]
+                    name = fn["name"]
+                    try:
+                        t_args = json.loads(fn.get("arguments") or "{}")
+                    except json.JSONDecodeError:
+                        t_args = {}
+                    
+                    # Execute web tool (no approval needed for search/fetch)
+                    res = res_tools.execute(name, t_args, approval_cb=lambda r: ApprovalDecision("approve"))
+                    res_history.append_tool_result(tc_id, res.to_tool_message_content())
+
+            payload = json.dumps({"ok": True, "report": final_report}, ensure_ascii=False)
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=True, result=payload))
+
+        except Exception as exc:
+            payload = json.dumps({"ok": False, "error": str(exc)})
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=False, result=payload))
 
     def _apply_circuit_breaker(self, name: str, args: dict, ok: bool, result_payload: str) -> str:
         """Track tool failures and inject warnings if they repeat consecutively."""
