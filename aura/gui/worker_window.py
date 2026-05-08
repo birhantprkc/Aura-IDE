@@ -5,6 +5,9 @@ Shows a pinned TODO list and a single scrolling card for worker streaming output
 
 from __future__ import annotations
 
+import json
+import re
+
 from PySide6.QtCore import QEasingCurve, Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -290,7 +293,7 @@ class CodeStreamCard(QFrame):
 
 
 class WorkerWindow(QWidget):
-    """Embeddable panel showing live worker activity for all dispatches."""
+    """Shows a pinned TODO list and a single code-stream card that displays only the file being edited by the worker."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -322,31 +325,70 @@ class WorkerWindow(QWidget):
         scroll.setWidget(self._card)
         layout.addWidget(scroll, 1)
 
+        self._write_tools: dict[str, dict] = {}  # worker_tool_id -> {name, buffered_args, last_content_len, path}
+
     # ---- public streaming API ----------------------------------------------
 
     def begin_assistant(self) -> None:
         self._card.begin()
+        self._write_tools.clear()
 
     def append_reasoning(self, text: str) -> None:
-        self._card.append(f"/* thinking */ {text}")
+        """Drop all thinking — no-op."""
 
     def append_content(self, text: str) -> None:
-        self._card.append(text)
+        """Drop all content text — no-op."""
 
     def add_tool_call(self, worker_tool_id: str, name: str) -> None:
-        if name == "update_todo_list":
-            return  # Pinned todo widget handles this, don't render a tool card.
-        self._card.append(f"\n// 🛠 {name}\n")
+        """Only track write_file and edit_file tool calls."""
+        if name in ("write_file", "edit_file"):
+            self._write_tools[worker_tool_id] = {
+                "name": name,
+                "buffered_args": "",
+                "last_content_len": 0,
+                "path": "",
+            }
 
     def append_tool_args(self, worker_tool_id: str, fragment: str) -> None:
-        # no-op: simplified card doesn't show tool args
-        pass
+        """Extract code content from streaming JSON and feed new characters to the card."""
+        info = self._write_tools.get(worker_tool_id)
+        if info is None:
+            return
+
+        info["buffered_args"] += fragment
+
+        try:
+            parsed = json.loads(info["buffered_args"])
+        except json.JSONDecodeError:
+            # Try regex to extract path from partial JSON for the header
+            m = re.search(r'"path"\s*:\s*"([^"]*)', info["buffered_args"])
+            if m and not info["path"]:
+                info["path"] = m.group(1)
+                self._card.append(f"📄 {info['path']}\n\n")
+            return
+
+        # Successfully parsed full JSON
+        path = parsed.get("path", "")
+        if path and path != info["path"]:
+            info["path"] = path
+            self._card.append(f"📄 {path}\n\n")
+
+        content_key = "content" if info["name"] == "write_file" else "new_str"
+        content = parsed.get(content_key, "")
+        new_chars = content[info["last_content_len"] :]
+        if new_chars:
+            self._card.append(new_chars)
+            info["last_content_len"] = len(content)
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str) -> None:
-        self._card.append(" // ✓\n" if ok else " // ✗\n")
+        """On failure append a brief failure marker; on success, nothing extra."""
+        if worker_tool_id in self._write_tools:
+            del self._write_tools[worker_tool_id]
+            if not ok:
+                self._card.append("\n// ✗ failed\n")
 
     def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
-        self._card.append(text)
+        """Drop all terminal output — no-op."""
 
     def add_diff_card(
         self,
@@ -357,19 +399,15 @@ class WorkerWindow(QWidget):
         decision: str,
         is_new_file: bool,
     ) -> None:
-        self._card.append(f"\n// 📄 {decision}: {rel_path}\n")
+        """Drop all diff cards — no-op."""
 
     def add_error(self, message: str) -> None:
-        self._card.append(f"\n// ❌ {message}\n")
+        """Drop all errors — no-op."""
 
     def worker_finished(self, ok: bool, summary: str) -> None:
-        self._card.append(
-            f"\n// {'✅ Completed' if ok else '❌ Completed with errors'}\n"
-        )
         self._card.finish()
 
     def worker_cancelled(self) -> None:
-        self._card.append("\n// ⏹ Cancelled\n")
         self._card.finish()
 
     def update_todo_list(self, tasks: list) -> None:
@@ -380,3 +418,4 @@ class WorkerWindow(QWidget):
         """Remove all card content and reset state (called on New Conversation)."""
         self._card.clear()
         self._todo_widget.update_tasks([])
+        self._write_tools.clear()
