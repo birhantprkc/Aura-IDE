@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -128,8 +129,11 @@ def _render_markdown_with_code(text: str) -> str:
             html = wrapped.sub(block, html, count=1)
         else:
             html = html.replace(token, block, 1)
-    # Final wrap: enforce body color + a comfortable line-height for paragraphs.
-    return f'<div style="color: {FG}; line-height: 145%;">{html}</div>'
+    # Inject body color + line-height directly into the <body> tag of the
+    # full HTML document produced by QTextDocument.toHtml(), instead of
+    # wrapping it in a <div> (which would create invalid nested <html>/<body>).
+    html = html.replace("<body ", f'<body style="color: {FG}; line-height: 145%;" ', 1)
+    return html
 
 
 def _wrap_body_text(text: str, color: str) -> str:
@@ -774,13 +778,13 @@ class CodeWriterCard(QFrame):
         body_layout.addWidget(self._path_label)
 
         # Code view
-        self._code_view = QPlainTextEdit()
+        self._code_view = QTextEdit()
         self._code_view.setReadOnly(True)
         self._code_view.setFont(_mono_font(10))
-        self._code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._code_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self._code_view.setStyleSheet(
-            f"background: {BG}; border: 1px solid {BORDER}; "
-            "border-radius: 4px; padding: 6px;"
+            f"QTextEdit {{ background: {BG}; border: 1px solid {BORDER}; "
+            "border-radius: 4px; padding: 6px; }}"
         )
         body_layout.addWidget(self._code_view)
 
@@ -948,12 +952,12 @@ class CodeBlockCard(QFrame):
         layout.addWidget(header)
 
         # Code view
-        code_view = QPlainTextEdit()
+        code_view = QTextEdit()
         code_view.setReadOnly(True)
         code_view.setFont(_mono_font(10))
-        code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        code_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         code_view.setStyleSheet(
-            f"QPlainTextEdit {{ background: {BG}; border: none; "
+            f"QTextEdit {{ background: {BG}; border: none; "
             f"padding: 8px; border-radius: 4px; }}"
         )
         code_view.setPlainText(code)
@@ -967,7 +971,7 @@ class CodeBlockCard(QFrame):
         self._highlight(code_view, language, code)
 
     @staticmethod
-    def _highlight(view: QPlainTextEdit, language: str, code: str) -> None:
+    def _highlight(view: QTextEdit, language: str, code: str) -> None:
         if not _HAVE_PYGMENTS:
             return
         try:

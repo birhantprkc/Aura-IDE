@@ -20,10 +20,10 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
-    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QStackedWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -382,14 +382,14 @@ class ArtifactCard(QFrame):
         self._stack.setStyleSheet("background: transparent;")
 
         # Page 0 — Code View
-        self._code_view = QPlainTextEdit()
+        self._code_view = QTextEdit()
         self._code_view.setReadOnly(True)
         font = QFont("Geist Mono, JetBrains Mono, Consolas, monospace")
         font.setStyleHint(QFont.StyleHint.Monospace)
         font.setPointSize(9)
         self._code_view.setFont(font)
         self._code_view.setStyleSheet(
-            f"QPlainTextEdit {{ background: {BG}; "
+            f"QTextEdit {{ background: {BG}; "
             f"border: none; padding: 8px; }}"
         )
         self._code_view.setMinimumHeight(60)
