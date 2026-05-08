@@ -574,12 +574,18 @@ class AuraPlayground(QWidget):
         self._write_tools: dict[str, dict] = {}
         self._artifact_counter = 0
         self._auras: dict[str, AuraWidget] = {}
+        self._worker_banner: QLabel | None = None
     # ---- helpers -----------------------------------------------------------
 
     def _add_artifact(
         self, artifact_id: str, label: str, language: str, content: str
     ) -> ArtifactCard:
         """Create card, add to layout, store in dict, return it."""
+        # Hide the "Worker active" banner now that we have real output
+        if self._worker_banner is not None:
+            self._worker_banner.setVisible(False)
+            if hasattr(self, '_banner_pulse_timer'):
+                self._banner_pulse_timer.stop()
         card = ArtifactCard(artifact_id, label, language, content)
         self._artifacts[artifact_id] = card
         # Wrap in AuraWidget for breathing glow effect
@@ -596,6 +602,17 @@ class AuraPlayground(QWidget):
         if bar:
             bar.setValue(bar.maximum())
 
+    def _toggle_banner_opacity(self) -> None:
+        if self._worker_banner is None:
+            return
+        effect = self._worker_banner.graphicsEffect()
+        if effect is None:
+            effect = QGraphicsOpacityEffect(self._worker_banner)
+            effect.setOpacity(1.0)
+            self._worker_banner.setGraphicsEffect(effect)
+        current = effect.opacity()
+        effect.setOpacity(0.4 if current > 0.7 else 1.0)
+
     # ---- public streaming API (matches old WorkerWindow) ------------------
 
     def begin_assistant(self) -> None:
@@ -606,6 +623,20 @@ class AuraPlayground(QWidget):
         self._auras.clear()
         self._write_tools.clear()
         self._artifact_counter = 0
+        # Show a pulsing "Worker active" banner while the worker starts up
+        if self._worker_banner is None:
+            self._worker_banner = QLabel("◉  Worker active — awaiting tool calls…")
+            self._worker_banner.setStyleSheet(
+                f"color: {FG_DIM}; font-size: 11px; padding: 8px 12px;"
+            )
+        self._card_layout.insertWidget(0, self._worker_banner)
+        self._worker_banner.setVisible(True)
+        # Subtle fade pulse via a timer-driven opacity toggle
+        if not hasattr(self, '_banner_pulse_timer'):
+            from PySide6.QtCore import QTimer
+            self._banner_pulse_timer = QTimer(self)
+            self._banner_pulse_timer.timeout.connect(self._toggle_banner_opacity)
+        self._banner_pulse_timer.start(700)
 
     def append_reasoning(self, text: str) -> None:
         """No-op."""
@@ -614,7 +645,11 @@ class AuraPlayground(QWidget):
         """No-op."""
 
     def add_tool_call(self, worker_tool_id: str, name: str) -> None:
-        """Track write_file / edit_file calls for artifact streaming."""
+        """Track write_file / edit_file calls for artifact streaming.
+        
+        Immediately creates a placeholder artifact card with a pulsing aura
+        so the user sees a "target lock" even before the first args arrive.
+        """
         if name in ("write_file", "edit_file"):
             self._write_tools[worker_tool_id] = {
                 "name": name,
@@ -623,6 +658,15 @@ class AuraPlayground(QWidget):
                 "path": "",
                 "content": "",
             }
+            # Eagerly create a placeholder card with a pulsing aura.
+            artifact_id = f"file-{worker_tool_id}"
+            if artifact_id not in self._artifacts:
+                label = "Targeting file…" if name == "write_file" else "Reading target…"
+                card = self._add_artifact(artifact_id, label, "text", "")
+                card.set_streaming(True)
+                aura = self._auras.get(artifact_id)
+                if aura is not None:
+                    aura.start_aura()
 
     def append_tool_args(self, worker_tool_id: str, fragment: str) -> None:
         """Stream JSON args for write_file/edit_file, creating/updating ArtifactCards.
@@ -643,12 +687,21 @@ class AuraPlayground(QWidget):
             m = re.search(r'"path"\s*:\s*"([^"]+)"', info["buffered_args"])
             if m and not info["path"]:
                 info["path"] = m.group(1)
-                # Create a placeholder card as soon as we know the path
+                # Card was already created eagerly in add_tool_call —
+                # update its label and language now that we know the path.
                 artifact_id = f"file-{worker_tool_id}"
-                if artifact_id not in self._artifacts:
+                card = self._artifacts.get(artifact_id)
+                if card is not None:
                     language = _language_from_path(info["path"])
                     label = Path(info["path"]).name
-                    self._add_artifact(artifact_id, label, language, "")
+                    card._label = label
+                    card._header_label.setText(label)
+                    card._language = language
+                    # Re-attach syntax highlighter for the new language
+                    if _HAVE_PYGMENTS and card._highlighter is not None:
+                        card._highlighter.deleteLater()
+                    if _HAVE_PYGMENTS:
+                        card._highlighter = PygmentsHighlighter(card._code_view.document(), language)
             # Also try to extract old_str from partial JSON for edit_file
             m_old = re.search(r'"old_str"\s*:\s*"', info["buffered_args"])
             if m_old and "old_str_seen" not in info:
@@ -667,26 +720,52 @@ class AuraPlayground(QWidget):
         if info["name"] == "write_file":
             content = parsed.get("content", "")
             info["content"] = content
-            if artifact_id not in self._artifacts:
+            card = self._artifacts.get(artifact_id)
+            if card is not None:
+                # Update the label if path was just resolved in this parse
+                if path and card._label in ("Targeting file…",):
+                    card._label = label
+                    card._header_label.setText(label)
+                    card._language = language
+                    if _HAVE_PYGMENTS:
+                        if card._highlighter is not None:
+                            card._highlighter.deleteLater()
+                        card._highlighter = PygmentsHighlighter(card._code_view.document(), language)
+                card.update_content(content)
+            else:
+                # Fallback: card not yet created (shouldn't happen, but be safe)
                 card = self._add_artifact(artifact_id, label, language, content)
                 card.set_streaming(True)
                 aura = self._auras.get(artifact_id)
                 if aura is not None:
                     aura.start_aura()
-            else:
-                self._artifacts[artifact_id].update_content(content)
 
         elif info["name"] == "edit_file":
             old_str = parsed.get("old_str", "")
             new_str = parsed.get("new_str", "")
-            if artifact_id not in self._artifacts:
-                # Start by showing old_str
+            card = self._artifacts.get(artifact_id)
+            if card is None:
+                # Fallback: card not yet created
                 card = self._add_artifact(artifact_id, label, language, old_str if old_str else "")
                 card.set_edit_phase("old")
                 card._edit_old_str = old_str
                 card._edit_new_str = ""
-            card = self._artifacts[artifact_id]
-            if new_str and not card._edit_new_str:
+            else:
+                # Update the label if path was just resolved
+                if path and card._label in ("Reading target…",):
+                    card._label = label
+                    card._header_label.setText(label)
+                    card._language = language
+                    if _HAVE_PYGMENTS:
+                        if card._highlighter is not None:
+                            card._highlighter.deleteLater()
+                        card._highlighter = PygmentsHighlighter(card._code_view.document(), language)
+                # If we haven't shown old_str yet, do it now
+                if old_str and not card._edit_old_str:
+                    card.set_edit_phase("old")
+                    card._edit_old_str = old_str
+                    card.update_content(old_str)
+            if new_str and (not card._edit_new_str):
                 # First chunk of new_str arrived — transition to showing new_str
                 card.set_edit_phase("new")
                 card.set_streaming(True)
@@ -761,6 +840,10 @@ class AuraPlayground(QWidget):
         self._write_tools.clear()
         self._artifact_counter = 0
         self._todo_widget.update_tasks([])
+        if self._worker_banner is not None:
+            self._worker_banner.setVisible(False)
+        if hasattr(self, '_banner_pulse_timer'):
+            self._banner_pulse_timer.stop()
 
     # ---- New methods -------------------------------------------------------
 

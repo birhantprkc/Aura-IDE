@@ -854,8 +854,22 @@ class MainWindow(QMainWindow):
         self._on_send(payload)
 
     def _on_stream_done(self, finish_reason: str, full_message: dict) -> None:
-        # Render markdown for the final answer.
-        self._chat.assistant_done()
+        # Check whether the planner is about to dispatch to a worker.
+        # If so, keep the aura breathing in "coding" state through the
+        # dispatch resolution and worker execution — the planner is still
+        # busy in its tool loop.
+        tool_calls = full_message.get("tool_calls") or []
+        has_dispatch = any(
+            tc.get("function", {}).get("name") == "dispatch_to_worker"
+            for tc in tool_calls
+        )
+        if has_dispatch:
+            # Finalize markdown but keep the aura pulsing.
+            self._chat.finalize_markdown_only()
+            self._chat.hold_aura_coding()
+        else:
+            # No pending dispatch — normal end of stream, stop the aura.
+            self._chat.assistant_done()
         # Auto-save after each assistant turn — including partial tool-call rounds.
         self._auto_save_conversation()
 
@@ -911,6 +925,10 @@ class MainWindow(QMainWindow):
         self._bridge.user_cancelled_dispatch(tool_call_id)
 
     def _on_worker_started(self, tool_call_id: str) -> None:
+        # Baton pass: stop the planner's aura so the worker's playground
+        # takes over the visual pulse. The planner aura was held alive by
+        # finalize_markdown_only() + hold_aura_coding() in _on_stream_done.
+        self._chat.stop_current_aura()
         self._playground.begin_assistant()
         self._input.set_streaming(False)
 

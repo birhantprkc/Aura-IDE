@@ -1613,6 +1613,26 @@ class ChatView(QScrollArea):
         if self._current_aura is not None:
             self._current_aura.stop_aura()
 
+    def finalize_markdown_only(self) -> None:
+        """Finalize Markdown rendering without stopping the breathing aura.
+
+        Use this when the stream has ended but the planner is still busy
+        (e.g. waiting for dispatch resolution) so the aura should keep pulsing.
+        """
+        ac = self._current_assistant
+        if ac is not None:
+            ac.finalize_content()
+
+    def hold_aura_coding(self) -> None:
+        """Transition the current aura to 'coding' color and ensure it stays alive.
+
+        Call after finalize_markdown_only() when the pending work involves
+        tool execution (dispatch_to_worker or other tool calls).
+        Safe to call when _current_aura is None (no-op).
+        """
+        if self._current_aura is not None:
+            self._current_aura.set_glow_state("coding")
+
     def stop_current_aura(self) -> None:
         """Stop the breathing glow on the current assistant card without finalizing content."""
         if self._current_aura is not None:
