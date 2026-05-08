@@ -859,6 +859,19 @@ class CodeWriterCard(QFrame):
             f"QToolButton#sectionToggle {{ color: {state_color}; }}"
         )
 
+    def set_target_path(self, path: str) -> None:
+        """Update path, labels, and highlighter from file extension."""
+        self._path = path
+        self._path_label.setText(f"📄 {path}")
+        self._path_label.setVisible(True)
+        self._refresh_header()
+
+        # Update highlighter language from file extension
+        if self._highlighter is not None and _HAVE_PYGMENTS:
+            lang = language_from_path(path)
+            if lang:
+                self._highlighter.set_language(lang)
+
     def append_args(self, fragment: str) -> None:
         self._args_text += fragment
         # Try to parse JSON
@@ -878,15 +891,7 @@ class CodeWriterCard(QFrame):
         # Extract path
         path = parsed.get("path", "")
         if path:
-            self._path = path
-            self._path_label.setText(f"📄 {path}")
-            self._path_label.setVisible(True)
-            self._refresh_header()
-            # Update highlighter language from file extension
-            if self._highlighter is not None and _HAVE_PYGMENTS:
-                lang = language_from_path(path)
-                if lang:
-                    self._highlighter.set_language(lang)
+            self.set_target_path(path)
 
         # Extract code content
         content = parsed.get(self._content_key, "")
@@ -901,19 +906,12 @@ class CodeWriterCard(QFrame):
     def _try_extract_partial_path(self) -> None:
         """Best-effort path extraction from partial JSON."""
         import re
-        m = re.search(r'"path"\s*:\s*"([^"]*)', self._args_text)
+
+        m = re.search(r'"path"\s*:\s*"([^"]+)"', self._args_text)
         if m:
             path = m.group(1)
             if path and not self._path:
-                self._path = path
-                self._path_label.setText(f"📄 {path}")
-                self._path_label.setVisible(True)
-                self._refresh_header()
-                # Also update highlighter from file extension
-                if self._highlighter is not None and _HAVE_PYGMENTS:
-                    lang = language_from_path(path)
-                    if lang:
-                        self._highlighter.set_language(lang)
+                self.set_target_path(path)
 
     def _auto_size_code_view(self) -> None:
         doc = self._code_view.document()

@@ -338,6 +338,20 @@ class ArtifactCard(QFrame):
         self._refresh_code_view()
         self._refresh_preview()
 
+    def set_target_path(self, path: str) -> None:
+        """Update label and language from file extension."""
+        self._label = Path(path).name
+        self._header_label.setText(self._label)
+        self._language = _language_from_path(path)
+
+        # Re-attach syntax highlighter for the new language
+        if _HAVE_PYGMENTS:
+            if self._highlighter is not None:
+                self._highlighter.deleteLater()
+            self._highlighter = PygmentsHighlighter(
+                self._code_view.document(), self._language
+            )
+
     # ---- Properties -------------------------------------------------------
 
     @property
@@ -692,16 +706,8 @@ class AuraPlayground(QWidget):
                 artifact_id = f"file-{worker_tool_id}"
                 card = self._artifacts.get(artifact_id)
                 if card is not None:
-                    language = _language_from_path(info["path"])
-                    label = Path(info["path"]).name
-                    card._label = label
-                    card._header_label.setText(label)
-                    card._language = language
-                    # Re-attach syntax highlighter for the new language
-                    if _HAVE_PYGMENTS and card._highlighter is not None:
-                        card._highlighter.deleteLater()
-                    if _HAVE_PYGMENTS:
-                        card._highlighter = PygmentsHighlighter(card._code_view.document(), language)
+                    card.set_target_path(info["path"])
+
             # Also try to extract old_str from partial JSON for edit_file
             m_old = re.search(r'"old_str"\s*:\s*"', info["buffered_args"])
             if m_old and "old_str_seen" not in info:
@@ -714,26 +720,20 @@ class AuraPlayground(QWidget):
             info["path"] = path
 
         artifact_id = f"file-{worker_tool_id}"
-        language = _language_from_path(path) if path else "text"
-        label = Path(path).name if path else info["name"]
+        card = self._artifacts.get(artifact_id)
 
         if info["name"] == "write_file":
             content = parsed.get("content", "")
             info["content"] = content
-            card = self._artifacts.get(artifact_id)
             if card is not None:
                 # Update the label if path was just resolved in this parse
-                if path and card._label in ("Targeting file…",):
-                    card._label = label
-                    card._header_label.setText(label)
-                    card._language = language
-                    if _HAVE_PYGMENTS:
-                        if card._highlighter is not None:
-                            card._highlighter.deleteLater()
-                        card._highlighter = PygmentsHighlighter(card._code_view.document(), language)
+                if path and card._label in ("Targeting file…", "text"):
+                    card.set_target_path(path)
                 card.update_content(content)
             else:
                 # Fallback: card not yet created (shouldn't happen, but be safe)
+                language = _language_from_path(path) if path else "text"
+                label = Path(path).name if path else info["name"]
                 card = self._add_artifact(artifact_id, label, language, content)
                 card.set_streaming(True)
                 aura = self._auras.get(artifact_id)
@@ -743,23 +743,20 @@ class AuraPlayground(QWidget):
         elif info["name"] == "edit_file":
             old_str = parsed.get("old_str", "")
             new_str = parsed.get("new_str", "")
-            card = self._artifacts.get(artifact_id)
             if card is None:
                 # Fallback: card not yet created
-                card = self._add_artifact(artifact_id, label, language, old_str if old_str else "")
+                language = _language_from_path(path) if path else "text"
+                label = Path(path).name if path else info["name"]
+                card = self._add_artifact(
+                    artifact_id, label, language, old_str if old_str else ""
+                )
                 card.set_edit_phase("old")
                 card._edit_old_str = old_str
                 card._edit_new_str = ""
             else:
                 # Update the label if path was just resolved
-                if path and card._label in ("Reading target…",):
-                    card._label = label
-                    card._header_label.setText(label)
-                    card._language = language
-                    if _HAVE_PYGMENTS:
-                        if card._highlighter is not None:
-                            card._highlighter.deleteLater()
-                        card._highlighter = PygmentsHighlighter(card._code_view.document(), language)
+                if path and card._label in ("Reading target…", "text"):
+                    card.set_target_path(path)
                 # If we haven't shown old_str yet, do it now
                 if old_str and not card._edit_old_str:
                     card.set_edit_phase("old")
