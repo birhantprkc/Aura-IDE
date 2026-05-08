@@ -72,6 +72,9 @@ class ChatView(QScrollArea):
         if self._empty_hint is not None:
             self._empty_hint.deleteLater()
             self._empty_hint = None
+        # Ensure parentage to prevent "window flashes"
+        if w.parent() is None:
+            w.setParent(self)
         # Insert before the trailing stretch.
         self._layout.insertWidget(self._layout.count() - 1, w)
         _fade_in_widget(w)
@@ -129,21 +132,21 @@ class ChatView(QScrollArea):
     def add_user(self, text: str, image_b64s: list[str] | None = None) -> None:
         # Slight right inset on user cards so the conversation rhythm is visible at a glance —
         # not a chat-bubble alignment, just enough to feel like input vs. output.
-        wrapper = QWidget()
+        wrapper = QWidget(self)
         wrapper.setStyleSheet("background: transparent;")
         h = QHBoxLayout(wrapper)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(0)
-        h.addWidget(UserCard(text, image_b64s), 1)
+        h.addWidget(UserCard(text, image_b64s, parent=wrapper), 1)
         h.addSpacing(40)
         self._add_card(wrapper)
         self._current_assistant = None  # next assistant turn opens a new card
 
     def begin_assistant(self) -> AssistantCard:
-        card = AssistantCard(compact_tools=self._compact_tools)
+        card = AssistantCard(compact_tools=self._compact_tools, parent=self)
         card._chat_view = self
         self._current_assistant = card
-        wrapper = AuraWidget(card, glow_color=ACCENT, glow_spread=16)
+        wrapper = AuraWidget(card, glow_color=ACCENT, glow_spread=16, parent=self)
         self._current_aura = wrapper
         self._add_card(wrapper)
         wrapper.start_aura()
@@ -188,7 +191,7 @@ class ChatView(QScrollArea):
 
         ac = self.current_assistant()
         if name == "run_terminal_command":
-            card = TerminalCard(command="...")
+            card = TerminalCard(command="...", parent=self)
             self._terminal_cards[tool_call_id] = card
             if not ac._tool_cluster.isVisible():
                 ac._tool_cluster.setVisible(True)
@@ -202,7 +205,7 @@ class ChatView(QScrollArea):
             controller.result_finalized.connect(lambda d: card.set_result(d.get("exit_code", -1)))
 
         elif name in ("write_file", "edit_file"):
-            card = CodeWriterCard(name)
+            card = CodeWriterCard(name, parent=self)
             if not ac._tool_cluster.isVisible():
                 ac._tool_cluster.setVisible(True)
             ac._tool_cluster_layout.addWidget(card)
@@ -215,6 +218,8 @@ class ChatView(QScrollArea):
 
         else:
             card = ac.add_tool_card(tool_call_id, name)
+            if card is not None:
+                card.setParent(self) # Ensure it has a parent before layout
             self._tool_owner[tool_call_id] = ac
             if card is not None:
                 # Wire generic tool card signals
@@ -261,13 +266,13 @@ class ChatView(QScrollArea):
     ) -> None:
         # Attach diff card to the assistant that owned the tool call.
         ac = self._tool_owner.get(owner_tool_call_id) or self.current_assistant()
-        card = DiffCard(rel_path, old, new, decision, is_new_file)
+        card = DiffCard(rel_path, old, new, decision, is_new_file, parent=self)
         # Append as a footer under the assistant card.
         ac.add_footer_widget(card)
         self._scroll_to_bottom()
 
     def add_error(self, title: str, message: str, show_retry: bool = False) -> None:
-        card = ErrorCard(title, message, show_retry=show_retry)
+        card = ErrorCard(title, message, show_retry=show_retry, parent=self)
         if show_retry:
             card.retry_clicked.connect(self.retry_requested.emit)
         self._add_card(card)
@@ -320,7 +325,7 @@ class ChatView(QScrollArea):
         if existing is not None:
             existing.update_spec(goal, files, spec, acceptance)
             return existing
-        card = SpecCard(tool_call_id, goal, files, spec, acceptance)
+        card = SpecCard(tool_call_id, goal, files, spec, acceptance, parent=self)
         ac = self.current_assistant()
         ac.add_footer_widget(card)
         self._spec_cards[tool_call_id] = card
@@ -334,7 +339,7 @@ class ChatView(QScrollArea):
         self, tool_call_id: str, goal: str, ok: bool, summary: str
     ) -> None:
         """Add a summary card to the chat after a worker completes."""
-        card = QFrame()
+        card = QFrame(self)
         card.setObjectName("card")
         card.setStyleSheet(
             f"QFrame#card {{ background: {BG_ALT}; "

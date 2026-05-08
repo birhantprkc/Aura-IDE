@@ -136,3 +136,101 @@ def undo_last_commit(workspace_root: Path) -> tuple[bool, str]:
     except subprocess.CalledProcessError as e:
         err = e.stderr.decode() if e.stderr else str(e)
         return False, f"git reset failed: {err}"
+
+
+def snapshot(workspace_root: Path) -> str | None:
+    """Capture the current HEAD SHA. Returns None if no commits exist."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            **get_subprocess_kwargs(),
+        )
+        sha = result.stdout.strip()
+        if sha and result.returncode == 0:
+            return sha
+        return None
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
+def restore_to_snapshot(workspace_root: Path, sha: str) -> tuple[bool, str]:
+    """Hard-reset to the given SHA. Destructive — discards uncommitted changes.
+    Returns (success, message)."""
+    if not is_git_repo(workspace_root):
+        return False, "Not a git repository."
+    try:
+        subprocess.run(
+            ["git", "reset", "--hard", sha],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+            **get_subprocess_kwargs(),
+        )
+        return True, f"Restored to {sha[:8]}."
+    except subprocess.CalledProcessError as e:
+        err = e.stderr.strip() if e.stderr else str(e)
+        return False, f"git reset failed: {err}"
+    except subprocess.TimeoutExpired:
+        return False, "git reset timed out."
+
+
+def git_init(workspace_root: Path) -> tuple[bool, str]:
+    """Initialize a git repository and create an initial commit.
+    Returns (success, message)."""
+    try:
+        subprocess.run(
+            ["git", "init"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+            **get_subprocess_kwargs(),
+        )
+    except subprocess.CalledProcessError as e:
+        err = e.stderr.strip() if e.stderr else str(e)
+        return False, f"git init failed: {err}"
+    except subprocess.TimeoutExpired:
+        return False, "git init timed out."
+
+    # Stage all files
+    try:
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+            **get_subprocess_kwargs(),
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        # If there's nothing to add, that's fine — we'll still try to commit
+        pass
+
+    # Create initial commit
+    try:
+        result = subprocess.run(
+            ["git", "commit", "-m", "Initial commit"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            **get_subprocess_kwargs(),
+        )
+        if result.returncode == 0:
+            return True, "git init complete — initial commit created."
+        else:
+            stderr = result.stderr.strip()
+            # If nothing to commit (empty dir), still return success
+            if "nothing to commit" in stderr.lower() or "nothing added" in stderr.lower():
+                return True, "git init complete (no files to commit yet)."
+            return False, f"git commit failed: {stderr}"
+    except subprocess.TimeoutExpired:
+        return False, "git commit timed out."

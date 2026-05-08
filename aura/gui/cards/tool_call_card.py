@@ -20,8 +20,8 @@ class ToolCallCard(QFrame):
     STATE_DONE = "done"
     STATE_FAILED = "failed"
 
-    def __init__(self, name: str) -> None:
-        super().__init__()
+    def __init__(self, name: str, parent=None) -> None:
+        super().__init__(parent)
         self.setObjectName("toolCard")
         self._name = name
         self._args_text = ""

@@ -698,7 +698,7 @@ class AuraPlayground(QWidget):
         # Create a new log card if we don't have an active one for this turn,
         # or if the last card was an artifact (chronological insertion).
         if self._log_card is None:
-            self._log_card = WorkerLogCard()
+            self._log_card = WorkerLogCard(parent=self)
             # Insert before the trailing stretch
             idx = self._card_layout.count() - 1
             self._card_layout.insertWidget(idx, self._log_card)
@@ -720,10 +720,10 @@ class AuraPlayground(QWidget):
         # to maintain chronological order.
         self._log_card = None
         
-        card = ArtifactCard(artifact_id, label, language, content)
+        card = ArtifactCard(artifact_id, label, language, content, parent=self)
         self._artifacts[artifact_id] = card
         # Wrap in AuraWidget for breathing glow effect
-        wrapper = AuraWidget(card, glow_color="#7aa2f7", glow_spread=20)
+        wrapper = AuraWidget(card, glow_color="#7aa2f7", glow_spread=20, parent=self)
         self._auras[artifact_id] = wrapper
         
         # Insert before the trailing stretch
@@ -754,8 +754,8 @@ class AuraPlayground(QWidget):
 
     def begin_assistant(self) -> None:
         """Clear all existing artifact cards. Do NOT clear the TODO widget."""
-        for card in list(self._artifacts.values()):
-            card.deleteLater()
+        for wrapper in list(self._auras.values()):
+            wrapper.deleteLater()
         self._artifacts.clear()
         self._auras.clear()
         self._controllers.clear()
@@ -903,8 +903,8 @@ class AuraPlayground(QWidget):
 
     def clear(self) -> None:
         """Remove all artifact cards, reset state, clear TODO widget."""
-        for card in list(self._artifacts.values()):
-            card.deleteLater()
+        for wrapper in list(self._auras.values()):
+            wrapper.deleteLater()
         self._artifacts.clear()
         self._auras.clear()
         self._controllers.clear()

@@ -167,8 +167,8 @@ class InputPanel(QFrame):
     sent = Signal(SendPayload)
     stop_requested = Signal()
 
-    def __init__(self, workspace_root: Path | None) -> None:
-        super().__init__()
+    def __init__(self, workspace_root: Path | None, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
         self.setStyleSheet(
             "QFrame {"
             "  background: rgba(34, 34, 40, 0.85);"

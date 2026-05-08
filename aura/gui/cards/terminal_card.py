@@ -19,8 +19,8 @@ class TerminalCard(QFrame):
     STATE_DONE = "done"
     STATE_FAILED = "failed"
 
-    def __init__(self, command: str) -> None:
-        super().__init__()
+    def __init__(self, command: str, parent=None) -> None:
+        super().__init__(parent)
         self.setObjectName("terminalCard")
         self._command = command
         self._state = self.STATE_RUNNING

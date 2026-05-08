@@ -10,8 +10,8 @@ from aura.gui.theme import BG_ALT, BORDER, DANGER, FG
 class ErrorCard(QFrame):
     retry_clicked = Signal()
 
-    def __init__(self, title: str, message: str, show_retry: bool = False) -> None:
-        super().__init__()
+    def __init__(self, title: str, message: str, show_retry: bool = False, parent=None) -> None:
+        super().__init__(parent)
         self.setObjectName("errorCard")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)

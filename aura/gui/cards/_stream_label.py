@@ -15,8 +15,8 @@ class _StreamLabel(QLabel):
     buffer and the UI is flushed at most 30 fps to keep the GUI thread responsive
     on fast token streams."""
 
-    def __init__(self, italic: bool = False) -> None:
-        super().__init__()
+    def __init__(self, italic: bool = False, parent=None) -> None:
+        super().__init__(parent)
         self.setWordWrap(True)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)

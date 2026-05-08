@@ -471,6 +471,7 @@ class AppSettings:
     system_prompt: str = ""
     planner_system_prompt: str = ""
     worker_system_prompt: str = ""
+    auto_commit_enabled: bool = True
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
@@ -517,6 +518,8 @@ class AppSettings:
             s.planner_system_prompt = data["planner_system_prompt"]
         if isinstance(data.get("worker_system_prompt"), str):
             s.worker_system_prompt = data["worker_system_prompt"]
+        if isinstance(data.get("auto_commit_enabled"), bool):
+            s.auto_commit_enabled = data["auto_commit_enabled"]
         return s
 
 

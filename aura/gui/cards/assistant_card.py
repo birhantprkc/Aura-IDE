@@ -19,8 +19,8 @@ if TYPE_CHECKING:
 
 
 class AssistantCard(QFrame):
-    def __init__(self, compact_tools: bool = False) -> None:
-        super().__init__()
+    def __init__(self, compact_tools: bool = False, parent=None) -> None:
+        super().__init__(parent)
         self.setObjectName("assistantCard")
         self._compact_tools = compact_tools
         self._compact_tool_active: int = 0

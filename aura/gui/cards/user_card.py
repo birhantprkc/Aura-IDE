@@ -12,8 +12,8 @@ from aura.gui.theme import BORDER, DANGER, FG_BODY_USER
 
 
 class UserCard(QFrame):
-    def __init__(self, text: str, image_b64s: list[str] | None = None) -> None:
-        super().__init__()
+    def __init__(self, text: str, image_b64s: list[str] | None = None, parent=None) -> None:
+        super().__init__(parent)
         self.setObjectName("userCard")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)

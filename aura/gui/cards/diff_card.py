@@ -12,8 +12,16 @@ from aura.gui.theme import BG, BORDER, DANGER, FG, SUCCESS
 class DiffCard(QFrame):
     """Read-only inline diff display, after the user has decided."""
 
-    def __init__(self, rel_path: str, old: str, new: str, decision: str, is_new_file: bool) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        rel_path: str,
+        old: str,
+        new: str,
+        decision: str,
+        is_new_file: bool,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
         self.setObjectName("card")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)

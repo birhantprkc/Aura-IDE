@@ -20,8 +20,9 @@ class AuraWidget(QWidget):
         inner_widget: QWidget,
         glow_color: str = "#6d28d9",
         glow_spread: int = 20,
+        parent: QWidget | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(parent)
         self._glow_color = QColor(glow_color)
         self._glow_spread = glow_spread
         self._breath: float = 0.0

@@ -46,7 +46,7 @@ def _fade_in_widget(widget: QWidget, duration: int = 150) -> None:
 
     from PySide6.QtCore import QPropertyAnimation
 
-    anim = QPropertyAnimation(effect, b"opacity")
+    anim = QPropertyAnimation(effect, b"opacity", parent=effect)
     anim.setDuration(duration)
     anim.setStartValue(0.0)
     anim.setEndValue(1.0)
@@ -56,11 +56,17 @@ def _fade_in_widget(widget: QWidget, duration: int = 150) -> None:
     # with sub-widget rendering (QPlainTextEdit etc.)
     def _cleanup():
         try:
-            if widget is not None:
-                widget.setGraphicsEffect(None)
-            effect.deleteLater()
-            anim.deleteLater()
-        except RuntimeError:
-            pass  # C++ object already deleted (widget/effect cleaned up by parent deletion)
+            # Check if C++ object still exists
+            if effect is not None:
+                # If widget still exists, remove effect
+                if widget is not None:
+                    try:
+                        widget.setGraphicsEffect(None)
+                    except (RuntimeError, AttributeError):
+                        pass
+                effect.deleteLater()
+        except (RuntimeError, AttributeError):
+            pass
+
     anim.finished.connect(_cleanup)
     anim.start()

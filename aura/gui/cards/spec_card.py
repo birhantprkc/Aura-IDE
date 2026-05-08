@@ -27,9 +27,10 @@ class SpecCard(QFrame):
         files: list[str],
         spec: str,
         acceptance: str,
+        parent=None,
     ) -> None:
-        super().__init__()
-        self.setObjectName("specCard")
+        super().__init__(parent)
+        self.setObjectName("card")
         self._tool_call_id = tool_call_id
         self._goal = goal
         self._files = list(files)

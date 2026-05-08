@@ -48,6 +48,7 @@ from aura.conversation.persistence import (
     most_recent_conversation,
     save_conversation,
 )
+from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
@@ -116,6 +117,7 @@ class MainWindow(QMainWindow):
             self._settings.planner_system_prompt,
             self._settings.worker_system_prompt,
         )
+        self._bridge.set_auto_commit_enabled(self._settings.auto_commit_enabled)
 
         # Persistence state.
         self._current_conversation_path: Path | None = None
@@ -144,17 +146,18 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self._left_pane)
 
         # Middle pane: chat + input
-        center = QWidget()
+        center = QWidget(self)
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(20, 0, 20, 16)
         center_layout.setSpacing(0)
 
         self._chat = ChatView()
+        self._chat.setParent(self)
         if self._settings.planner_worker_mode:
             self._chat.set_compact_tools(True)
         center_layout.addWidget(self._chat, 1)
 
-        self._input = InputPanel(self._workspace_root)
+        self._input = InputPanel(self._workspace_root, parent=self)
         # Apply default model / thinking from settings.
         if self._settings.planner_worker_mode:
             self.set_model(self._settings.default_planner_model)
@@ -621,6 +624,28 @@ class MainWindow(QMainWindow):
         self._update_workspace_label()
         self._refresh_status_bar()
 
+        # Offer to initialize git if the workspace is not a git repo.
+        if not is_git_repo(path):
+            reply = QMessageBox.question(
+                self,
+                "Not a Git Repository",
+                "This workspace is not a git repository.\n\n"
+                "Aura uses git for auto-commit and undo.\n"
+                "Would you like to run 'git init' and create an initial commit?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply == QMessageBox.Yes:
+                ok, msg = git_init(path)
+                if ok:
+                    QMessageBox.information(
+                        self, "Git Repository", msg
+                    )
+                else:
+                    QMessageBox.warning(
+                        self, "Git Init Failed", msg
+                    )
+
     def _update_workspace_label(self) -> None:
         if self._workspace_root is None:
             self._workspace_label.setText("(none)")
@@ -646,6 +671,7 @@ class MainWindow(QMainWindow):
             )
             return
         self._bridge.reset_history()
+        self._bridge.clear_pre_worker_snapshot()
         self._chat.reset()
         self._current_conversation_path = None
         self._reset_session_usage()
@@ -713,6 +739,7 @@ class MainWindow(QMainWindow):
                 self._settings.planner_system_prompt,
                 self._settings.worker_system_prompt,
             )
+            self._bridge.set_auto_commit_enabled(self._settings.auto_commit_enabled)
             self._refresh_status_bar()
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
@@ -1062,22 +1089,40 @@ class MainWindow(QMainWindow):
         self._playground.append_terminal_output(worker_tool_id, text)
 
     def _on_undo(self) -> None:
-        """Handle /undo command — git reset the last commit."""
-        if self._workspace_root is None:
+        """Handle /undo command — restore to pre-worker snapshot or git reset last commit."""
+        from aura.git_ops import undo_last_commit, restore_to_snapshot
+
+        ws_root = self._workspace_root
+        if ws_root is None:
             self._chat.add_error("Undo", "No workspace root set.")
             return
 
-        from aura.git import undo_last_commit
-
-        ok, message = undo_last_commit(self._workspace_root)
-
-        if ok:
-            # Show a brief assistant response
-            ac = self._chat.begin_assistant()
-            ac.append_content(f"✅ {message}")
-            self._chat.assistant_done()
+        # Check for pre-worker snapshot first (more reliable)
+        snapshot_sha = self._bridge.get_pre_worker_snapshot()
+        if snapshot_sha is not None:
+            # Confirm destructive restore
+            reply = QMessageBox.question(
+                self,
+                "Restore to Pre-Worker State",
+                "This will discard ALL changes since the worker started "
+                "(including any intervening commits). Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                ok, message = restore_to_snapshot(ws_root, snapshot_sha)
+                self._bridge.clear_pre_worker_snapshot()
+                if ok:
+                    self._chat.add_info("Undo", message)
+                else:
+                    self._chat.add_error("Undo", message)
         else:
-            self._chat.add_error("Undo failed", message)
+            # Fall back to simple undo_last_commit
+            ok, message = undo_last_commit(ws_root)
+            if ok:
+                self._chat.add_info("Undo", message)
+            else:
+                self._chat.add_error("Undo", message)
 
     def _on_api_error(self, status: int, message: str) -> None:
         title = f"API Error {status}" if status > 0 else "Error"

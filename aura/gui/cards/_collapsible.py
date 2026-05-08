@@ -17,8 +17,9 @@ class _CollapsibleSection(QFrame):
         body: QWidget,
         start_open: bool = False,
         prominent: bool = False,
+        parent=None,
     ) -> None:
-        super().__init__()
+        super().__init__(parent)
         self.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)

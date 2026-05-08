@@ -175,6 +175,7 @@ class _Worker(QObject):
         thinking: ThinkingMode,
         temperature: float = 0.7,
         workspace_root: Path | None = None,
+        auto_commit_enabled: bool = True,
     ) -> None:
         super().__init__()
         self._manager = manager
@@ -185,6 +186,7 @@ class _Worker(QObject):
         self._thinking = thinking
         self._temperature = temperature
         self._workspace_root = workspace_root
+        self._auto_commit_enabled = auto_commit_enabled
         self._write_paths: list[str] = []
 
     @Slot()
@@ -205,9 +207,9 @@ class _Worker(QObject):
                 temperature=self._temperature,
             )
             # Auto-commit writes in single mode
-            if self._write_paths and self._workspace_root is not None:
+            if self._auto_commit_enabled and self._write_paths and self._workspace_root is not None:
                 try:
-                    from aura.git import auto_commit
+                    from aura.git_ops import auto_commit
                     goal_msg = f"AI-assisted edit: {', '.join(self._write_paths)}"
                     summary_msg = f"Modified {len(self._write_paths)} file(s)"
                     threading.Thread(
@@ -360,6 +362,7 @@ class _DispatchProxy(QObject):
         self._worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
         self._worker_temperature: float = 0.7
         self._worker_system_prompt: str = ""
+        self._auto_commit_enabled: bool = True
 
         # Per-call state — guarded by a lock so concurrent dispatches (which
         # shouldn't happen, but be safe) don't trample each other.
@@ -384,6 +387,9 @@ class _DispatchProxy(QObject):
 
     def set_worker_system_prompt(self, prompt: str) -> None:
         self._worker_system_prompt = prompt
+
+    def set_auto_commit_enabled(self, enabled: bool) -> None:
+        self._auto_commit_enabled = enabled
 
     def records(self) -> list[WorkerDispatchRecord]:
         return list(self._records)
@@ -595,9 +601,9 @@ class _DispatchProxy(QObject):
         self._records.append(record)
 
         # Auto-commit if worker made changes — fire in background so dispatch isn't blocked.
-        if self._workspace_root is not None and write_results:
+        if self._auto_commit_enabled and self._workspace_root is not None and write_results:
             try:
-                from aura.git import auto_commit
+                from aura.git_ops import auto_commit
 
                 written_files = [w["path"] for w in write_results if isinstance(w.get("path"), str) and w.get("path")]
                 if written_files:
@@ -753,6 +759,8 @@ class ConversationBridge(QObject):
         self._temperature: float = 0.7
         self._single_system_prompt: str = ""
         self._planner_system_prompt: str = ""
+        self._auto_commit_enabled: bool = True
+        self._pre_worker_sha: str | None = None
 
         # Re-emit dispatch proxy signals on the bridge so the GUI binds once.
         self._dispatch_proxy.showSpecCard.connect(self.workerDispatchRequested)
@@ -843,11 +851,16 @@ class ConversationBridge(QObject):
     def set_worker_temperature(self, temperature: float) -> None:
         self._dispatch_proxy.set_worker_temperature(temperature)
 
+    def set_auto_commit_enabled(self, enabled: bool) -> None:
+        self._auto_commit_enabled = enabled
+        self._dispatch_proxy.set_auto_commit_enabled(enabled)
+
     def set_provider(self, provider: ProviderId) -> None:
         """Recreate the internal client for a new provider."""
         # Capture current dispatch proxy settings before recreating.
         old_worker_temp = self._dispatch_proxy._worker_temperature
         old_worker_prompt = self._dispatch_proxy._worker_system_prompt
+        old_auto_commit = self._dispatch_proxy._auto_commit_enabled
         self._provider = provider
         self._client = DeepSeekClient(provider=provider)
         self._manager = ConversationManager(self._client, self._history, self._registry)
@@ -862,6 +875,7 @@ class ConversationBridge(QObject):
         # Propagate saved settings to the new dispatch proxy.
         self._dispatch_proxy.set_worker_temperature(old_worker_temp)
         self._dispatch_proxy.set_worker_system_prompt(old_worker_prompt)
+        self._dispatch_proxy.set_auto_commit_enabled(old_auto_commit)
         # Re-wire dispatch proxy signals.
         self._dispatch_proxy.showSpecCard.connect(self.workerDispatchRequested)
         self._dispatch_proxy.workerStarted.connect(self.workerStarted)
@@ -888,6 +902,12 @@ class ConversationBridge(QObject):
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.isRunning()
+
+    def get_pre_worker_snapshot(self) -> str | None:
+        return self._pre_worker_sha
+
+    def clear_pre_worker_snapshot(self) -> None:
+        self._pre_worker_sha = None
 
     # ---- worker registry factory -----------------------------------------
 
@@ -919,6 +939,12 @@ class ConversationBridge(QObject):
     def send(self, model: ModelId, thinking: ThinkingMode) -> None:
         if self.is_running():
             return
+        # Capture pre-worker snapshot for reliable /undo
+        if self._registry.workspace_root is not None:
+            from aura.git_ops import snapshot
+            self._pre_worker_sha = snapshot(self._registry.workspace_root)
+        else:
+            self._pre_worker_sha = None
         self._cancel = threading.Event()
         self._index_to_id.clear()
         self._index_to_name.clear()
@@ -927,14 +953,13 @@ class ConversationBridge(QObject):
         self._worker = _Worker(
             manager=self._manager,
             approval_proxy=self._approval_proxy,
-            dispatch_proxy=(
-                self._dispatch_proxy if self._planner_worker_mode else None
-            ),
+            dispatch_proxy=self._dispatch_proxy if self._planner_worker_mode else None,
             cancel_event=self._cancel,
             model=model,
             thinking=thinking,
             temperature=self._temperature,
             workspace_root=self._registry.workspace_root,
+            auto_commit_enabled=self._auto_commit_enabled,
         )
         self._worker.moveToThread(self._thread)
 

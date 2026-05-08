@@ -99,6 +99,7 @@ class SettingsDialog(QDialog):
             system_prompt=settings.system_prompt,
             planner_system_prompt=settings.planner_system_prompt,
             worker_system_prompt=settings.worker_system_prompt,
+            auto_commit_enabled=settings.auto_commit_enabled,
         )
         self._on_change_root = on_change_root
 
@@ -234,6 +235,13 @@ class SettingsDialog(QDialog):
         form.addRow("Worker Temperature:", self._worker_temperature_spin)
 
         self._refresh_pw_enabled()
+
+        # --- Auto-commit ---
+        self._auto_commit_chk = QCheckBox(
+            "Auto-commit changes after worker completes"
+        )
+        self._auto_commit_chk.setChecked(self._settings.auto_commit_enabled)
+        form.addRow("", self._auto_commit_chk)
 
         # --- System Prompts ---
         prompts_sep = QLabel("System Prompts")
@@ -492,6 +500,7 @@ class SettingsDialog(QDialog):
             system_prompt=self._single_prompt_edit.toPlainText().strip(),
             planner_system_prompt=self._planner_prompt_edit.toPlainText().strip(),
             worker_system_prompt=self._worker_prompt_edit.toPlainText().strip(),
+            auto_commit_enabled=self._auto_commit_chk.isChecked(),
         )
 
     def accept(self) -> None:  # type: ignore[override]

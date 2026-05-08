@@ -11,8 +11,8 @@ from aura.gui.theme import BG, BG_ALT, BORDER, FG_DIM
 class CodeBlockCard(QFrame):
     """Read-only card displaying a single syntax-highlighted code block."""
 
-    def __init__(self, language: str, code: str) -> None:
-        super().__init__()
+    def __init__(self, language: str, code: str, parent=None) -> None:
+        super().__init__(parent)
         self.setObjectName("codeBlockCard")
         # Subtle card styling — distinct background, rounded border
         self.setStyleSheet(
