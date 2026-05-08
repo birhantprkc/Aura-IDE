@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from aura.conversation.tools.backup import backup_existing
+from aura.conversation.tools.find_usages import find_usages
 from aura.conversation.tools.fs_read import glob_files, list_directory, read_file, read_file_outline
 from aura.conversation.tools.git_tools import git_diff, git_status
 from aura.conversation.tools.grep import grep_files
@@ -134,50 +135,92 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "grep_search",
-            "description": (
-                "Search file contents in the workspace for a given string or regex pattern. "
-                "Returns matching file paths, line numbers, the matching line content, "
-                "and the column where the match starts. "
-                "Use this to find where functions are defined, variables are used, "
-                "error messages, or any text pattern across the codebase."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": {
-                        "type": "string",
-                        "description": "The string or regex pattern to search for.",
-                    },
-                    "regex_mode": {
-                        "type": "boolean",
-                        "description": "If true, treat pattern as a regex. If false, plain text substring match.",
-                        "default": False,
-                    },
-                    "case_sensitive": {
-                        "type": "boolean",
-                        "description": "If true, match case exactly. Default (false) is case-insensitive.",
-                        "default": False,
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum number of matching lines to return.",
-                        "default": 50,
-                    },
-                    "include_pattern": {
-                        "type": "string",
-                        "description": "Optional glob pattern to filter which files to search (e.g. '**/*.py' to only search Python files).",
+            {
+                "type": "function",
+                "function": {
+                    "name": "grep_search",
+                    "description": (
+                        "Search file contents in the workspace for a given string or regex pattern. "
+                        "Returns matching file paths, line numbers, the matching line content, "
+                        "and the column where the match starts. "
+                        "Use this to find where functions are defined, variables are used, "
+                        "error messages, or any text pattern across the codebase."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {
+                                "type": "string",
+                                "description": "The string or regex pattern to search for.",
+                            },
+                            "regex_mode": {
+                                "type": "boolean",
+                                "description": "If true, treat pattern as a regex. If false, plain text substring match.",
+                                "default": False,
+                            },
+                            "case_sensitive": {
+                                "type": "boolean",
+                                "description": "If true, match case exactly. Default (false) is case-insensitive.",
+                                "default": False,
+                            },
+                            "max_results": {
+                                "type": "integer",
+                                "description": "Maximum number of matching lines to return.",
+                                "default": 50,
+                            },
+                            "include_pattern": {
+                                "type": "string",
+                                "description": "Optional glob pattern to filter which files to search (e.g. '**/*.py' to only search Python files).",
+                            },
+                        },
+                        "required": ["pattern"],
                     },
                 },
-                "required": ["pattern"],
             },
-        },
-    },
-]
-
+            {
+                "type": "function",
+                "function": {
+                    "name": "find_usages",
+                    "description": (
+                        "Find all usages of a symbol (function, variable, class, etc.) "
+                        "across the workspace. Uses word-boundary matching by default "
+                        "so that searching for 'count_items' will NOT match "
+                        "'recount_items' or 'count_items_count'. "
+                        "Essential for safe refactoring — use this before renaming a symbol "
+                        "to see everywhere it is referenced."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "symbol": {
+                                "type": "string",
+                                "description": "The symbol name to search for, e.g. 'count_items'.",
+                            },
+                            "include_pattern": {
+                                "type": "string",
+                                "description": (
+                                    "Optional glob pattern to restrict which files to search "
+                                    "(e.g. '**/*.gd' to only search GDScript files)."
+                                ),
+                            },
+                            "max_results": {
+                                "type": "integer",
+                                "description": "Maximum number of matching lines to return. Default: 100.",
+                                "default": 100,
+                            },
+                            "case_sensitive": {
+                                "type": "boolean",
+                                "description": (
+                                    "If true, match case exactly. Default: false (case-insensitive)."
+                                ),
+                                "default": False,
+                            },
+                        },
+                        "required": ["symbol"],
+                    },
+                },
+            },
+        ]
 GIT_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -593,6 +636,22 @@ class ToolRegistry:
             if name == "read_file_outline":
                 target = self._resolve_in_root(args.get("path", ""))
                 return ToolExecResult(ok=True, payload=read_file_outline(self._root, target))
+            if name == "find_usages":
+                symbol = args.get("symbol", "")
+                if not symbol:
+                    return ToolExecResult(
+                        ok=False, payload={"ok": False, "error": "symbol is required"}
+                    )
+                return ToolExecResult(
+                    ok=True,
+                    payload=find_usages(
+                        workspace_root=self._root,
+                        symbol=symbol,
+                        include_pattern=args.get("include_pattern"),
+                        max_results=int(args.get("max_results", 100)),
+                        case_sensitive=bool(args.get("case_sensitive", False)),
+                    ),
+                )
             if name == "git_status":
                 return ToolExecResult(ok=True, payload=git_status(self._root))
             if name == "git_diff":
