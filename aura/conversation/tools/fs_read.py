@@ -43,7 +43,7 @@ def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
 def read_file_outline(workspace_root: Path, target: Path) -> dict[str, Any]:
     """Extract class names, function signatures, and imports from a file.
 
-    Uses AST for Python, regex for GDScript/shaders, and generic regex for
+    Uses AST for Python, and generic regex for
     other languages. Returns a structural summary without full file content.
     """
     if not target.exists():
@@ -68,10 +68,6 @@ def read_file_outline(workspace_root: Path, target: Path) -> dict[str, Any]:
 
     if suffix == ".py":
         result = _outline_python(text, lines)
-    elif suffix == ".gd":
-        result = _outline_gdscript(lines)
-    elif suffix in (".gdshader", ".gdshaderinc"):
-        result = _outline_shader(lines)
     else:
         result = _outline_generic(lines)
 
@@ -231,175 +227,6 @@ def _py_func_signature(node: ast.FunctionDef | ast.AsyncFunctionDef, lines: list
 
 
 # ---------------------------------------------------------------------------
-# GDScript (.gd)
-# ---------------------------------------------------------------------------
-
-_GDS_EXTENDS_RE = re.compile(r"^(extends|class_name)\s+\S+")
-_GDS_CLASS_RE = re.compile(r"^class\s+(\w+)")
-_GDS_FUNC_RE = re.compile(r"^(func\s+\w+\s*\([^)]*\)\s*(->\s*\w+)?)", re.IGNORECASE)
-_GDS_SIGNAL_RE = re.compile(r"^signal\s+\w+")
-_GDS_ENUM_RE = re.compile(r"^enum\s+\w+")
-_GDS_INDENT_RE = re.compile(r"^(\s*)")
-
-
-def _outline_gdscript(lines: list[str]) -> dict[str, Any]:
-    """Regex-based outline for GDScript files.
-
-    Only captures top-level extends/class_name/signal/enum/func.  Inner-class
-    bodies are walked for methods but their extends/signal/enum lines are not
-    added to the top-level imports list.
-    """
-    imports: list[str] = []
-    classes: list[dict[str, Any]] = []
-    functions: list[dict[str, Any]] = []
-
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
-        indent = _get_indent(line)
-
-        # Only process top-level (indent == 0) declarations as imports/functions
-        if indent == 0:
-            # extends / class_name
-            if _GDS_EXTENDS_RE.match(stripped):
-                imports.append(stripped)
-                i += 1
-                continue
-
-            # signal
-            if _GDS_SIGNAL_RE.match(stripped):
-                imports.append(stripped)
-                i += 1
-                continue
-
-            # enum
-            if _GDS_ENUM_RE.match(stripped):
-                imports.append(f"# {stripped}")
-                i += 1
-                continue
-
-            # inner class at top level
-            class_match = _GDS_CLASS_RE.match(stripped)
-            if class_match:
-                class_name = class_match.group(1)
-                bases: list[str] = []
-                extends_match = re.search(r"extends\s+(\w+)", stripped)
-                if extends_match:
-                    bases.append(extends_match.group(1))
-                class_indent = indent
-                methods: list[str] = []
-                j = i + 1
-                while j < len(lines):
-                    next_line = lines[j]
-                    if next_line.strip() == "":
-                        j += 1
-                        continue
-                    next_indent = _get_indent(next_line)
-                    if next_indent <= class_indent:
-                        break
-                    next_stripped = next_line.strip()
-                    # Check for extends on the next indented line
-                    if not bases:
-                        ext_match = re.search(r"extends\s+(\w+)", next_stripped)
-                        if ext_match:
-                            bases.append(ext_match.group(1))
-                    func_match = _GDS_FUNC_RE.match(next_stripped)
-                    if func_match:
-                        sig = func_match.group(1).rstrip(":")
-                        methods.append(sig)
-                    j += 1
-                classes.append({
-                    "name": class_name,
-                    "line": i + 1,
-                    "bases": bases,
-                    "methods": methods,
-                })
-                i += 1
-                continue
-
-            # top-level function
-            func_match = _GDS_FUNC_RE.match(stripped)
-            if func_match:
-                sig = func_match.group(1).rstrip(":")
-                functions.append({
-                    "name": func_match.group(1).split("(")[0].replace("func ", "").strip(),
-                    "line": i + 1,
-                    "signature": sig,
-                })
-                i += 1
-                continue
-
-        i += 1
-
-    return {
-        "language": "gdscript",
-        "imports": imports,
-        "classes": classes,
-        "functions": functions,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Godot Shader (.gdshader / .gdshaderinc)
-# ---------------------------------------------------------------------------
-
-_SHADER_TYPE_RE = re.compile(r"^shader_type\s+(\w+)")
-_SHADER_FUNC_RE = re.compile(
-    r"^(void|int|float|bool|vec[234]|mat[234]|sampler2D|uniform|varying)\s+\w+\s*\("
-)
-_SHADER_INCLUDE_RE = re.compile(r'^#include\s+"([^"]+)"')
-
-
-def _outline_shader(lines: list[str]) -> dict[str, Any]:
-    """Regex-based outline for Godot shader files."""
-    imports: list[str] = []
-    classes: list[dict[str, Any]] = []
-    functions: list[dict[str, Any]] = []
-
-    for i, line in enumerate(lines, start=1):
-        stripped = line.strip()
-
-        if _SHADER_INCLUDE_RE.match(stripped):
-            imports.append(stripped)
-            continue
-
-        shader_type_match = _SHADER_TYPE_RE.match(stripped)
-        if shader_type_match:
-            classes.append({
-                "name": shader_type_match.group(1),
-                "line": i,
-                "bases": [],
-                "methods": [],
-            })
-            continue
-
-        func_match = _SHADER_FUNC_RE.match(stripped)
-        if func_match:
-            # Capture the full signature line (minus braces/body)
-            sig = stripped.rstrip("{").strip()
-            # Extract function name: the word right before the opening paren
-            paren_idx = stripped.find("(")
-            if paren_idx > 0:
-                name = stripped[:paren_idx].split()[-1]
-            else:
-                name = stripped.split()[-1]
-            functions.append({
-                "name": name,
-                "line": i,
-                "signature": sig,
-            })
-            continue
-
-    return {
-        "language": "shader",
-        "imports": imports,
-        "classes": classes,
-        "functions": functions,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Generic / unknown
 # ---------------------------------------------------------------------------
 
@@ -452,15 +279,6 @@ def _outline_generic(lines: list[str]) -> dict[str, Any]:
         "classes": classes,
         "functions": functions,
     }
-
-
-def _get_indent(line: str) -> int:
-    """Return the number of leading spaces (tabs counted as 4)."""
-    match = _GDS_INDENT_RE.match(line)
-    if not match:
-        return 0
-    ws = match.group(1)
-    return ws.count(" ") + ws.count("\t") * 4
 
 
 def list_directory(workspace_root: Path, target: Path) -> dict[str, Any]:
