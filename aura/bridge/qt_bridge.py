@@ -387,6 +387,19 @@ class _DispatchProxy(QObject):
         pending.cancelled = True
         pending.decision_event.set()
 
+    def cancel_all_pending(self) -> None:
+        """Called when the user hits Stop. Unblocks any planner waiting for a
+        dispatch decision AND signals any running worker to cancel."""
+        with self._lock:
+            for tool_id, pending in list(self._pending.items()):
+                # Unblock dispatch decision wait (if planner is waiting on SpecCard)
+                if not pending.decision_event.is_set():
+                    pending.cancelled = True
+                    pending.decision_event.set()
+                # Signal the worker's cancel event (if worker is running)
+                if pending.cancel_event is not None:
+                    pending.cancel_event.set()
+
     # ---- worker run -------------------------------------------------------
 
     def _run_worker(
@@ -875,6 +888,7 @@ class ConversationBridge(QObject):
 
     def request_cancel(self) -> None:
         self._cancel.set()
+        self._dispatch_proxy.cancel_all_pending()
 
     # ---- private slots ----------------------------------------------------
 
