@@ -77,7 +77,7 @@ Toggle a toolbar button to lock out all write tools. The AI can still read, sear
 
 ### Web Research Agent
 
-`run_research` dispatches a background sub-agent that autonomously searches the web (via DuckDuckGo) and scrapes pages to produce a synthesized report. Ideal for looking up documentation, debugging unfamiliar errors, or researching libraries.
+`run_research` dispatches a background sub-agent that autonomously searches the web and scrapes pages to produce a synthesized report. Ideal for looking up documentation, debugging unfamiliar errors, or researching libraries.
 
 ### Terminal Commands
 
@@ -410,7 +410,7 @@ python scripts/smoke_client.py
 | [Pillow](https://pypi.org/project/Pillow/) | Image handling for pasted screenshots |
 | [Pygments](https://pypi.org/project/Pygments/) | Syntax highlighting in diff dialogs |
 | [httpx](https://pypi.org/project/httpx/) | HTTP client for web research |
-| [ddgs](https://pypi.org/project/ddgs/) | DuckDuckGo search for web research |
+| [ddgs](https://pypi.org/project/ddgs/) | Web search for research |
 | [beautifulsoup4](https://pypi.org/project/beautifulsoup4/) | HTML parsing for web research |
 
 ---
