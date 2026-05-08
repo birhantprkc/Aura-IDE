@@ -8,7 +8,7 @@
 
 **Desktop AI Orchestration IDE — pair programming with full workspace awareness.**
 
-Aura is a desktop chat application that helps you troubleshoot and modify your codebase. You chat with an AI agent that can read your project files, search your codebase, propose code changes, and — when you approve — apply those changes directly to disk. It supports **DeepSeek**, **OpenAI**, and **Google Gemini** as AI backends, with a local [Ollama](https://ollama.com/) vision model for screenshot preprocessing.
+Aura is a desktop chat application that helps you troubleshoot and modify your codebase. You chat with an AI agent that can read your project files, search your codebase, propose code changes, and — when you approve — apply those changes directly to disk. It supports **DeepSeek**, **OpenAI**, **Google Gemini**, and **OpenRouter** as AI backends, with a local [Ollama](https://ollama.com/) vision model for screenshot preprocessing.
 
 Built with [PySide6](https://pypi.org/project/PySide6/) (Qt for Python).
 
@@ -49,7 +49,7 @@ A two-agent system inspired by pair programming. The **Planner** reads your code
 
 ### Multi-Provider Support
 
-Choose between **DeepSeek**, **OpenAI**, or **Google Gemini** as your AI provider. Each provider exposes multiple models with independent pricing. The Planner and Worker can use different models — for example, a fast model for the Planner and a more capable model for the Worker. See [Supported Providers & Models](#supported-providers-models) for the full catalogue.
+Choose between **DeepSeek**, **OpenAI**, **Google Gemini**, or **OpenRouter** as your AI provider. Each provider exposes multiple models with independent pricing. The Planner and Worker can use different models — for example, a fast model for the Planner and a more capable model for the Worker. See [Supported Providers & Models](#supported-providers-models) for the full catalogue.
 
 ### Filesystem Tools
 
@@ -64,6 +64,8 @@ The AI has direct, sandboxed access to your workspace. All file paths are valida
 | **Terminal** | `run_terminal_command` | Run linters, test suites, type checkers, or installers with live-streamed output |
 | **Worker** | `update_todo_list` | Worker-only: maintains a live progress tracker shown to the user |
 | **Dispatch** | `dispatch_to_worker` | Planner-only: hands off a spec to the Worker for execution |
+
+The conversation loop includes a **circuit breaker** that detects when the same tool call produces the identical failure output three or more times consecutively. In such cases, a warning is injected into the tool result to alert the AI that it is likely in a loop, preventing infinite retry cycles.
 
 ### Safe File Editing with Backups
 
@@ -83,7 +85,7 @@ Toggle a toolbar button to lock out all write tools. The AI can still read, sear
 
 ### Vision Preprocessing
 
-Paste screenshots (`Ctrl+V`) or drag-and-drop images into the chat. A local [Ollama](https://ollama.com/) vision model (`llama3.2-vision`) describes them in detail so the AI can reason about visual content — error dialogs, UI glitches, diagrams, and more.
+Paste screenshots (`Ctrl+V`) or drag-and-drop images into the chat. The input panel handles both clipboard paste and file drag-and-drop. A local [Ollama](https://ollama.com/) vision model (`llama3.2-vision`) describes them in detail so the AI can reason about visual content — error dialogs, UI glitches, diagrams, and more.
 
 ### Git Integration
 
@@ -113,16 +115,20 @@ Choose **Off**, **High**, or **Max** reasoning depth independently for the Plann
 
 Configure separate system prompts for Single mode, the Planner, and the Worker via the Settings dialog. Tailor each agent's behavior, style, and constraints to your workflow.
 
+### Separate Worker Temperature
+
+The Worker has its own temperature setting (default 0.1) separate from the Planner / Single mode (default 0.7). This makes the Worker more deterministic and consistent when applying code changes, while the Planner can remain more creative when reasoning about architecture. Both temperatures are configurable in Settings.
+
 ---
 
 ## Supported Providers & Models
 
 ### DeepSeek
 
-| Model | Label | Input (cache miss) | Input (cache hit) | Output | 
+| Model | Label | Input (cache miss) | Input (cache hit) | Output |
 |-------|-------|--------------------|-------------------|--------|
-| `deepseek-v4-flash` | V4 Flash | $0.14 / M tokens | $0.003 / M tokens | $0.28 / M tokens |
-| `deepseek-v4-pro` | V4 Pro | $1.74 / M tokens | $0.015 / M tokens | $3.48 / M tokens |
+| `deepseek-v4-flash` | V4 Flash | $0.14 / M tokens | $0.014 / M tokens | $0.28 / M tokens |
+| `deepseek-v4-pro` | V4 Pro | $0.55 / M tokens | $0.07 / M tokens | $2.19 / M tokens |
 
 **Base URL:** `https://api.deepseek.com`  
 **Env var:** `DEEPSEEK_API_KEY`
@@ -147,6 +153,24 @@ Configure separate system prompts for Single mode, the Planner, and the Worker v
 
 **Base URL:** `https://generativelanguage.googleapis.com/v1beta/openai/`  
 **Env var:** `GEMINI_API_KEY`
+
+### OpenRouter
+
+| Model | Label | Input (cache miss) | Input (cache hit) | Output |
+|-------|-------|--------------------|-------------------|--------|
+| `openai/gpt-4o` | OpenAI GPT-4o | $2.50 / M tokens | $1.25 / M tokens | $10.00 / M tokens |
+| `openai/gpt-4o-mini` | OpenAI GPT-4o Mini | $0.15 / M tokens | $0.075 / M tokens | $0.60 / M tokens |
+| `anthropic/claude-3.5-sonnet` | Claude 3.5 Sonnet | $3.00 / M tokens | $0.30 / M tokens | $15.00 / M tokens |
+| `anthropic/claude-3.7-sonnet` | Claude 3.7 Sonnet | $3.00 / M tokens | $0.30 / M tokens | $15.00 / M tokens |
+| `meta-llama/llama-3.1-8b-instruct` | Llama 3.1 8B | $0.06 / M tokens | $0.03 / M tokens | $0.06 / M tokens |
+| `meta-llama/llama-3.1-70b-instruct` | Llama 3.1 70B | $0.59 / M tokens | $0.30 / M tokens | $0.79 / M tokens |
+| `mistralai/mistral-7b-instruct` | Mistral 7B | $0.06 / M tokens | $0.03 / M tokens | $0.06 / M tokens |
+| `x-ai/grok-2-1212` | Grok 2 | $2.00 / M tokens | $1.00 / M tokens | $10.00 / M tokens |
+| `google/gemini-2.5-flash-001` | Gemini 2.5 Flash | $0.15 / M tokens | $0.015 / M tokens | $0.60 / M tokens |
+| `google/gemini-2.5-pro-001` | Gemini 2.5 Pro | $1.25 / M tokens | $0.25 / M tokens | $10.00 / M tokens |
+
+**Base URL:** `https://openrouter.ai/api/v1`  
+**Env var:** `OPENROUTER_API_KEY`
 
 > **Note:** Pricing data is sourced from official provider documentation and embedded in the app. Actual costs may vary; refer to each provider's current pricing page.
 
@@ -190,6 +214,11 @@ export OPENAI_API_KEY="sk-..."
 **Google Gemini:**
 ```bash
 export GEMINI_API_KEY="..."
+```
+
+**OpenRouter:**
+```bash
+export OPENROUTER_API_KEY="sk-or-..."
 ```
 
 On Windows, set these via **System Properties → Environment Variables**.
@@ -236,7 +265,7 @@ python -m aura
 
 Use the dropdowns in the input panel to configure:
 
-- **Provider** — DeepSeek, OpenAI, or Google Gemini
+- **Provider** — DeepSeek, OpenAI, Google Gemini, or OpenRouter
 - **Planner Model** — Reads code and writes specs
 - **Planner Thinking** — Reasoning depth (Off / High / Max)
 - **Worker Model** — Executes file edits
@@ -257,7 +286,7 @@ Settings are stored at `~/.config/Aura/config.json` (or the platform-appropriate
 
 | Setting | Description |
 |---------|-------------|
-| **Provider** | Select the AI provider (DeepSeek / OpenAI / Google Gemini) |
+| **Provider** | Select the AI provider (DeepSeek / OpenAI / Google Gemini / OpenRouter) |
 | **API Key Status** | Shows whether the required environment variable is set (green = found, red = missing) |
 | **Default Model** | Model used in Single mode |
 | **Default Thinking** | Reasoning depth for Single mode |
@@ -267,6 +296,7 @@ Settings are stored at `~/.config/Aura/config.json` (or the platform-appropriate
 | **Worker Model** | Model assigned to the Worker |
 | **Worker Thinking** | Reasoning depth for the Worker |
 | **Temperature** | Sampling temperature (0.0–2.0) |
+| **Worker Temperature** | Sampling temperature for the worker (0.0–2.0). Default: 0.1 (more deterministic than the planner) |
 | **System Prompt** | Custom system prompt for Single mode |
 | **Planner System Prompt** | Custom system prompt for the Planner agent |
 | **Worker System Prompt** | Custom system prompt for the Worker agent |
@@ -348,7 +378,24 @@ aura/
     ├── spec_edit_dialog.py  # Spec editor before dispatch
     ├── settings_dialog.py   # Settings dialog
     ├── theme.py             # Dark theme constants
-    └── aura_widget.py       # Animated "Aura" dots
+    ├── aura_widget.py       # Animated "Aura" dots
+    ├── controllers.py       # Controller logic
+    ├── markdown_renderer.py # Markdown rendering
+    ├── syntax.py            # Syntax highlighting support
+    └── cards/               # Chat message card widgets
+        ├── __init__.py
+        ├── _collapsible.py
+        ├── _helpers.py
+        ├── _stream_label.py
+        ├── assistant_card.py
+        ├── code_block_card.py
+        ├── code_writer_card.py
+        ├── diff_card.py
+        ├── error_card.py
+        ├── spec_card.py
+        ├── terminal_card.py
+        ├── tool_call_card.py
+        └── user_card.py
 ```
 
 ---
