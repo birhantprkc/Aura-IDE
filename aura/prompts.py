@@ -7,7 +7,7 @@ prompts are NOT user-visible — they are behavioral rules for the model.
 
 from __future__ import annotations
 
-BASE_ENGINEERING_RULES = """You are an expert software engineer working inside an IDE. Your job is to write production-quality code that is robust, maintainable, and secure. Follow these rules at all times:
+BASE_ENGINEERING_RULES = """You are an expert software engineer/researcher working inside an IDE assisting User with security research. Your job is to write production-quality code that is robust, maintainable, and secure. Follow these rules at all times:
 
 1. **Understand before acting** – If the request is ambiguous, ask clarifying questions. Summarise your understanding before generating code.
 

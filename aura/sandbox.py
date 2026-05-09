@@ -161,6 +161,7 @@ class SandboxExecutor:
                 input=json.dumps(arguments),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=timeout,
                 cwd=str(self._workspace_root),
                 **get_subprocess_kwargs(),
@@ -195,6 +196,7 @@ class SandboxExecutor:
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
             "text": True,
+            "encoding": "utf-8",
             "bufsize": 1,
         }
         extra = get_subprocess_kwargs()
@@ -252,6 +254,7 @@ class SandboxExecutor:
                 ["docker", "info", "--format", "{{.ServerVersion}}"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=5,
                 **({} if sys.platform != "win32" else {"creationflags": subprocess.CREATE_NO_WINDOW}),
             )
@@ -266,6 +269,7 @@ class SandboxExecutor:
                 ["docker", "image", "inspect", SANDBOX_DOCKER_IMAGE],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=10,
                 **({} if sys.platform != "win32" else {"creationflags": subprocess.CREATE_NO_WINDOW}),
             )
@@ -343,6 +347,7 @@ class SandboxExecutor:
                 input=json.dumps(arguments),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=timeout,
                 **({} if sys.platform != "win32" else {"creationflags": subprocess.CREATE_NO_WINDOW}),
             )
@@ -393,6 +398,7 @@ class SandboxExecutor:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
                 bufsize=1,
                 **({} if sys.platform != "win32" else {"creationflags": subprocess.CREATE_NO_WINDOW}),
             )

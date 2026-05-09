@@ -129,93 +129,140 @@ class GlassSwitch(QWidget):
 
 
 class AuraWidget(QWidget):
-    """AuraWidget — soft breathing glow effect for active-streaming indication."""
+    """Wrapper widget that draws a soft breathing radial glow underneath an inner card.
+
+    The glow pulsates: it expands outward and fades in, then contracts and fades out,
+    creating a low-key neon-light effect beneath the card.
+    """
 
     def __init__(
         self,
-        child: QWidget,
-        glow_color: str = "#7aa2f7",
-        glow_spread: float = 20.0,
+        inner_widget: QWidget,
+        glow_color: str = "#6d28d9",
+        glow_spread: int = 20,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._glow_color = QColor(glow_color)
         self._glow_spread = glow_spread
-        self._active = False
-        self._opacity = 0.0
+        self._breath: float = 0.0
+
+        self.setStyleSheet("background: transparent;")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(int(glow_spread), int(glow_spread), int(glow_spread), int(glow_spread))
-        layout.setSpacing(0)
-        layout.addWidget(child)
+        layout.setContentsMargins(
+            glow_spread, glow_spread, glow_spread, glow_spread,
+        )
+        layout.addWidget(inner_widget)
 
-        self._anim = QVariantAnimation(self)
-        self._anim.setStartValue(0.2)
-        self._anim.setEndValue(0.7)
-        self._anim.setDuration(1200)
-        self._anim.setLoopCount(-1)
-        self._anim.setEasingCurve(QEasingCurve.Type.InOutSine)
-        self._anim.valueChanged.connect(self._on_anim_val)
+        # Breathing animation: cycles 0.0 -> 1.0 infinitely
+        self._animation = QVariantAnimation(self)
+        self._animation.setStartValue(0.0)
+        self._animation.setEndValue(1.0)
+        self._animation.setDuration(2000)
+        self._animation.setLoopCount(-1)
+        self._animation.valueChanged.connect(self._on_breath_changed)
 
-        # Optimization: only paint if visible/active
-        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
+    def _on_breath_changed(self, value: float) -> None:
+        # Sine shaping: 0 -> 1 -> 0 for smooth breathe-in / breathe-out
+        self._breath = math.sin(value * math.pi)
+        self.update()
 
     def start_aura(self) -> None:
-        self._active = True
-        self._anim.start()
-        self.update()
+        if self._animation.state() != QAbstractAnimation.State.Running:
+            self._animation.start()
 
     def stop_aura(self) -> None:
-        self._active = False
-        self._anim.stop()
-        self._opacity = 0.0
+        self._animation.stop()
+        self._breath = 0.0
         self.update()
+
+    def transition_glow_color(self, new_color: str, duration: int = 600) -> None:
+        """Animate the glow color from its current value to *new_color*."""
+        target = QColor(new_color)
+        start = QColor(self._glow_color)
+        anim = QVariantAnimation(self)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setDuration(duration)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        def _on_value(v: float) -> None:
+            r = int(start.red() + (target.red() - start.red()) * v)
+            g = int(start.green() + (target.green() - start.green()) * v)
+            b = int(start.blue() + (target.blue() - start.blue()) * v)
+            a = int(start.alpha() + (target.alpha() - start.alpha()) * v)
+            self._glow_color = QColor(r, g, b, a)
+            self.update()
+        anim.valueChanged.connect(_on_value)
+        anim.start()
 
     def set_glow_state(self, state: str) -> None:
-        """Update the glow color based on the current worker/planner state."""
-        if state == "thinking":
-            self._glow_color = QColor("#bb9af7")  # Purple
-        elif state == "coding":
-            self._glow_color = QColor("#7dcfff")  # Cyan
-        elif state == "error":
-            self._glow_color = QColor("#f7768e")  # Red
-        else:
-            self._glow_color = QColor("#7aa2f7")  # Default blue
-        self.update()
-
-    def _on_anim_val(self, val: float) -> None:
-        self._opacity = val
-        self.update()
+        """Transition the glow to a semantic colour state."""
+        colors = {
+            "thinking": "#9b30ff",
+            "coding": "#00e5ff",
+        }
+        color = colors.get(state)
+        if color is not None:
+            self.transition_glow_color(color)
+            self.start_aura()
 
     def paintEvent(self, event) -> None:
-        if not self._active:
+        if self._animation.state() != QAbstractAnimation.State.Running:
+            # No glow when idle - fully transparent
+            super().paintEvent(event)
             return
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rect = self.rect()
-        inner_rect = self.layout().itemAt(0).widget().geometry()
+        if rect.isEmpty():
+            painter.end()
+            return
 
-        # Simple radial gradient at the center of the widget
+        b = self._breath
+        if b < 0.005:
+            painter.end()
+            return
+
+        # Build a ring-shaped clip path: outer rounded rect minus inner
+        # rounded rect, so the glow only appears in the margin around the card.
+        s = self._glow_spread
+        outer_rect = QRectF(rect)
+        inner_rect = QRectF(
+            rect.x() + s, rect.y() + s,
+            rect.width() - 2 * s, rect.height() - 2 * s,
+        )
+        outer_path = QPainterPath()
+        outer_path.addRoundedRect(outer_rect, 8, 8)
+        inner_path = QPainterPath()
+        inner_path.addRoundedRect(inner_rect, 8, 8)
+        ring_path = outer_path.subtracted(inner_path)
+        painter.setClipPath(ring_path)
+
+        # Radial gradient centered on the widget - still pulses with breath
         center = rect.center()
-        radius = max(rect.width(), rect.height()) / 1.5
+        max_r = max(rect.width(), rect.height()) * 0.5
+        radius = max_r * (0.3 + 0.7 * b)  # expands/contracts with breath
+
+        alpha = int(220 * b)  # fades in/out with breath
+
+        c = self._glow_color
+        inner = QColor(c.red(), c.green(), c.blue(), alpha)
+        mid = QColor(c.red(), c.green(), c.blue(), alpha // 2)
+        outer = QColor(0, 0, 0, 0)
 
         gradient = QRadialGradient(center, radius)
-        
-        c = self._glow_color
-        inner = QColor(c.red(), c.green(), c.blue(), int(255 * self._opacity))
-        mid = QColor(c.red(), c.green(), c.blue(), int(100 * self._opacity))
-        
-        # Halo fix: make the center transparent from 0.0 to nearly inner_pos
-        inner_pos = (min(inner_rect.width(), inner_rect.height()) / 2.0) / radius
+        # Position the strongest colour at the inner edge of the ring so the
+        # glow fades naturally from the card border outward.
+        inner_pos = 0.0
+        if max_r > 0:
+            inner_pos = max(0.0, (min(rect.width(), rect.height()) * 0.5 - s) / max_r)
         inner_pos = min(inner_pos, 0.99)
-        
-        gradient.setColorAt(0.0, QColor(0, 0, 0, 0))
-        gradient.setColorAt(max(0.0, inner_pos - 0.1), QColor(0, 0, 0, 0))
         gradient.setColorAt(inner_pos, inner)
         gradient.setColorAt(inner_pos + (1.0 - inner_pos) * 0.5, mid)
-        gradient.setColorAt(1.0, QColor(0, 0, 0, 0))
+        gradient.setColorAt(1.0, outer)
 
         painter.fillRect(rect, gradient)
         painter.end()
@@ -528,6 +575,39 @@ class AuraPlayground(QWidget):
             self._auras[aid].stop_aura()
 
     def update_todo_list(self, tasks: list): self._todo_widget.update_tasks(tasks)
+
+    def add_diff_card(
+        self,
+        worker_tool_id: str,
+        rel_path: str,
+        old: str,
+        new: str,
+        decision: str,
+        is_new_file: bool,
+    ) -> None:
+        from aura.gui.cards import DiffCard
+        card = DiffCard(rel_path, old, new, decision, is_new_file)
+        # Use AuraWidget for visual consistency with streaming cards
+        wrapper = AuraWidget(card, parent=self)
+        self._card_layout.insertWidget(self._card_layout.count() - 1, wrapper)
+        # Scroll to bottom
+        QTimer.singleShot(50, lambda: self._scroll.verticalScrollBar().setValue(
+            self._scroll.verticalScrollBar().maximum()
+        ))
+
+    def add_error(self, message: str) -> None:
+        from aura.gui.cards import ErrorCard
+        card = ErrorCard("Worker Error", message)
+        self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+
+    def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
+        from aura.gui.cards import TerminalCard
+        # Find existing terminal card for this tool call or create new
+        # For simplicity in Playground, we just append to the most recent or create
+        card = TerminalCard()
+        self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+        card.append_text(text)
+
     def worker_finished(self, ok: bool, s: str): pass
     def worker_cancelled(self): pass
     def clear(self): self.begin_assistant()
