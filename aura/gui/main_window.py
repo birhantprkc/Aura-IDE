@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from aura.bridge import ConversationBridge
 from aura.bridge.qt_bridge import PLANNER_SYSTEM_PROMPT
+from aura.prompts import SINGLE_SYSTEM_PROMPT
 from aura.config import (
     APP_NAME,
     PROVIDERS,
@@ -56,19 +57,6 @@ from aura.gui.spec_edit_dialog import SpecApprovalDialog, SpecEditDialog
 from aura.gui.theme import BORDER, FG_DIM
 from aura.gui.worker_window import AuraPlayground
 from aura.gui.workspace_tree import WorkspaceTree
-
-SYSTEM_PROMPT = (
-    "You are Aura, a desktop assistant focused on troubleshooting code with the user.\n"
-    "You have filesystem tools (read_file, list_directory, glob, write_file, edit_file) "
-    "scoped to the user's workspace. Workspace-relative paths only.\n"
-    "When the user asks about their code, USE the tools to read the actual files before "
-    "answering — do not guess. When proposing changes, prefer edit_file with a "
-    "Search Block (the code to change plus a few lines of surrounding context) over write_file. "
-    "Every write requires the user's approval through a diff dialog. If a write tool is "
-    "not available, the user has enabled Read-Only Mode; explain what you would change "
-    "instead. Be concise; show the user code, not prose, where it helps. Never fabricate "
-    "file contents or call paths you have not verified with read_file."
-)
 
 _THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
 
@@ -764,7 +752,7 @@ class MainWindow(QMainWindow):
         if enabled:
             prompt = self._settings.planner_system_prompt or PLANNER_SYSTEM_PROMPT
         else:
-            prompt = self._settings.system_prompt or SYSTEM_PROMPT
+            prompt = self._settings.system_prompt or SINGLE_SYSTEM_PROMPT
         self._bridge.set_system_prompt(prompt)
         if hasattr(self, "_chat"):
             self._chat.set_compact_tools(enabled)
@@ -1234,7 +1222,7 @@ class MainWindow(QMainWindow):
 
     def _apply_loaded_conversation(self, loaded: LoadedConversation) -> None:
         pwm = loaded.planner_worker_mode
-        default_prompt = PLANNER_SYSTEM_PROMPT if pwm else SYSTEM_PROMPT
+        default_prompt = PLANNER_SYSTEM_PROMPT if pwm else SINGLE_SYSTEM_PROMPT
         self._bridge.history.system_prompt = (
             loaded.history.system_prompt or default_prompt
         )

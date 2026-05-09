@@ -32,6 +32,7 @@ from aura.client import (
 )
 from aura.conversation import ConversationManager, History
 from aura.conversation.tools import ApprovalDecision, ApprovalRequest, ToolRegistry
+from aura.prompts import SINGLE_SYSTEM_PROMPT
 
 
 def auto_approve(_req: ApprovalRequest) -> ApprovalDecision:
@@ -100,9 +101,7 @@ def main() -> int:
 
         client = DeepSeekClient()
         history = History()
-        history.set_system(
-            "You are Aura, a coding assistant with filesystem tools. Use tools to ground answers."
-        )
+        history.set_system(SINGLE_SYSTEM_PROMPT)
         tools = ToolRegistry(root, read_only=False)
         manager = ConversationManager(client=client, history=history, tool_registry=tools)
 

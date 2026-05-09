@@ -260,8 +260,7 @@ class SettingsDialog(QDialog):
         form.addRow("", prompts_note)
 
         # Lazy import to avoid circular dependency at module level.
-        from aura.bridge.qt_bridge import PLANNER_SYSTEM_PROMPT as _PLANNER_PROMPT, WORKER_SYSTEM_PROMPT as _WORKER_PROMPT
-        from aura.gui.main_window import SYSTEM_PROMPT as _SINGLE_PROMPT
+        from aura.prompts import PLANNER_SYSTEM_PROMPT as _PLANNER_PROMPT, WORKER_SYSTEM_PROMPT as _WORKER_PROMPT, SINGLE_SYSTEM_PROMPT as _SINGLE_PROMPT
 
         # Single-mode prompt
         self._single_prompt_edit = QPlainTextEdit()

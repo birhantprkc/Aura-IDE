@@ -28,9 +28,8 @@ if hasattr(sys.stdout, "reconfigure"):
 else:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
+from aura.prompts import PLANNER_SYSTEM_PROMPT, WORKER_SYSTEM_PROMPT
 from aura.bridge.qt_bridge import (
-    PLANNER_SYSTEM_PROMPT,
-    WORKER_SYSTEM_PROMPT,
     _format_spec_as_user_message,
     _build_worker_summary,
     _last_assistant_content,
