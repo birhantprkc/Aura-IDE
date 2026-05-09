@@ -952,6 +952,7 @@ class MainWindow(QMainWindow):
                 self._bridge.history.append_user_text(text)
 
         self._chat.add_user(display_text, [a.b64 for a in image_atts] or None)
+        self._chat.scroll_to_bottom(force=True)
         self._chat.begin_assistant()
 
         self._bridge.send(

@@ -566,30 +566,42 @@ class AuraPlayground(QWidget):
 
         self._artifacts, self._controllers, self._auras, self._terminal_cards, self._log_card = {}, {}, {}, {}, None
         
-        # Connect to scroll bar changes to implement sticky scroll
-        self._scroll.verticalScrollBar().rangeChanged.connect(self._on_scroll_range_changed)
+        # Follow active worker output unless the user scrolls away from the bottom.
+        self._auto_follow_bottom = True
         self._last_scroll_max = 0
+        self._scroll.verticalScrollBar().rangeChanged.connect(self._on_scroll_range_changed)
+        self._scroll.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
 
     def _on_scroll_range_changed(self, min_val: int, max_val: int) -> None:
         """If we were at the bottom before the range increased, stay at the bottom."""
-        bar = self._scroll.verticalScrollBar()
-        # If user was near the bottom (within 50px), stick to the new bottom
-        if max_val > self._last_scroll_max:
-            if self._last_scroll_max - bar.value() < 50:
-                bar.setValue(max_val)
+        if max_val > self._last_scroll_max and self._auto_follow_bottom:
+            self._set_scrollbar_to_bottom()
         self._last_scroll_max = max_val
 
-    def _scroll_to_bottom(self):
-        """Force scroll to bottom (e.g. when a new card is added)."""
+    def _on_scroll_value_changed(self, value: int) -> None:
         bar = self._scroll.verticalScrollBar()
-        bar.setValue(bar.maximum())
+        self._auto_follow_bottom = bar.maximum() - value <= 60
+
+    def _set_scrollbar_to_bottom(self):
+        self._scroll.verticalScrollBar().setValue(self._scroll.verticalScrollBar().maximum())
+
+    def _scroll_to_bottom(self, force: bool = False):
+        """Keep the newest worker output visible when following the stream."""
+        if not force and not self._auto_follow_bottom:
+            return
+        self._auto_follow_bottom = True
+        self._set_scrollbar_to_bottom()
+        if force:
+            for delay in (0, 50, 150):
+                QTimer.singleShot(delay, self._set_scrollbar_to_bottom)
 
     def begin_assistant(self):
         for w in list(self._auras.values()): w.deleteLater()
         for w in list(self._terminal_cards.values()): w.deleteLater()
         self._artifacts.clear(); self._auras.clear(); self._controllers.clear(); self._terminal_cards.clear()
         if self._log_card: self._log_card.clear(); self._log_card.setVisible(False)
-        self._scroll_to_bottom()
+        self._last_scroll_max = 0
+        self._scroll_to_bottom(force=True)
 
     def _ensure_log_card(self):
         if not self._log_card:
@@ -600,9 +612,11 @@ class AuraPlayground(QWidget):
 
     def append_reasoning(self, text: str): 
         self._ensure_log_card().append_text(text)
+        self._scroll_to_bottom()
 
     def append_content(self, text: str): 
         self._ensure_log_card().append_text(text)
+        self._scroll_to_bottom()
 
     def add_tool_call(self, worker_tool_id: str, name: str):
         from aura.gui.cards import TerminalCard
@@ -683,6 +697,7 @@ class AuraPlayground(QWidget):
         from aura.gui.cards import ErrorCard
         card = ErrorCard("Worker Error", message)
         self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+        self._scroll_to_bottom()
 
     def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
         from aura.gui.cards import TerminalCard
@@ -693,6 +708,7 @@ class AuraPlayground(QWidget):
             self._card_layout.insertWidget(self._card_layout.count() - 1, card)
         
         self._terminal_cards[worker_tool_id].append_output(text)
+        self._scroll_to_bottom()
 
     def worker_finished(self, ok: bool, s: str): pass
     def worker_cancelled(self): pass

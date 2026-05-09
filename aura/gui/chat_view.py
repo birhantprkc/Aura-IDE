@@ -1,7 +1,7 @@
 """Chat transcript: scrollable column of message cards."""
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -67,18 +67,22 @@ class ChatView(QScrollArea):
         self._is_bulk_updating: bool = False
         self._show_empty_hint()
 
-        # Connect to scroll bar changes to implement sticky scroll
-        self.verticalScrollBar().rangeChanged.connect(self._on_scroll_range_changed)
+        # Follow new content while the user is reading the bottom of the thread.
+        # If they scroll upward, leave the viewport alone until they return.
+        self._auto_follow_bottom = True
         self._last_scroll_max = 0
+        self.verticalScrollBar().rangeChanged.connect(self._on_scroll_range_changed)
+        self.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
 
     def _on_scroll_range_changed(self, min_val: int, max_val: int) -> None:
         """If we were at the bottom before the range increased, stay at the bottom."""
-        bar = self.verticalScrollBar()
-        # If user was near the bottom (within 50px), stick to the new bottom
-        if max_val > self._last_scroll_max:
-            if self._last_scroll_max - bar.value() < 50:
-                bar.setValue(max_val)
+        if max_val > self._last_scroll_max and self._auto_follow_bottom:
+            self._set_scrollbar_to_bottom()
         self._last_scroll_max = max_val
+
+    def _on_scroll_value_changed(self, value: int) -> None:
+        bar = self.verticalScrollBar()
+        self._auto_follow_bottom = bar.maximum() - value <= 60
 
     # ---- container management --------------------------------------------
 
@@ -89,7 +93,7 @@ class ChatView(QScrollArea):
     def end_bulk_update(self) -> None:
         """Resume animations and scrolling, and sync the view."""
         self._is_bulk_updating = False
-        self._scroll_to_bottom(force=True)
+        self.scroll_to_bottom(force=True)
 
     def _add_card(self, w: QWidget) -> None:
         if self._empty_hint is not None:
@@ -111,8 +115,9 @@ class ChatView(QScrollArea):
     def _scroll_to_bottom(self, force: bool = False) -> None:
         if self._is_bulk_updating and not force:
             return
-        if not force and not self._is_at_bottom():
+        if not force and not self._auto_follow_bottom:
             return
+        self._auto_follow_bottom = True
         bar = self.verticalScrollBar()
         # Stop any in-flight smooth scroll
         if hasattr(self, '_scroll_anim') and self._scroll_anim is not None:
@@ -123,6 +128,18 @@ class ChatView(QScrollArea):
         self._scroll_anim.setEndValue(bar.maximum())
         self._scroll_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._scroll_anim.start()
+
+    def _set_scrollbar_to_bottom(self) -> None:
+        bar = self.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def scroll_to_bottom(self, force: bool = False) -> None:
+        """Move to the newest content, with delayed passes for late layout changes."""
+        self._scroll_to_bottom(force=force)
+        if force:
+            self._auto_follow_bottom = True
+            for delay in (0, 50, 150):
+                QTimer.singleShot(delay, self._set_scrollbar_to_bottom)
 
     def set_compact_tools(self, enabled: bool) -> None:
         self._compact_tools = enabled
@@ -152,6 +169,8 @@ class ChatView(QScrollArea):
         self._terminal_cards.clear()
         self._controllers.clear()
         self._compact_tool_names.clear()
+        self._auto_follow_bottom = True
+        self._last_scroll_max = 0
         self._empty_hint = None
         self._show_empty_hint()
 
@@ -200,7 +219,7 @@ class ChatView(QScrollArea):
         if not ac._content_label.isVisible() and self._current_aura is not None:
             self._current_aura.set_glow_state("thinking")
         ac.append_content(text)
-        self._scroll_to_bottom(force=True)
+        self._scroll_to_bottom()
 
     def add_tool_call(self, tool_call_id: str, name: str) -> None:
         if self._current_aura is not None:
@@ -312,6 +331,7 @@ class ChatView(QScrollArea):
         # Stop the breathing glow — content is complete, no need to pulse anymore.
         if self._current_aura is not None:
             self._current_aura.stop_aura()
+        self._scroll_to_bottom()
 
     def finalize_markdown_only(self) -> None:
         """Finalize Markdown rendering without stopping the breathing aura.
@@ -322,6 +342,7 @@ class ChatView(QScrollArea):
         ac = self._current_assistant
         if ac is not None:
             ac.finalize_content()
+            self._scroll_to_bottom()
 
     def hold_aura_coding(self) -> None:
         """Transition the current aura to 'coding' color and ensure it stays alive.
