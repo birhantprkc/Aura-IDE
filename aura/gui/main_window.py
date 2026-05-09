@@ -311,11 +311,7 @@ class MainWindow(QMainWindow):
 
         self._toolbar.addWidget(_toolbar_separator())
 
-        # Group 3: settings + about
-        settings_act = QAction(QIcon(str(media_path("settings_24dp.svg"))), "Settings", self)
-        settings_act.triggered.connect(self._on_open_settings)
-        self._toolbar.addAction(settings_act)
-
+        # Group 3: about
         about_act = QAction("\u24d8", self)  # ⓘ
         about_act.setToolTip("About Aura")
         about_act.triggered.connect(self._on_about)
@@ -329,10 +325,10 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._toolbar.addWidget(spacer)
 
-        # Right side: workspace name (small)
-        self._toolbar_workspace_label = QLabel("")
-        self._toolbar_workspace_label.setStyleSheet(f"color: {FG_DIM};")
-        self._toolbar.addWidget(self._toolbar_workspace_label)
+        # Settings button on the right side
+        settings_act = QAction(QIcon(str(media_path("settings_24dp.svg"))), "Settings", self)
+        settings_act.triggered.connect(self._on_open_settings)
+        self._toolbar.addAction(settings_act)
 
         # Small spacer before window controls.
         win_spacer = QWidget()
@@ -652,11 +648,9 @@ class MainWindow(QMainWindow):
     def _update_workspace_label(self) -> None:
         if self._workspace_root is None:
             self._workspace_label.setText("(none)")
-            self._toolbar_workspace_label.setText("")
             return
         full = str(self._workspace_root)
         self._workspace_label.setText(full)
-        self._toolbar_workspace_label.setText(self._workspace_root.name)
 
     def _on_about(self) -> None:
         from aura import __version__
