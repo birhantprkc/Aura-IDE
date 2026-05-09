@@ -442,7 +442,7 @@ MAX_GLOB_RESULTS = 200
 # Sandbox configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_SANDBOX_MODE: str = "host"
+DEFAULT_SANDBOX_MODE: str = "docker"
 """Default sandbox mode for terminal commands and dynamic tools.
 'host' — run directly on the host (no isolation).
 'docker' — run inside a Docker container with resource limits.

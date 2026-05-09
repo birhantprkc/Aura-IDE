@@ -29,15 +29,12 @@ from aura.config import (
     PROVIDERS,
     AppSettings,
     ProviderId,
-    ThinkingMode,
     fetch_provider_models,
-    get_api_key,
     get_provider,
-    icon_path,
     save_dynamic_catalog,
     save_settings,
 )
-from aura.gui.theme import DANGER, FG_DIM, SUCCESS, WARN
+from aura.gui.theme import FG_DIM, SUCCESS, WARN
 
 _THINKING_ITEMS: list[tuple[str, str]] = [
     ("Off", "off"),
@@ -100,6 +97,7 @@ class SettingsDialog(QDialog):
             planner_system_prompt=settings.planner_system_prompt,
             worker_system_prompt=settings.worker_system_prompt,
             auto_commit_enabled=settings.auto_commit_enabled,
+            sandbox_mode=settings.sandbox_mode,
         )
         self._on_change_root = on_change_root
 
@@ -242,6 +240,35 @@ class SettingsDialog(QDialog):
         )
         self._auto_commit_chk.setChecked(self._settings.auto_commit_enabled)
         form.addRow("", self._auto_commit_chk)
+
+        # --- Sandbox ---
+        sandbox_sep = QLabel("Execution Sandbox")
+        sandbox_sep.setStyleSheet(
+            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
+            " text-transform: uppercase; letter-spacing: 0.04em;"
+        )
+        form.addRow("", sandbox_sep)
+
+        sandbox_note = QLabel(
+            "Docker mode runs terminal commands and dynamic tools in an isolated container. "
+            "Host mode runs them directly on your machine (fast but no isolation). "
+            "Docker must be installed for Docker mode to work."
+        )
+        sandbox_note.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        sandbox_note.setWordWrap(True)
+        form.addRow("", sandbox_note)
+
+        self._sandbox_combo = QComboBox()
+        # Items: (display label, internal value)
+        self._sandbox_combo.addItem("Docker (recommended)", "docker")
+        self._sandbox_combo.addItem("Host (no isolation)", "host")
+        self._sandbox_combo.addItem("WASM (coming soon)", "wasm")
+        form.addRow("Sandbox mode:", self._sandbox_combo)
+
+        # Set current sandbox mode from saved settings
+        sandbox_idx = self._sandbox_combo.findData(self._settings.sandbox_mode)
+        if sandbox_idx >= 0:
+            self._sandbox_combo.setCurrentIndex(sandbox_idx)
 
         # --- System Prompts ---
         prompts_sep = QLabel("System Prompts")
@@ -500,6 +527,7 @@ class SettingsDialog(QDialog):
             planner_system_prompt=self._planner_prompt_edit.toPlainText().strip(),
             worker_system_prompt=self._worker_prompt_edit.toPlainText().strip(),
             auto_commit_enabled=self._auto_commit_chk.isChecked(),
+            sandbox_mode=self._sandbox_combo.currentData(),
         )
 
     def accept(self) -> None:  # type: ignore[override]
