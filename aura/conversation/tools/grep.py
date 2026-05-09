@@ -91,7 +91,16 @@ def _grep_ripgrep(
             data = json.loads(line)
             if data.get("type") == "match":
                 m_data = data["data"]
-                rel_path = Path(m_data["path"]["text"]).relative_to(root).as_posix()
+                # Resolve the path from rg (which might be relative to where it ran)
+                # to ensure it's absolute, then make it relative to our root.
+                raw_match_path = m_data["path"]["text"]
+                abs_match_path = (root / raw_match_path).resolve()
+                try:
+                    rel_path = abs_match_path.relative_to(root.resolve()).as_posix()
+                except ValueError:
+                    # Fallback if relative_to fails for some reason
+                    rel_path = raw_match_path
+                
                 matches.append({
                     "path": rel_path,
                     "line_number": m_data["line_number"],
