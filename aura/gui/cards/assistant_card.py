@@ -4,7 +4,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QVariantAnimation
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QSizePolicy,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
 
 from aura.gui.cards._collapsible import _CollapsibleSection
 from aura.gui.cards._helpers import _CODE_FENCE_RE, _fade_in_widget
@@ -16,6 +25,32 @@ from aura.gui.theme import FG, SUCCESS_DIM, WARN
 
 if TYPE_CHECKING:
     from aura.gui.chat_view import ChatView
+
+
+class _MarkdownTextBlock(QTextBrowser):
+    """Auto-height rich text block for finalized assistant markdown."""
+
+    def __init__(self, html: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setOpenExternalLinks(True)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet("background: transparent; border: none;")
+        self.document().setDocumentMargin(0)
+        self.setHtml(html)
+        self._sync_height()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_height()
+
+    def _sync_height(self) -> None:
+        width = max(1, self.viewport().width())
+        self.document().setTextWidth(width)
+        height = int(self.document().size().height() + 4)
+        self.setFixedHeight(max(1, height))
 
 
 class AssistantCard(QFrame):
@@ -246,6 +281,7 @@ class AssistantCard(QFrame):
 
         # If no fenced code blocks, fall back to the old inline HTML render
         if not _CODE_FENCE_RE.search(text):
+            self._content_label.stop_timer()
             html = _render_markdown_with_code(text)
             self._content_label.setTextFormat(Qt.TextFormat.RichText)
             self._content_label.setText(html)
@@ -277,16 +313,10 @@ class AssistantCard(QFrame):
         for seg_type, content, lang in segments:
             if seg_type == "text":
                 if content.strip():
-                    lbl = QLabel()
-                    lbl.setWordWrap(True)
-                    lbl.setTextInteractionFlags(
-                        Qt.TextInteractionFlag.TextSelectableByMouse
-                    )
-                    lbl.setTextFormat(Qt.TextFormat.RichText)
                     html = _render_markdown_with_code(content)
-                    lbl.setText(html)
-                    lbl.setStyleSheet(f"color: {FG};")
-                    container_layout.addWidget(lbl)
+                    block = _MarkdownTextBlock(html)
+                    block.setStyleSheet(f"background: transparent; border: none; color: {FG};")
+                    container_layout.addWidget(block)
             elif seg_type == "code":
                 card = CodeBlockCard(lang, content)
                 container_layout.addWidget(card)

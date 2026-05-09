@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import math
-from pathlib import Path
 
 from PySide6.QtCore import (
     QAbstractAnimation, 
@@ -399,6 +398,7 @@ class ArtifactCard(QFrame):
         self._streaming = False
         self._typing_position = 0
         self._typing_timer = None
+        self._typing_target = content
 
         self.setStyleSheet(f"QFrame#artifactCard {{ background: rgba(28, 28, 34, 0.5); border: 1px solid {BORDER}; border-radius: 10px; }}")
 
@@ -433,6 +433,7 @@ class ArtifactCard(QFrame):
         self._code_view = QPlainTextEdit()
         self._code_view.setReadOnly(True)
         self._code_view.setFont(QFont("Geist Mono", 9))
+        self._code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._code_view.setStyleSheet(f"background: {BG}; border: none; padding: 8px;")
         self._stack.addWidget(self._code_view)
 
@@ -440,7 +441,7 @@ class ArtifactCard(QFrame):
 
         self._preview_view = QWebEngineView()
         self._stack.addWidget(self._preview_view)
-        outer.addWidget(self._stack, 1)
+        outer.addWidget(self._stack)
 
         self._refresh_code_view()
         self._refresh_preview()
@@ -452,7 +453,7 @@ class ArtifactCard(QFrame):
         if idx == 1: self._refresh_preview()
 
     def set_target_path(self, path: str):
-        self._label = Path(path).name
+        self._label = path
         self._header_label.setText(self._label)
         self._language = _language_from_path(path)
         if self._highlighter: self._highlighter.deleteLater()
@@ -460,9 +461,12 @@ class ArtifactCard(QFrame):
 
     def update_content(self, content: str):
         self._content = content
-        if self._streaming: self._start_typing(content)
-        else: self._refresh_code_view()
+        if self._streaming:
+            self._start_typing(content)
+        else:
+            self._refresh_code_view()
         self._refresh_preview()
+        self.updateGeometry()
 
     def set_streaming(self, active: bool):
         self._streaming = active
@@ -474,6 +478,8 @@ class ArtifactCard(QFrame):
             self._typing_timer = QTimer(self)
             self._typing_timer.timeout.connect(self._on_typing_tick)
         self._typing_target = target
+        if self._typing_position > len(target):
+            self._typing_position = 0
         if not self._typing_timer.isActive(): self._typing_timer.start(33)
 
     def _on_typing_tick(self):
@@ -490,7 +496,10 @@ class ArtifactCard(QFrame):
 
     def _auto_size(self):
         h = self._code_view.document().size().height() + 20
-        self._code_view.setFixedHeight(int(max(120, min(h, 600))))
+        height = int(max(120, min(h, 600)))
+        self._code_view.setFixedHeight(height)
+        self._preview_view.setFixedHeight(height)
+        self._stack.setFixedHeight(height)
 
     def _refresh_code_view(self):
         self._code_view.setPlainText(self._content)
@@ -619,6 +628,13 @@ class AuraPlayground(QWidget):
             self._card_layout.insertWidget(self._card_layout.count() - 1, card)
             c.command_resolved.connect(card.set_command)
         
+        self._scroll_to_bottom()
+
+    def append_tool_args(self, worker_tool_id: str, fragment: str) -> None:
+        controller = self._controllers.get(worker_tool_id)
+        if controller is None:
+            return
+        controller.append_fragment(fragment)
         self._scroll_to_bottom()
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str):
