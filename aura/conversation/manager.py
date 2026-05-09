@@ -117,14 +117,21 @@ class ConversationManager:
                     return  # surface and stop
 
             if cancel_event.is_set():
-                if full_message is not None and (
-                    full_message.get("content") or full_message.get("reasoning_content")
-                ):
-                    full_message.pop("tool_calls", None)
-                    self._history.append_assistant(full_message)
+                # If we have some content but no tool calls, we can keep it.
+                # If it's empty or has orphaned tool calls, we must strip it.
+                if full_message is not None:
+                    has_content = bool(full_message.get("content") or full_message.get("reasoning_content"))
+                    if has_content:
+                        full_message.pop("tool_calls", None)
+                        self._history.append_assistant(full_message)
+                    else:
+                        self._cleanup_cancelled(on_event)
+                else:
+                    self._cleanup_cancelled(on_event)
                 return
 
             if full_message is None:
+                # Should not happen in normal stream completion
                 return
 
             self._history.append_assistant(full_message)
@@ -512,10 +519,14 @@ class ConversationManager:
         # If the last message is an assistant message with tool calls but no 
         # results yet, we MUST remove it before the next turn, otherwise the 
         # API will error (each tool_call must have a tool_result).
+        # Also remove empty assistant messages.
         if self._history.messages:
             last = self._history.messages[-1]
-            if last.get("role") == "assistant" and last.get("tool_calls"):
-                self._history.messages.pop()
+            if last.get("role") == "assistant":
+                has_tool_calls = bool(last.get("tool_calls"))
+                has_content = bool(last.get("content") or last.get("reasoning_content"))
+                if has_tool_calls or not has_content:
+                    self._history.messages.pop()
 
         on_event(ApiError(status_code=None, message="Cancelled."))
 
