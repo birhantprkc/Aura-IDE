@@ -12,6 +12,14 @@ Aura is a desktop chat application that helps you troubleshoot and modify your c
 
 Built with [PySide6](https://pypi.org/project/PySide6/) (Qt for Python).
 
+<p align="center">
+  <video src="https://github.com/CarpseDeam/Aura-Harness2/raw/master/media/Aura-Working.mp4" width="100%" controls>
+    Your browser does not support the video tag. <a href="https://github.com/CarpseDeam/Aura-Harness2/raw/master/media/Aura-Working.mp4">Download demo</a>
+  </video>
+</p>
+
+<p align="center"><em>Demo: A full Planner → Worker cycle — spec writing, dispatch, code editing with diff approval, and auto-commit.</em></p>
+
 ---
 
 ## Table of Contents
@@ -38,13 +46,6 @@ Built with [PySide6](https://pypi.org/project/PySide6/) (Qt for Python).
 </p>
 
 *Left: Main interface with three-pane layout — workspace tree, chat view, and worker activity panel. Right: Diff approval dialog — every file change is reviewed before being applied.*
-
-<p align="center">
-  <video src="media/Aura-Working.mp4" controls muted loop width="90%">
-    Your browser does not support the video tag. <a href="media/Aura-Working.mp4">Download demo</a>
-  </video>
-</p>
-<p align="center"><em>Demo: A full Planner → Worker cycle — spec writing, dispatch, code editing with diff approval, and auto-commit.</em></p>
 
 ---
 
