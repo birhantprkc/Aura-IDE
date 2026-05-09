@@ -206,13 +206,16 @@ class AuraWidget(QWidget):
         c = self._glow_color
         inner = QColor(c.red(), c.green(), c.blue(), int(255 * self._opacity))
         mid = QColor(c.red(), c.green(), c.blue(), int(100 * self._opacity))
-        outer = QColor(c.red(), c.green(), c.blue(), 0)
-
+        
+        # Halo fix: make the center transparent from 0.0 to nearly inner_pos
         inner_pos = (min(inner_rect.width(), inner_rect.height()) / 2.0) / radius
         inner_pos = min(inner_pos, 0.99)
+        
+        gradient.setColorAt(0.0, QColor(0, 0, 0, 0))
+        gradient.setColorAt(max(0.0, inner_pos - 0.1), QColor(0, 0, 0, 0))
         gradient.setColorAt(inner_pos, inner)
         gradient.setColorAt(inner_pos + (1.0 - inner_pos) * 0.5, mid)
-        gradient.setColorAt(1.0, outer)
+        gradient.setColorAt(1.0, QColor(0, 0, 0, 0))
 
         painter.fillRect(rect, gradient)
         painter.end()
