@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QRadialGradient
 from PySide6.QtWidgets import (
     QComboBox,
@@ -71,6 +71,11 @@ def _toolbar_separator() -> QFrame:
 
 
 class MainWindow(QMainWindow):
+    # Thread-safe signals for cross-thread communication.
+    _vision_done = Signal(object, list, object)   # SendPayload, list[str], str|None
+    _save_succeeded = Signal(Path)                # Path
+    _save_failed = Signal(str)                    # error message
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_NAME)
@@ -217,6 +222,10 @@ class MainWindow(QMainWindow):
 
         # Mermaid diagram detection from chat → playground
         self._chat.mermaid_detected.connect(self._playground.add_mermaid_artifact)
+
+        self._vision_done.connect(self._on_vision_done)
+        self._save_succeeded.connect(self._set_current_conv_path)
+        self._save_failed.connect(lambda msg: self._chat.add_error("Could not save conversation", msg))
 
         self._update_workspace_label()
         self._refresh_status_bar()
@@ -824,8 +833,7 @@ class MainWindow(QMainWindow):
                     )
                 
                 # Marshal back to GUI thread to actually send the message
-                from PySide6.QtCore import QTimer
-                QTimer.singleShot(0, lambda: self._on_vision_done(payload, vision_descriptions, vision_error))
+                self._vision_done.emit(payload, vision_descriptions, vision_error)
 
             import threading
             threading.Thread(target=_run_vision, daemon=True).start()
@@ -1195,11 +1203,9 @@ class MainWindow(QMainWindow):
                     provider=provider,
                 )
                 # Update the current path pointer on the GUI thread
-                from PySide6.QtCore import QTimer
-                QTimer.singleShot(0, lambda: self._set_current_conv_path(path))
+                self._save_succeeded.emit(path)
             except OSError as exc:
-                from PySide6.QtCore import QTimer
-                QTimer.singleShot(0, lambda: self._chat.add_error("Could not save conversation", str(exc)))
+                self._save_failed.emit(str(exc))
 
         import threading
         threading.Thread(target=_run_save, daemon=True).start()
