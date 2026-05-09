@@ -3,20 +3,15 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
+[![Version](https://img.shields.io/badge/version-1.0.0-orange)]()
 
 <img src="media/AurA.ico" alt="Aura icon" width="64" height="64" align="right">
 
 **Desktop AI Orchestration IDE — pair programming with full workspace awareness.**
 
-Aura is a desktop chat application that helps you troubleshoot and modify your codebase. You chat with an AI agent that can read your project files, search your codebase, propose code changes, and — when you approve — apply those changes directly to disk. It supports **DeepSeek**, **OpenAI**, **Anthropic**, **Google Gemini**, and **OpenRouter** as AI backends, with a local [Ollama](https://ollama.com/) vision model for screenshot preprocessing.
-
-Built with [PySide6](https://pypi.org/project/PySide6/) (Qt for Python).
-
-
+Aura is a desktop chat application where you talk to an AI agent that reads your project, searches your codebase, proposes changes, and applies them with diff approval. It supports **DeepSeek**, **OpenAI**, **Anthropic**, **Google Gemini**, and **OpenRouter** as AI backends, with a local [Ollama](https://ollama.com/) vision model for screenshot preprocessing. Built with [PySide6](https://pypi.org/project/PySide6/) (Qt for Python).
 
 https://github.com/user-attachments/assets/b295ea01-cec9-428d-af87-56c1dcfb9fbe
-
-
 
 <p align="center"><em>Demo: A full Planner → Worker cycle — spec writing, dispatch, code editing with diff approval, and auto-commit.</em></p>
 
@@ -25,7 +20,27 @@ https://github.com/user-attachments/assets/b295ea01-cec9-428d-af87-56c1dcfb9fbe
 ## Table of Contents
 
 - [Screenshots](#screenshots)
-- [Key Features](#key-features)
+- [✨ Features](#-features)
+  - [Planner / Worker Architecture](#planner--worker-architecture)
+  - [Comprehensive Tools Suite](#comprehensive-tools-suite)
+  - [Diff Approval & Backups](#diff-approval--backups)
+  - [Git Integration](#git-integration)
+  - [Web Research](#web-research)
+  - [Terminal Commands](#terminal-commands)
+  - [Vision Preprocessing](#vision-preprocessing)
+  - [Dynamic / Self-Extending Tools](#dynamic--self-extending-tools)
+  - [Sandbox Execution](#sandbox-execution)
+  - [Hardware-Tethered API Key Encryption](#hardware-tethered-api-key-encryption)
+  - [Codebase Index (BM25 Semantic Search)](#codebase-index-bm25-semantic-search)
+  - [Session Cost Tracking](#session-cost-tracking)
+  - [Thinking Modes](#thinking-modes)
+  - [Custom System Prompts](#custom-system-prompts)
+  - [Separate Worker Temperature](#separate-worker-temperature)
+  - [Read-Only Mode](#read-only-mode)
+  - [Auto-Dispatch & Auto-Approve](#auto-dispatch--auto-approve)
+  - [Conversation Persistence](#conversation-persistence)
+  - [Keyboard Shortcuts & Slash Commands](#keyboard-shortcuts--slash-commands)
+  - [Cross-Platform](#cross-platform)
 - [Supported Providers](#supported-providers)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -49,89 +64,260 @@ https://github.com/user-attachments/assets/b295ea01-cec9-428d-af87-56c1dcfb9fbe
 
 ---
 
-## Key Features
+## ✨ Features
 
 ### Planner / Worker Architecture
 
-A two-agent system inspired by pair programming. The **Planner** reads your codebase, reasons about the change, asks clarifying questions, and writes a precise technical specification. The **Worker** executes that specification with read/write filesystem access, subject to your approval. Both agents can be assigned different models and reasoning depths from the same provider.
+Aura uses a **two-agent system** inspired by pair programming:
 
-### Multi-Provider Support
+- **Planner** — Reads your codebase, reasons about the requested change, asks clarifying questions, and writes a precise technical specification. Once you're satisfied, it calls `dispatch_to_worker` to hand off the spec.
+- **Worker** — Executes the specification with read/write filesystem access. It reads target files, applies edits, runs validation commands, and reports back a summary.
 
-Choose between **DeepSeek**, **OpenAI**, **Anthropic**, **Google Gemini**, or **OpenRouter** as your AI provider. Each provider exposes multiple models with independent pricing. The Planner and Worker can use different models — for example, a fast model for the Planner and a more capable model for the Worker. See [Supported Providers](#supported-providers) for details.
+Both agents can use **different models** and **different reasoning depths** from the same provider. For example, use a fast/cheap model for the Planner and a more capable model for the Worker.
 
-### Filesystem Tools
+The **Planner Log viewer** lets you inspect the Planner's full reasoning chain before dispatching. The **Spec Edit dialog** lets you modify the spec before handing it to the Worker — giving you full control over what gets implemented and how.
 
-The AI has direct, sandboxed access to your workspace. All file paths are validated against the workspace root — the AI cannot escape the project directory.
+### Comprehensive Tools Suite
 
-| Category | Tools | Description |
-|----------|-------|-------------|
-| **Read** | `read_file`, `list_directory`, `glob`, `read_file_outline`, `grep_search`, `find_usages` | Explore the codebase — read files, list directories, find files by pattern, extract structural outlines via AST, search text with regex, and find all usages of a symbol |
-| **Write** | `write_file`, `edit_file` | Create or replace files; surgically replace code blocks with fuzzy matching |
-| **Git** | `git_status`, `git_diff` | Inspect working tree state, review staged or unstaged changes |
-| **Web** | `web_search`, `web_fetch` | Search the web (Tavily) and fetch page content (used by the research sub-agent) |
-| **Terminal** | `run_terminal_command` | Run linters, test suites, type checkers, or installers with live-streamed output |
-| **Worker** | `update_todo_list` | Worker-only: maintains a live progress tracker shown to the user |
-| **Dispatch** | `dispatch_to_worker` | Planner-only: hands off a spec to the Worker for execution |
+The AI has a rich set of tools — all sandboxed to your workspace root (the AI cannot escape the project directory). Tools are grouped by category:
 
-The conversation loop includes a **circuit breaker** that detects when the same tool call produces the identical failure output three or more times consecutively. In such cases, a warning is injected into the tool result to alert the AI that it is likely in a loop, preventing infinite retry cycles.
+#### 📖 Read Tools
 
-### Safe File Editing with Backups
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read a UTF-8 text file from the workspace (capped at 200 KB) |
+| `list_directory` | List files and subdirectories (hides `.git`, `__pycache__`, `.venv`, `node_modules`) |
+| `glob` | Recursively find files matching a glob pattern (capped at 200 results) |
+| `read_file_outline` | Read a file's structural outline — class names, function signatures, imports — via AST (Python) or heuristics (other languages) |
+| `grep_search` | Search file contents with string or regex matching |
+| `find_usages` | Find all usages of a symbol across the workspace using word-boundary matching — safe for refactoring |
+| `search_codebase` | **BM25 semantic search** — ranks entire files by relevance to a natural-language query. Uses a local inverted index over up to 1500 files (128 KB each, 30+ extensions). Perfect for rediscovering files/functions when conversation context has been pruned. |
 
-Every `write_file` or `edit_file` call triggers a **diff approval dialog** before any bytes touch disk. You can **Approve**, **Reject**, **Approve All** (approve this and all subsequent writes in this turn), or **Reject All** (reject this and all further writes). Before any write, existing files are automatically backed up to `.aura/backups/<ISO-timestamp>/<relative-path>` in your workspace.
+#### ✏️ Write Tools
 
-### Read-Only Mode
+| Tool | Description |
+|------|-------------|
+| `write_file` | Create or overwrite a file. Triggers diff approval and automatic backup. |
+| `edit_file` | Surgically replace code via a **Search Block** (context + target code). Uses fuzzy matching — minor whitespace, indentation, or newline differences are tolerated. Triggers diff approval and backup. |
+| `edit_symbol` | **AST-based structured editing** for Python files. Replace a named function, class, or method by specifying its name — finds the symbol in the parsed AST and replaces its entire definition. No whitespace-matching issues. Supports `function`, `class`, and `method` (with `class_name`). |
 
-Toggle a toolbar button to lock out all write tools. The AI can still read, search, and advise, but cannot modify code. Safe for exploration and code review.
+#### 🔧 Git Tools
 
-### Web Research Agent
+| Tool | Description |
+|------|-------------|
+| `git_status` | Show working tree status — current branch, remote tracking info, staged/unstaged/untracked files |
+| `git_diff` | Show diff of unstaged or staged changes |
+| `git_log` | Show recent commit history (with optional file filter) |
+| `git_show` | Show the full diff and metadata for a specific commit |
+| `git_log_file` | Show commit history for a single file, following renames |
+| `git_branch_list` | List all local branches with tracking information |
+| `git_stash_list` | List all stashes |
+| `git_stash_show` | Show the diff of a specific stash |
 
-`run_research` dispatches a background sub-agent that autonomously searches the web and scrapes pages to produce a synthesized report. Ideal for looking up documentation, debugging unfamiliar errors, or researching libraries.
+#### 🌐 Web Tools
 
-### Terminal Commands
+| Tool | Description |
+|------|-------------|
+| `web_search` | Search the web via [Tavily](https://tavily.com/). Returns top results with snippets. |
+| `web_fetch` | Fetch and parse the content of a specific URL using BeautifulSoup |
+| `run_research` | Dispatches a **background sub-agent** that autonomously searches the web (Tavily) and scrapes pages (BeautifulSoup) to produce a synthesized report. Ideal for looking up documentation, debugging unfamiliar errors, or researching libraries. |
 
-`run_terminal_command` executes shell commands in your workspace directory with real-time output streaming. Run linters (`ruff check .`), type checkers (`mypy .`), test suites (`pytest`), or package installers. The AI is instructed to run validation commands after making code changes.
+#### 🖥️ Terminal
 
-### Vision Preprocessing
+| Tool | Description |
+|------|-------------|
+| `run_terminal_command` | Execute shell commands in your workspace with **real-time streaming output**, cancellation support, and configurable timeout. The AI is instructed to run linters, type checkers, and test suites after making changes. |
 
-Paste screenshots (`Ctrl+V`) or drag-and-drop images into the chat. The input panel handles both clipboard paste and file drag-and-drop. A local [Ollama](https://ollama.com/) vision model (`llama3.2-vision`) describes them in detail so the AI can reason about visual content — error dialogs, UI glitches, diagrams, and more.
+#### 📋 Worker Tools
+
+| Tool | Description |
+|------|-------------|
+| `update_todo_list` | Maintains a **live progress tracker** with `pending` → `active` → `done` statuses. Displayed in the Worker Activity panel for real-time visibility. |
+
+#### 🚀 Dispatch
+
+| Tool | Description |
+|------|-------------|
+| `dispatch_to_worker` | **Planner-only.** Hands off a spec to the Worker for execution. Only available when Planner/Worker mode is enabled. |
+
+#### 🔄 Circuit Breaker
+
+The conversation loop includes a **circuit breaker** that detects when the same tool call produces the identical failure output **3 or more times consecutively**. A warning is injected into the tool result, alerting the AI that it is likely in a loop — preventing infinite retry cycles.
+
+### Diff Approval & Backups
+
+Every `write_file`, `edit_file`, or `edit_symbol` call triggers a **diff approval dialog** before any bytes touch disk:
+
+- **Approve** — Apply this change
+- **Reject** — Skip this change
+- **Approve All** — Approve this and all subsequent writes in this turn
+- **Reject All** — Reject this and all further writes
+
+Before any write, existing files are **automatically backed up** to `.aura/backups/<ISO-timestamp>/<relative-path>` in your workspace. Every backup carries an ISO-8601 timestamp, so you can always recover previous versions.
 
 ### Git Integration
 
 If your workspace is a git repository, Aura provides deep integration:
 
-- **Auto-commit** — After the Worker completes a set of file changes, Aura stages and commits them with an AI-generated message derived from the dispatch goal and worker summary.
-- **`/undo` command** — Soft-resets `HEAD~1`, reverting the last commit while keeping changes in the working directory.
-- **`git_status`** and **`git_diff`** tools — Both the Planner and Worker can inspect repository state before and after changes, review diffs, and verify what was modified.
+- **Auto-commit** — After the Worker completes a set of file changes, Aura stages and commits them with an **AI-generated commit message** derived from the dispatch goal and Worker summary.
+- **`/undo` slash command** — Soft-resets `HEAD~1`, reverting the last commit while keeping changes in the working directory.
+- **`git_init`** — Initialises a new git repository in the workspace if one doesn't exist.
+- **Snapshot / Restore** — `snapshot()` creates a lightweight checkpoint commit; `restore_to_snapshot()` returns to it. Useful for checkpointing experimental changes.
+- **Full git tool access** — Both the Planner and Worker can inspect repository state before and after changes using the complete git tool suite (status, diff, log, show, branch, stash).
+- **Automatic `.gitignore`** — `.aura/` is automatically added to `.gitignore` on startup.
 
-### Worker TODO List
+### Web Research
 
-The Worker agent uses `update_todo_list` to maintain a live progress tracker with `pending` → `active` → `done` statuses. This list is displayed prominently in the Worker Activity panel, giving you real-time visibility into what the Worker is doing and what remains.
+The `run_research` tool dispatches a **background sub-agent** that:
 
-### Conversation Persistence
+1. Generates search queries from your question
+2. Searches the web via Tavily
+3. Fetches and parses the most relevant pages with BeautifulSoup
+4. Produces a synthesised report
 
-Chats are saved to `.aura/conversations/` in your workspace as JSON. Restore your last session on launch, open past conversations from the toolbar, or start fresh at any time.
+Perfect for looking up documentation, debugging unfamiliar error messages, or researching third-party libraries without leaving your IDE.
+
+### Terminal Commands
+
+`run_terminal_command` executes shell commands in your workspace directory with:
+
+- **Real-time streaming output** — See output as it's produced, not just when the command finishes
+- **Cancellation support** — Stop long-running commands mid-execution
+- **Timeout** — Configurable max execution time
+
+Unlike a regular terminal, the AI is instructed to run **linters, type checkers, and test suites** after making changes — closing the loop between edit and validation.
+
+### Vision Preprocessing
+
+Paste screenshots (`Ctrl+V`) or drag-and-drop images into the chat. The input panel handles both clipboard paste and file drag-and-drop. A local [Ollama](https://ollama.com/) vision model (`llama3.2-vision`) describes images in detail so the AI can reason about visual content — error dialogs, UI glitches, diagrams, and more.
+
+Additionally, providers/models that **natively support vision** (GPT-4o, Claude, Gemini Flash) can receive images directly, bypassing local preprocessing.
+
+### Dynamic / Self-Extending Tools
+
+Users can create custom tools by writing Python scripts at `.aura/tools/<name>.py`. Requirements:
+
+- A single top-level function with **full type hints** on all parameters
+- A Google-style docstring (including an `Args:` block)
+- Uses only Python standard libraries (or packages you've installed)
+
+The tool **auto-registers** on the very next AI turn — no restart needed. It runs in an **isolated subprocess** with a JSON I/O channel. In Docker sandbox mode, it runs in a read-only container with no network access.
+
+### Sandbox Execution
+
+Aura supports three execution modes for terminal commands and dynamic tools:
+
+| Mode | Description |
+|------|-------------|
+| **host** | Run directly on the host (no isolation). Default. |
+| **docker** | Run inside a Docker container with resource limits: 2 GB memory, 2 CPU cores, PID limit of 200, all Linux capabilities dropped, `no-new-privileges` enabled. Dynamic tools run with a **read-only root filesystem**; terminal commands run read-write. No access to the host filesystem outside the workspace. Network is enabled for terminal commands but disabled for dynamic tools. |
+| **wasm** | Reserved for future WASM runtime. |
+
+Configurable via the Settings dialog. Aura checks Docker availability at startup and falls back gracefully if not found.
+
+### Hardware-Tethered API Key Encryption
+
+API keys are **never** stored in `config.json`. Instead:
+
+1. **Environment variables** take precedence — standard `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, etc.
+2. **Encrypted storage** — Keys can be stored on disk at `~/.config/Aura/keys.json` encrypted with **Fernet (symmetric encryption)** using a machine-derived key (MAC address + username). File permissions are set to `0o600`.
+3. **Auto-migration** — Legacy plaintext keys are automatically migrated to encrypted form on first access.
+
+Keys stored via the Settings dialog (gear icon) are encrypted immediately. The Settings status indicator shows green when a key is found, red when missing.
+
+### Codebase Index (BM25 Semantic Search)
+
+The `search_codebase` tool builds and queries a local **BM25 inverted index** over your workspace files:
+
+- **Up to 1,500 files**, each up to 128 KB
+- **30+ file extensions** covered: Python, JavaScript, TypeScript, Rust, Go, Java, C/C++, Ruby, PHP, Swift, Kotlin, Scala, YAML, JSON, TOML, Markdown, HTML, CSS, SQL, Lua, Zig, and more
+- Ranks files by **semantic relevance** to a natural-language query — not keyword matching
+
+This is especially valuable when conversation context has been pruned and the AI needs to rediscover where a particular function or class lives.
 
 ### Session Cost Tracking
 
-A live status bar shows token usage (cache hit, cache miss, output tokens) and estimated cost in USD. Pricing is tracked per-model using the rates embedded in `aura/config.py`.
+The status bar displays live token usage and estimated cost:
+
+- **Cache hit tokens** / **Cache miss tokens** / **Output tokens**
+- **Estimated USD cost** using embedded pricing tables per model
+- Resets per conversation session
+
+Pricing is tracked per-model using rates in `aura/config.py` — both for built-in models and dynamically fetched ones (especially via OpenRouter, which returns real-time pricing).
 
 ### Thinking Modes
 
-Choose **Off**, **High**, or **Max** reasoning depth independently for the Planner and Worker. Higher thinking modes let the model spend more compute on reasoning before responding — useful for complex architectural decisions or tricky bugs.
+Choose reasoning depth for each agent independently:
+
+| Mode | Description |
+|------|-------------|
+| **Off** | Standard response — no extended reasoning |
+| **High** | Extended reasoning — the model spends more compute before responding |
+| **Max** | Maximum reasoning — best for complex architectural decisions or tricky bugs |
+
+Configure separately for **Planner**, **Worker**, and **Single** (non-Planner/Worker) modes. Works with models that support extended thinking (e.g., DeepSeek R1, Claude Sonnet).
 
 ### Custom System Prompts
 
-Configure separate system prompts for Single mode, the Planner, and the Worker via the Settings dialog. Tailor each agent's behavior, style, and constraints to your workflow.
+Configure separate system prompts via the Settings dialog:
+
+- **System Prompt** — Used in Single mode (default conversation)
+- **Planner System Prompt** — Used for the Planner agent
+- **Worker System Prompt** — Used for the Worker agent
+
+Tailor each agent's behaviour, style, constraints, and persona to your workflow.
 
 ### Separate Worker Temperature
 
-The Worker has its own temperature setting (default 0.1) separate from the Planner / Single mode (default 0.7). This makes the Worker more deterministic and consistent when applying code changes, while the Planner can remain more creative when reasoning about architecture. Both temperatures are configurable in Settings.
+- **Worker temperature**: defaults to `0.1` — deterministic, consistent when applying code changes
+- **Planner / Single temperature**: defaults to `0.7` — creative when reasoning about architecture
+
+Both are configurable in the Settings dialog (range 0.0–2.0).
+
+### Read-Only Mode
+
+Toggle the **Read-Only** button in the toolbar to strip all write tools. The AI can still read, search, and advise, but cannot modify any files. Perfect for:
+
+- Code review sessions
+- Exploring an unfamiliar codebase
+- Asking questions without risk of unintended modifications
+
+### Auto-Dispatch & Auto-Approve
+
+Optional settings for faster workflows:
+
+- **Auto-Dispatch** — Skips the spec review dialog; the spec is dispatched to the Worker immediately after the Planner writes it.
+- **Auto-Approve** — Skips the diff approval dialog; all file writes are applied automatically.
+
+Toggle these from the toolbar or Settings dialog. Use with caution — great for trusted, low-risk changes.
+
+### Conversation Persistence
+
+- Chats are saved to `.aura/conversations/` as JSON files
+- **Restore last session** on launch (configurable)
+- **Open past conversations** from the toolbar
+- **Start fresh** at any time via the "New Conversation" button
+
+### Keyboard Shortcuts & Slash Commands
+
+| Shortcut | Action |
+|----------|--------|
+| **Ctrl+Enter** | Send message |
+| **Ctrl+V** (in editor) | Paste image from clipboard |
+
+| Command | Description |
+|---------|-------------|
+| `/undo` | Soft-resets the last git commit (requires git repo). Quickly revert the AI's last change. |
+
+### Cross-Platform
+
+Aura runs on **Windows**, **macOS**, and **Linux** via PySide6 (Qt for Python). The same interface, the same features, everywhere.
 
 ---
 
 ## Supported Providers
 
-Aura supports five AI providers. You choose one per session via the toolbar dropdown, then select any model from that provider's catalogue that the app exposes. The Planner and Worker always use the same provider but can be assigned different models and thinking modes.
+Aura supports five AI providers. You choose one per session via the toolbar dropdown, then select any model from that provider's catalogue. The Planner and Worker always use the same provider but can be assigned different models and thinking modes.
 
 | Provider | Base URL | Env Var |
 |----------|----------|---------|
@@ -141,7 +327,16 @@ Aura supports five AI providers. You choose one per session via the toolbar drop
 | **Anthropic** | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
 
-> **Tip:** Model availability and pricing change frequently. The app embeds a current model catalogue and pricing table that you can inspect in `aura/config.py`. For the latest pricing, refer to each provider's official documentation.
+### Dynamic Model Fetching
+
+Aura can **dynamically fetch models** from provider APIs:
+
+- **OpenRouter** — Returns the full model catalogue with real-time pricing per model. Models are automatically added to the selection dropdown with up-to-date pricing.
+- **DeepSeek, OpenAI, Google** — Uses the OpenAI-compatible `/models` endpoint. Pricing for recognised models is drawn from the embedded pricing tables; unknown models default to $0.
+
+Fetched models are **cached to disk** (`~/.config/Aura/models_cache.json`) and reloaded on startup, so you don't need to fetch every launch.
+
+> **Tip:** Model availability and pricing change frequently. Run a fetch (via the provider dropdown menu) to refresh the catalogue. For the latest pricing, also check each provider's official documentation.
 
 ---
 
@@ -153,6 +348,7 @@ Aura supports five AI providers. You choose one per session via the toolbar drop
 - An API key for at least one supported provider (see [API Key Setup](#api-key-setup))
 - (Optional) [Ollama](https://ollama.com/) running locally with `llama3.2-vision` for screenshot preprocessing
 - (Optional) [Git](https://git-scm.com/) for auto-commit and `/undo` support
+- (Optional) [Docker](https://docker.com/) for sandboxed execution mode
 
 ### Install via pip
 
@@ -168,34 +364,22 @@ pip install aura
 
 ### API Key Setup
 
-Aura never stores API keys in its config file — keys are read exclusively from environment variables.
+Aura never stores API keys in its config file. Keys are read from **environment variables** (precedence) or stored encrypted on disk via the Settings dialog.
 
-**DeepSeek:**
+**Set environment variables:**
+
 ```bash
 export DEEPSEEK_API_KEY="sk-..."
-```
-
-**OpenAI:**
-```bash
 export OPENAI_API_KEY="sk-..."
-```
-
-**Anthropic:**
-```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
-```
-
-**Google Gemini:**
-```bash
 export GEMINI_API_KEY="..."
-```
-
-**OpenRouter:**
-```bash
 export OPENROUTER_API_KEY="sk-or-..."
+export TAVILY_API_KEY="..."  # Required for web_search and run_research
 ```
 
 On Windows, set these via **System Properties → Environment Variables**.
+
+Alternatively, open the **Settings** dialog (gear icon) and enter your keys there — they will be encrypted to disk using a hardware-derived key.
 
 ### Launch
 
@@ -219,8 +403,9 @@ python -m aura
 2. Type a question or request in the input panel — describe a bug, ask for an explanation, or request a change.
 3. The **Planner** reads relevant files, asks clarifying questions if needed, then writes a spec and calls `dispatch_to_worker`.
 4. A **Spec Card** appears in the chat. Review it (you can edit the spec if needed), then click **Dispatch**.
-5. The **Worker** runs, reads the target files, and proposes edits. Each write pops up a diff dialog for your approval.
+5. The **Worker** runs, reads target files, and proposes edits. Each write triggers a diff dialog for your approval.
 6. When the Worker finishes, it reports a summary back to the Planner, and the conversation continues.
+7. **(Optional)** Auto-commit creates a git commit with an AI-generated message summarising the change.
 
 ### Keyboard Shortcuts
 
@@ -233,24 +418,26 @@ python -m aura
 
 | Command | Description |
 |---------|-------------|
-| `/undo` | Soft-resets the last git commit (if your workspace is a git repo). Use this to quickly revert the AI's last change. |
+| `/undo` | Soft-resets the last git commit (requires git repo). Quickly revert the AI's last change. |
 
 ### Model, Thinking & Provider Selection
 
-Use the dropdowns in the input panel to configure:
+Use the dropdowns in the input panel / sidebar to configure:
 
-- **Provider** — DeepSeek, OpenAI, Anthropic, Google Gemini, or OpenRouter
-- **Planner Model** — Reads code and writes specs
-- **Planner Thinking** — Reasoning depth (Off / High / Max)
-- **Worker Model** — Executes file edits
-- **Worker Thinking** — Reasoning depth for the worker
+| Control | Description |
+|---------|-------------|
+| **Provider** | DeepSeek, OpenAI, Anthropic, Google Gemini, or OpenRouter |
+| **Planner Model** | Model that reads code and writes specs |
+| **Planner Thinking** | Reasoning depth for the Planner (Off / High / Max) |
+| **Worker Model** | Model that executes file edits |
+| **Worker Thinking** | Reasoning depth for the Worker (Off / High / Max) |
 
-The Planner and Worker always use the same provider, but can be assigned different models and thinking modes from that provider's catalogue.
+The Planner and Worker always use the same provider but can be assigned different models and thinking modes from that provider's catalogue.
 
 ### Attachments
 
-- **Paste images** (`Ctrl+V`) — screenshots of errors, UI, or diagrams are sent through vision preprocessing
-- **Drag-and-drop files** — images get base64-encoded and described by the vision model; other files are attached as path references
+- **Paste images** (`Ctrl+V`) — screenshots of errors, UI, or diagrams. Images are sent through vision preprocessing (local Ollama model or directly to vision-capable providers).
+- **Drag-and-drop files** — images get base64-encoded and described by the vision model; other files are attached as path references for the AI to read.
 
 ---
 
@@ -261,25 +448,28 @@ Settings are stored at `~/.config/Aura/config.json` (or the platform-appropriate
 | Setting | Description |
 |---------|-------------|
 | **Provider** | Select the AI provider (DeepSeek / OpenAI / Anthropic / Google Gemini / OpenRouter) |
-| **API Key Status** | Shows whether the required environment variable is set (green = found, red = missing) |
-| **Default Model** | Model used in Single mode |
+| **Default Model** | Model used in Single mode (non-Planner/Worker) |
 | **Default Thinking** | Reasoning depth for Single mode |
+| **Restore Last Conversation** | Automatically reload the previous session on launch |
 | **Planner/Worker Mode** | Toggle the two-agent architecture on or off |
 | **Planner Model** | Model assigned to the Planner |
-| **Planner Thinking** | Reasoning depth for the Planner |
 | **Worker Model** | Model assigned to the Worker |
+| **Planner Thinking** | Reasoning depth for the Planner |
 | **Worker Thinking** | Reasoning depth for the Worker |
-| **Temperature** | Sampling temperature (0.0–2.0) |
-| **Worker Temperature** | Sampling temperature for the worker (0.0–2.0). Default: 0.1 (more deterministic than the planner) |
+| **Temperature** | Sampling temperature (0.0–2.0) for Single/Planner mode. Default: 0.7 |
+| **Worker Temperature** | Sampling temperature (0.0–2.0) for the Worker. Default: 0.1 |
 | **System Prompt** | Custom system prompt for Single mode |
 | **Planner System Prompt** | Custom system prompt for the Planner agent |
 | **Worker System Prompt** | Custom system prompt for the Worker agent |
 | **Vision Enabled** | Toggle screenshot preprocessing via Ollama |
 | **Vision Model** | Ollama model name (default: `llama3.2-vision`) |
 | **Vision Endpoint** | Ollama API endpoint (default: `http://localhost:11434/v1`) |
-| **Restore Last Conversation** | Automatically reload the previous session on launch |
+| **Auto-Commit** | Automatically create a git commit after Worker completes changes |
+| **Auto-Dispatch** | Skip the spec review dialog — dispatch to Worker immediately |
+| **Auto-Approve** | Skip the diff approval dialog — apply all file writes automatically |
+| **Sandbox Mode** | Execution mode: `host` (direct), `docker` (containerised), or `wasm` (reserved) |
 
-> **Security note:** API keys are **never** written to `config.json`. They are read exclusively from environment variables at runtime.
+> **Security note:** API keys are **never** written to `config.json`. They are either read from environment variables or stored encrypted in a separate `keys.json` file with `0o600` permissions.
 
 ---
 
@@ -304,58 +494,68 @@ Aura uses a decoupled architecture with Qt signals/slots bridging synchronous AI
 - **Bridge Layer** — Runs the synchronous conversation loop on a background `QThread`. Proxies tool approvals and dispatch decisions back to the GUI via signals/slots so the UI never blocks.
 - **Conversation Layer** — Pure Python, synchronous: manages message history, the tool-calling loop, tool execution via the `ToolRegistry`, and conversation persistence.
 
-Detailed architecture documentation is coming soon.
-
 ---
 
 ## Project Structure
 
 ```
 aura/
-├── __init__.py              # Package version
-├── __main__.py              # Entry point
+├── __init__.py              # Package version (1.0.0)
+├── __main__.py              # Entry point: `aura` or `python -m aura`
 ├── config.py                # Settings, provider registry, pricing, paths
-├── git.py                   # Auto-commit & /undo
-├── vision.py                # Ollama vision client
+├── git_ops.py               # Auto-commit, /undo, snapshot/restore, git_init
+├── key_manager.py           # Hardware-tethered Fernet key encryption
+├── paths.py                 # Cross-platform config/data directory helpers
+├── prompts.py               # Default system prompt templates
+├── resources.py             # Resource path resolution (media, icons)
+├── sandbox.py               # SandboxExecutor: host, docker, wasm modes
+├── vision.py                # Ollama vision client for screenshot preprocessing
 ├── bridge/                  # Qt thread bridge
 │   ├── __init__.py
-│   └── qt_bridge.py         # ConversationBridge, _Worker, _DispatchProxy
+│   └── qt_bridge.py         # ConversationBridge, _Worker, _ApproveProxy, _DispatchProxy
 ├── client/                  # AI provider client
 │   ├── __init__.py
 │   ├── deepseek.py          # OpenAI-compatible client (all providers)
 │   └── events.py            # Streaming event types
+├── codebase_index/          # BM25 semantic search index
+│   ├── __init__.py
+│   ├── bm25.py              # BM25Scorer: tokenizer, inverted index, scoring
+│   ├── indexer.py           # CodebaseIndex: build/update/search over workspace files
+│   └── tool.py              # search_codebase tool definition
 ├── conversation/            # Synchronous conversation logic
 │   ├── __init__.py
-│   ├── manager.py           # ConversationManager (tool loop)
+│   ├── manager.py           # ConversationManager (tool-calling loop)
 │   ├── history.py           # Message history
-│   ├── dispatch.py          # Worker dispatch types
-│   ├── persistence.py       # Save/load conversations
+│   ├── dispatch.py          # WorkerDispatchRequest / WorkerDispatchResult
+│   ├── persistence.py       # Save/load conversations (JSON)
 │   └── tools/               # Tool implementations
 │       ├── __init__.py
-│       ├── registry.py      # ToolRegistry & tool definitions
+│       ├── registry.py      # ToolRegistry — registers all tools, handles execution
+│       ├── backup.py        # Timestamped backups before writes
+│       ├── dynamic.py       # Dynamic tool schema parsing and execution
+│       ├── find_usages.py   # Symbol-aware search (word-boundary matching)
+│       ├── fs_edit_structured.py  # edit_symbol — AST-based Python symbol replacement
 │       ├── fs_read.py       # read_file, list_directory, glob, read_file_outline
-│       ├── fs_write.py      # write_file, edit_file
-│       ├── grep.py          # grep_search
-│       ├── find_usages.py   # find_usages (symbol-aware search)
-│       ├── git_tools.py     # git_status, git_diff
-│       ├── web.py           # web_search, web_fetch
-│       └── backup.py        # Timestamped backups before writes
+│       ├── fs_write.py      # write_file, edit_file (Search Block with fuzzy matching)
+│       ├── git_tools.py     # git_status, git_diff, git_log, git_show, git_log_file,
+│       │                    # git_branch_list, git_stash_list, git_stash_show
+│       ├── grep.py          # grep_search (regex/string search)
+│       └── web.py           # web_search (Tavily), web_fetch (BeautifulSoup)
 └── gui/                     # PySide6 UI components
     ├── __init__.py
-    ├── main_window.py       # MainWindow, toolbar, status bar
-    ├── chat_view.py         # Chat transcript with cards
-    ├── input_panel.py       # Message composer, attachments
-    ├── workspace_tree.py    # File tree browser
-    ├── worker_window.py     # Worker progress viewer
-    ├── planner_log.py       # Planner reasoning log viewer
-    ├── diff_dialog.py       # Diff approval modal
+    ├── main_window.py       # MainWindow, toolbar, status bar, model/thinking combos
+    ├── chat_view.py         # Chat transcript with card-based rendering
+    ├── input_panel.py       # Message composer, attachments, Ctrl+V paste
+    ├── workspace_tree.py    # File tree browser (left pane)
+    ├── onboarding_dialog.py # First-launch onboarding wizard
+    ├── settings_dialog.py   # Settings editor
     ├── spec_edit_dialog.py  # Spec editor before dispatch
-    ├── settings_dialog.py   # Settings dialog
+    ├── diff_dialog.py       # Diff approval modal (Approve/Reject/Approve All/Reject All)
     ├── theme.py             # Dark theme constants
-    ├── aura_widget.py       # Animated "Aura" dots
-    ├── controllers.py       # Controller logic
-    ├── markdown_renderer.py # Markdown rendering
-    ├── syntax.py            # Syntax highlighting support
+    ├── aura_widget.py       # Animated "Aura" dots and GlassSwitch toggle
+    ├── controllers.py       # ToolStreamController for streaming tool results
+    ├── markdown_renderer.py # Markdown rendering in chat
+    ├── syntax.py            # Syntax highlighting (Pygments integration)
     └── cards/               # Chat message card widgets
         ├── __init__.py
         ├── _collapsible.py
@@ -381,7 +581,7 @@ aura/
 ```bash
 git clone <repo-url>
 cd aura
-pip install -e .
+pip install -e .[dev]
 ```
 
 ### Smoke Tests
@@ -392,7 +592,7 @@ The `scripts/` directory contains smoke tests that exercise individual subsystem
 |--------|---------------|
 | `smoke_client.py` | DeepSeek API client connectivity and streaming |
 | `smoke_conversation.py` | Full conversation loop with tool calls |
-| `smoke_gui.py` | GUI launch and basic widget initialization |
+| `smoke_gui.py` | GUI launch and basic widget initialisation |
 | `smoke_history.py` | Message history management |
 | `smoke_planner_worker.py` | Planner → Worker dispatch flow |
 | `smoke_tools.py` | Tool registry and individual tool execution |
@@ -403,6 +603,13 @@ Run a smoke test:
 
 ```bash
 python scripts/smoke_client.py
+```
+
+### Build Options
+
+```bash
+python scripts/build_exe.py     # Build a standalone executable (PyInstaller)
+python scripts/build_nuitka.py  # Build with Nuitka (faster, smaller)
 ```
 
 ### Requirements
@@ -417,14 +624,14 @@ python scripts/smoke_client.py
 
 | Package | Purpose |
 |---------|---------|
-| [PySide6](https://pypi.org/project/PySide6/) | Qt for Python GUI |
+| [PySide6](https://pypi.org/project/PySide6/) | Qt for Python GUI framework |
 | [openai](https://pypi.org/project/openai/) | AI provider client (OpenAI-compatible) |
 | [beautifulsoup4](https://pypi.org/project/beautifulsoup4/) | HTML parsing for web research |
-| [cryptography](https://pypi.org/project/cryptography/) | Hardware-tethered key encryption |
-| [platformdirs](https://pypi.org/project/platformdirs/) | Cross-platform config/data directories |
+| [cryptography](https://pypi.org/project/cryptography/) | Fernet encryption for hardware-tethered key storage |
+| [platformdirs](https://pypi.org/project/platformdirs/) | Cross-platform config/data directory resolution |
 | [Pillow](https://pypi.org/project/Pillow/) | Image handling for pasted screenshots |
-| [Pygments](https://pypi.org/project/Pygments/) | Syntax highlighting in diff dialogs |
-| [httpx](https://pypi.org/project/httpx/) | HTTP client for web research |
+| [Pygments](https://pypi.org/project/Pygments/) | Syntax highlighting in diff dialogs and code blocks |
+| [httpx](https://pypi.org/project/httpx/) | HTTP client for web research and tool execution |
 
 ---
 
