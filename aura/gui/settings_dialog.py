@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -112,6 +113,16 @@ class SettingsDialog(QDialog):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 18, 20, 14)
         outer.setSpacing(14)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumHeight(420)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 10, 0)
+        content_layout.setSpacing(0)
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -443,7 +454,9 @@ class SettingsDialog(QDialog):
         backup_label.setWordWrap(True)
         form.addRow("Backups:", backup_label)
 
-        outer.addLayout(form)
+        content_layout.addLayout(form)
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
 
         # Buttons
         buttons = QDialogButtonBox(
