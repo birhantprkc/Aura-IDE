@@ -4,22 +4,38 @@ from __future__ import annotations
 import html as _html
 import re
 
-from PySide6.QtCore import QEasingCurve
+from PySide6.QtCore import QEasingCurve, Qt
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QGraphicsOpacityEffect, QWidget
+from PySide6.QtWidgets import QFrame, QGraphicsOpacityEffect, QSizePolicy, QTextBrowser, QWidget
 
-try:
-    from pygments import highlight  # noqa: F401
-    from pygments.formatters import HtmlFormatter  # noqa: F401
-    from pygments.lexers import TextLexer, get_lexer_by_name  # noqa: F401
-    from pygments.util import ClassNotFound  # noqa: F401
-    from aura.gui.syntax import PygmentsHighlighter, DiffHighlighter, language_from_path  # noqa: F401
-    _HAVE_PYGMENTS = True
-except ImportError:  # pragma: no cover — declared in pyproject, but soft-fail.
-    _HAVE_PYGMENTS = False
+# Use the ones from markdown_renderer to avoid circularity if markdown_renderer needs them
+from aura.gui.markdown_renderer import _CODE_FENCE_RE, _HAVE_PYGMENTS
 
 
-_CODE_FENCE_RE = re.compile(r"```([A-Za-z0-9_+\-.]*)\n(.*?)(?:```|\Z)", re.DOTALL)
+class _MarkdownTextBlock(QTextBrowser):
+    """Auto-height rich text block for finalized markdown."""
+
+    def __init__(self, html: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setOpenExternalLinks(True)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet("background: transparent; border: none;")
+        self.document().setDocumentMargin(0)
+        self.setHtml(html)
+        self._sync_height()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_height()
+
+    def _sync_height(self) -> None:
+        width = max(1, self.viewport().width())
+        self.document().setTextWidth(width)
+        height = int(self.document().size().height() + 4)
+        self.setFixedHeight(max(1, height))
 
 
 def _wrap_body_text(text: str, color: str) -> str:

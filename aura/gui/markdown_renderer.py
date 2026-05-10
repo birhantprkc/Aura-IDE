@@ -6,8 +6,18 @@ import re
 
 from PySide6.QtGui import QTextDocument
 
-from aura.gui.cards._helpers import _CODE_FENCE_RE, _HAVE_PYGMENTS
 from aura.gui.theme import BG_ALT, FG
+
+try:
+    from pygments import highlight  # noqa: F401
+    from pygments.formatters import HtmlFormatter  # noqa: F401
+    from pygments.lexers import TextLexer, get_lexer_by_name  # noqa: F401
+    from pygments.util import ClassNotFound  # noqa: F401
+    _HAVE_PYGMENTS = True
+except ImportError:  # pragma: no cover — declared in pyproject, but soft-fail.
+    _HAVE_PYGMENTS = False
+
+_CODE_FENCE_RE = re.compile(r"```([A-Za-z0-9_+\-.]*)\n(.*?)(?:```|\Z)", re.DOTALL)
 
 
 def _render_code_block(lang: str, code: str) -> str:
@@ -82,8 +92,12 @@ def _render_markdown_with_code(text: str, color: str | None = None, italic: bool
     html = re.sub(r"font-family\s*:\s*'[^']+'\s*;?", "", html)
     html = re.sub(r"font-size\s*:\s*[0-9]+pt\s*;?", "", html)
     
-    # 3. Tighten up paragraph spacing (Qt defaults to 6px/6px which is loose).
-    html = html.replace("margin-top:6px; margin-bottom:6px;", "margin-top:2px; margin-bottom:2px;")
+    # 3. Adjust paragraph spacing (Qt defaults to 6px/6px).
+    # 2px was too tight, leading to 'wall of text' complaints. 4px is a better balance.
+    html = html.replace("margin-top:6px; margin-bottom:6px;", "margin-top:4px; margin-bottom:4px;")
+    
+    # 4. Improve list indentation. Qt defaults to a very shallow indent.
+    html = html.replace("-qt-list-indent: 1;", "-qt-list-indent: 2;")
 
     for i, block in enumerate(blocks):
         token = f"AURACODEPLACEHOLDER{i}ENDAURA"

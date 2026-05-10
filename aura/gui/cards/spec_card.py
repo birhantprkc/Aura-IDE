@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from aura.gui.cards._collapsible import _CollapsibleSection
+from aura.gui.cards._helpers import _MarkdownTextBlock
 from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import ACCENT, BG_ALT, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS
 
@@ -55,11 +56,8 @@ class SpecCard(QFrame):
         header.setStyleSheet(f"color: {ACCENT}; font-weight: 700; font-size: 12px;")
         outer.addWidget(header)
 
-        self._goal_label = QLabel()
-        self._goal_label.setWordWrap(True)
-        self._goal_label.setTextFormat(Qt.TextFormat.RichText)
-        self._goal_label.setText(_render_markdown_with_code(self._goal))
-        self._goal_label.setStyleSheet(f"color: {FG}; font-size: 14px;")
+        self._goal_label = _MarkdownTextBlock(_render_markdown_with_code(self._goal))
+        self._goal_label.setStyleSheet(f"background: transparent; border: none; color: {FG}; font-size: 14px;")
         outer.addWidget(self._goal_label)
 
         # Files section
@@ -83,11 +81,8 @@ class SpecCard(QFrame):
         outer.addWidget(spec_header)
 
         # Spec body (collapsible if long).
-        self._spec_label = QLabel()
-        self._spec_label.setWordWrap(True)
-        self._spec_label.setTextFormat(Qt.TextFormat.RichText)
-        self._spec_label.setText(_render_markdown_with_code(self._spec))
-        self._spec_label.setStyleSheet(f"color: {FG};")
+        self._spec_label = _MarkdownTextBlock(_render_markdown_with_code(self._spec))
+        self._spec_label.setStyleSheet(f"background: transparent; border: none; color: {FG};")
 
         self._spec_section: _CollapsibleSection | None = None
         if self._spec.count("\n") > 6 or len(self._spec) > 600:
@@ -105,11 +100,8 @@ class SpecCard(QFrame):
         acc_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px;")
         outer.addWidget(acc_header)
 
-        self._acceptance_label = QLabel()
-        self._acceptance_label.setWordWrap(True)
-        self._acceptance_label.setTextFormat(Qt.TextFormat.RichText)
-        self._acceptance_label.setText(_render_markdown_with_code(self._acceptance))
-        self._acceptance_label.setStyleSheet(f"color: {FG_DIM};")
+        self._acceptance_label = _MarkdownTextBlock(_render_markdown_with_code(self._acceptance))
+        self._acceptance_label.setStyleSheet(f"background: transparent; border: none; color: {FG_DIM};")
         outer.addWidget(self._acceptance_label)
 
         # Buttons row.
@@ -197,14 +189,14 @@ class SpecCard(QFrame):
         self._files = list(files)
         self._spec = spec
         self._acceptance = acceptance
-        self._goal_label.setText(_render_markdown_with_code(self._goal))
+        self._goal_label.setHtml(_render_markdown_with_code(self._goal))
         
         # Refresh files list
         if hasattr(self, "_files_container"):
             self._refresh_files_list(self._files_container.layout())
             
-        self._spec_label.setText(_render_markdown_with_code(self._spec))
-        self._acceptance_label.setText(_render_markdown_with_code(self._acceptance))
+        self._spec_label.setHtml(_render_markdown_with_code(self._spec))
+        self._acceptance_label.setHtml(_render_markdown_with_code(self._acceptance))
 
     def current_spec(self) -> tuple[str, list[str], str, str]:
         return (self._goal, list(self._files), self._spec, self._acceptance)

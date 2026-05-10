@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.gui.cards._collapsible import _CollapsibleSection
-from aura.gui.cards._helpers import _CODE_FENCE_RE, _fade_in_widget
+from aura.gui.cards._helpers import _CODE_FENCE_RE, _fade_in_widget, _MarkdownTextBlock
 from aura.gui.cards._stream_label import _StreamLabel
 from aura.gui.cards.code_block_card import CodeBlockCard
 from aura.gui.cards.tool_call_card import ToolCallCard
