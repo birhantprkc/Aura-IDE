@@ -1,10 +1,9 @@
 """Main application window: three-pane splitter, toolbar, chat + input."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, Slot, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
@@ -30,13 +29,8 @@ from aura.config import (
     load_workspace_root,
     save_workspace_root,
 )
-from aura.conversation.persistence import (
-    LoadedConversation,
-    load_conversation,
-    most_recent_conversation,
-    save_conversation,
-)
-from aura.git_ops import ensure_aura_gitignored, git_init, is_git_repo
+from aura.gui.conv_persistence import ConversationPersistence
+from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
@@ -54,8 +48,6 @@ _THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
 class MainWindow(WindowChromeMixin, QMainWindow):
     # Thread-safe signals for cross-thread communication.
     _vision_done = Signal(object, list, object)   # SendPayload, list[str], str|None
-    _save_succeeded = Signal(Path)                # Path
-    _save_failed = Signal(str)                    # error message
 
     def __init__(self) -> None:
         super().__init__()
@@ -90,8 +82,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.set_auto_commit_enabled(self._settings.auto_commit_enabled)
         self._bridge.set_auto_dispatch(self._settings.auto_dispatch)
         self._bridge.set_auto_approve(self._settings.auto_approve)
-        # Persistence state.
-        self._current_conversation_path: Path | None = None
 
         # Session usage accumulators (per-model so cost is exact when mixing).
         self._session_usage: dict[str, dict[str, int]] = {}
@@ -144,6 +134,19 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         center_layout.addWidget(self._chat, 1)
 
         self._input = InputPanel(self._workspace_root, parent=self)
+
+        # Conversation persistence (auto-save, load, restore, replay).
+        self._persistence = ConversationPersistence(
+            bridge=self._bridge,
+            chat=self._chat,
+            playground=self._playground,
+            input_panel=self._input,
+            left_pane=self._left_pane,
+            settings=self._settings,
+            parent=self,
+        )
+        self._persistence.needs_status_refresh.connect(self._refresh_status_bar)
+
         # Apply default model / thinking from settings.
         if self._settings.planner_worker_mode:
             self.set_model(self._settings.default_planner_model)
@@ -217,15 +220,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chat.mermaid_detected.connect(self._playground.add_mermaid_artifact)
 
         self._vision_done.connect(self._on_vision_done)
-        self._save_succeeded.connect(self._set_current_conv_path)
-        self._save_failed.connect(lambda msg: self._chat.add_error("Could not save conversation", msg))
 
         self._update_workspace_label()
         self._refresh_status_bar()
 
         # Restore most recent conversation if enabled.
         if self._settings.restore_last_conversation:
-            self._maybe_restore_last_conversation()
+            self._persistence.restore_last(self._workspace_root)
 
     def showEvent(self, event) -> None:
         """Triggered when the window is shown. Used for first-launch onboarding."""
@@ -317,7 +318,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._tree.set_root(path)
         save_workspace_root(path)
         # New workspace — drop any current conversation pointer (different .aura/).
-        self._current_conversation_path = None
+        self._persistence._current_conversation_path = None
         self._update_workspace_label()
         self._refresh_status_bar()
 
@@ -370,14 +371,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 self, APP_NAME, "Wait for the current response to finish, or click Stop."
             )
             return
-        self._bridge.reset_history()
-        self._bridge.clear_pre_worker_snapshot()
-        self._chat.reset()
-        self._current_conversation_path = None
-        self._reset_session_usage()
-        self._playground.clear()
+        self._persistence.new_conversation()
         self._message_queue.clear()
         self._input.set_queued_messages(0)
+        self._reset_session_usage()
 
     def _on_open_conversation(self) -> None:
         if self._bridge.is_running():
@@ -385,24 +382,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 self, APP_NAME, "Wait for the current response to finish, or click Stop."
             )
             return
-        if self._workspace_root is None:
-            return
-        start = str(self._workspace_root / ".aura" / "conversations")
-        Path(start).mkdir(parents=True, exist_ok=True)
-        ensure_aura_gitignored(self._workspace_root)
-        chosen, _ = QFileDialog.getOpenFileName(
-            self, "Open Conversation", start, "Conversations (*.json)"
-        )
-        if not chosen:
-            return
-        try:
-            loaded = load_conversation(Path(chosen))
-        except Exception as exc:
-            QMessageBox.warning(
-                self, APP_NAME, f"Could not open conversation:\n{exc}"
-            )
-            return
-        self._apply_loaded_conversation(loaded)
+        loaded = self._persistence.open_conversation(self._workspace_root, self)
+        if loaded is not None:
+            self._message_queue.clear()
+            self._input.set_queued_messages(0)
+            self._reset_session_usage()
 
     def _on_open_settings(self) -> None:
         dlg = SettingsDialog(
@@ -654,7 +638,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             # No tool calls — this is the final turn.
             self._chat.assistant_done()
         # Auto-save after each assistant turn — including partial tool-call rounds.
-        self._auto_save_conversation()
+        self._persistence.auto_save(
+            workspace_root=self._workspace_root,
+            model=self.current_model(),
+            thinking=self.current_thinking(),
+            worker_model=self.current_worker_model(),
+            worker_thinking=self.current_worker_thinking(),
+            provider=self._settings.provider,
+        )
 
     def _on_tool_result(self, tool_id: str, name: str, ok: bool, result: str, extras: dict) -> None:
         self._chat.set_tool_result(tool_id, ok, result)
@@ -861,199 +852,4 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         bucket["out"] += completion
         self._refresh_status_bar()
 
-    # ----- persistence ----------------------------------------------------
-
-    def _auto_save_conversation(self) -> None:
-        if self._workspace_root is None:
-            return
-        if not self._bridge.history.messages:
-            return
-
-        # Deep copy data for thread safety
-        import copy
-        history_copy = copy.deepcopy(self._bridge.history)
-        dispatch_records_copy = list(self._bridge.dispatch_records)
-        workspace_root = self._workspace_root
-        model = self.current_model()
-        thinking = self.current_thinking()
-        worker_model = self.current_worker_model()
-        worker_thinking = self.current_worker_thinking()
-        existing_path = self._current_conversation_path
-        pwm = self._bridge.planner_worker_mode
-        provider = self._settings.provider
-
-        def _run_save():
-            try:
-                path = save_conversation(
-                    history=history_copy,
-                    workspace_root=workspace_root,
-                    model=model,
-                    thinking=thinking,
-                    existing_path=existing_path,
-                    planner_worker_mode=pwm,
-                    planner_model=model,
-                    worker_model=worker_model,
-                    planner_thinking=thinking,
-                    worker_thinking=worker_thinking,
-                    worker_dispatches=dispatch_records_copy,
-                    provider=provider,
-                )
-                # Update the current path pointer on the GUI thread
-                self._save_succeeded.emit(path)
-            except OSError as exc:
-                self._save_failed.emit(str(exc))
-
-        import threading
-        threading.Thread(target=_run_save, daemon=True).start()
-
-    @Slot(Path)
-    def _set_current_conv_path(self, path: Path) -> None:
-        self._current_conversation_path = path
-
-    def _maybe_restore_last_conversation(self) -> None:
-        if self._workspace_root is None:
-            return
-        path = most_recent_conversation(self._workspace_root)
-        if path is None:
-            return
-        try:
-            loaded = load_conversation(path)
-        except Exception:
-            return
-        self._apply_loaded_conversation(loaded)
-
-    def _apply_loaded_conversation(self, loaded: LoadedConversation) -> None:
-        pwm = loaded.planner_worker_mode
-        default_prompt = PLANNER_SYSTEM_PROMPT if pwm else SINGLE_SYSTEM_PROMPT
-        self._bridge.history.system_prompt = (
-            loaded.history.system_prompt or default_prompt
-        )
-        self._bridge.history.messages = list(loaded.history.messages)
-        self._current_conversation_path = loaded.path
-        self._reset_session_usage()
-
-        # Propagate custom prompts to bridge for future mode switches
-        self._bridge.set_custom_system_prompts(
-            self._settings.system_prompt,
-            self._settings.planner_system_prompt,
-            self._settings.worker_system_prompt,
-        )
-        self._bridge.set_temperature(self._settings.temperature)
-        self._bridge.set_worker_temperature(self._settings.worker_temperature)
-
-        # If the loaded conversation has a different provider, update the bridge.
-        if loaded.provider != self._settings.provider:
-            self._settings.provider = loaded.provider
-            self._bridge.set_provider(loaded.provider)
-            self._left_pane.populate_models(loaded.provider)
-
-        # Sync mode (without overwriting the system prompt we just set).
-        self._bridge.set_planner_worker_mode(pwm)
-        if pwm:
-            self.set_model(loaded.planner_model)
-            self.set_thinking(loaded.planner_thinking)
-            self.set_worker_model(loaded.worker_model)
-            self.set_worker_thinking(loaded.worker_thinking)
-            self._bridge.set_worker_model(loaded.worker_model)
-            self._bridge.set_worker_thinking(loaded.worker_thinking)
-        else:
-            self.set_model(loaded.model)
-            self.set_thinking(loaded.thinking)
-        self._set_sidebar_planner_worker_mode(pwm)
-        self._chat.reset()
-        self._playground.clear()
-        self._message_queue.clear()
-        self._input.set_queued_messages(0)
-        self._bridge.clear_pre_worker_snapshot()
-        self._replay_history_into_view()
-        self._refresh_status_bar()
-
-    def _replay_history_into_view(self) -> None:
-        """Best-effort visual replay of a loaded history.
-
-        We intentionally don't try to recreate diff cards (the underlying
-        before/after content isn't stored — only the resulting tool-message
-        from the registry). Tool calls are surfaced as cards with their
-        recorded args + result so the conversation reads coherently.
-        """
-        msgs = self._bridge.history.messages
-        if not msgs:
-            return
-
-        # Cancel any in-flight replay
-        if not hasattr(self, "_active_replay_id"):
-            self._active_replay_id = 0
-        self._active_replay_id += 1
-        my_id = self._active_replay_id
-
-        # Index tool results by tool_call_id for inline pairing.
-        tool_results: dict[str, str] = {}
-        for m in msgs:
-            if m.get("role") == "tool":
-                tcid = m.get("tool_call_id")
-                if isinstance(tcid, str):
-                    tool_results[tcid] = m.get("content", "")
-
-        self._chat.begin_bulk_update()
-        
-        # Filter out tool messages as they are paired into assistant cards.
-        process_msgs = [m for m in msgs if m.get("role") != "tool"]
-        msg_iter = iter(process_msgs)
-
-        def process_chunk():
-            if self._active_replay_id != my_id:
-                return
-
-            chunk_size = 10
-            try:
-                for _ in range(chunk_size):
-                    m = next(msg_iter)
-                    role = m.get("role")
-                    if role == "user":
-                        content = m.get("content")
-                        if isinstance(content, str):
-                            self._chat.add_user(content)
-                        elif isinstance(content, list):
-                            text_parts = [
-                                p.get("text", "")
-                                for p in content
-                                if isinstance(p, dict) and p.get("type") == "text"
-                            ]
-                            self._chat.add_user("\n".join(text_parts))
-                    elif role == "assistant":
-                        self._chat.begin_assistant()
-                        rc = m.get("reasoning_content")
-                        if rc:
-                            self._chat.append_reasoning(rc)
-                        content = m.get("content")
-                        if isinstance(content, str) and content:
-                            self._chat.append_content(content)
-                        for tc in m.get("tool_calls") or []:
-                            tcid = tc.get("id", "")
-                            fn = tc.get("function", {})
-                            name = fn.get("name", "")
-                            args_str = fn.get("arguments", "")
-                            
-                            self._chat.add_tool_call(tcid, name)
-                            if args_str:
-                                self._chat.append_tool_args(tcid, args_str)
-                            
-                            if tcid in tool_results:
-                                ok = True
-                                try:
-                                    parsed = json.loads(tool_results[tcid])
-                                    if isinstance(parsed, dict) and parsed.get("ok") is False:
-                                        ok = False
-                                except json.JSONDecodeError:
-                                    pass
-                                self._chat.set_tool_result(tcid, ok, tool_results[tcid])
-                        self._chat.assistant_done()
-                
-                # Schedule next chunk
-                QTimer.singleShot(0, process_chunk)
-            except StopIteration:
-                if self._active_replay_id == my_id:
-                    self._chat.end_bulk_update()
-
-        process_chunk()
-
+# ----- persistence (delegated to ConversationPersistence) --------------
