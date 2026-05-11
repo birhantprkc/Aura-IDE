@@ -86,6 +86,30 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "read_files",
+            "description": (
+                "Batched version of read_file — read multiple files in a single call. "
+                "Each file is capped at 200KB. Combined output is capped at 500KB total; "
+                "paths beyond the limit will return an error. Returns per-file results "
+                "with ok/error or ok/content for each path. "
+                "All paths must be relative to the workspace root."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Array of workspace-relative file paths to read, e.g. ['src/main.py', 'README.md'].",
+                    },
+                },
+                "required": ["paths"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_directory",
             "description": (
                 "List files and subdirectories of a workspace directory. Hidden files and "
@@ -898,6 +922,40 @@ class ToolRegistry:
         target = self._resolve_in_root(args.get("path", ""))
         return ToolExecResult(ok=True, payload=read_file(self._root, target))
 
+    def _handle_read_files(self, args, approval_cb, reject_all) -> ToolExecResult:
+        paths = args.get("paths")
+        if not isinstance(paths, list) or len(paths) == 0:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "paths is required and must be a non-empty array"})
+
+        TOTAL_SIZE_CAP = 500 * 1024
+        accumulated = 0
+        files: dict[str, dict] = {}
+
+        for path in paths:
+            path_key = str(path)
+            if accumulated >= TOTAL_SIZE_CAP:
+                files[path_key] = {"ok": False, "error": "exceeded total size limit"}
+                continue
+            try:
+                target = self._resolve_in_root(str(path))
+            except ValueError as e:
+                files[path_key] = {"ok": False, "error": str(e)}
+                continue
+
+            result = read_file(self._root, target)
+            if result.get("ok"):
+                content = result["content"]
+                if accumulated + len(content) > TOTAL_SIZE_CAP:
+                    files[path_key] = {"ok": False, "error": "exceeded total size limit"}
+                    accumulated = TOTAL_SIZE_CAP
+                else:
+                    files[path_key] = {"ok": True, "content": content}
+                    accumulated += len(content)
+            else:
+                files[path_key] = {"ok": False, "error": result.get("error", "unknown error")}
+
+        return ToolExecResult(ok=True, payload={"ok": True, "files": files})
+
     def _handle_list_directory(self, args, approval_cb, reject_all) -> ToolExecResult:
         target = self._resolve_in_root(args.get("path", "."))
         return ToolExecResult(ok=True, payload=list_directory(self._root, target))
@@ -1184,6 +1242,7 @@ class ToolRegistry:
 
 # Populate the dispatch table after ToolRegistry is defined
 TOOL_HANDLERS["read_file"] = ToolRegistry._handle_read_file
+TOOL_HANDLERS["read_files"] = ToolRegistry._handle_read_files
 TOOL_HANDLERS["list_directory"] = ToolRegistry._handle_list_directory
 TOOL_HANDLERS["glob"] = ToolRegistry._handle_glob
 TOOL_HANDLERS["grep_search"] = ToolRegistry._handle_grep_search

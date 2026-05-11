@@ -83,6 +83,75 @@ class TestReadFile:
 
 
 # ===================================================================
+# read_files
+# ===================================================================
+
+
+class TestReadFiles:
+    """Tests for the read_files batched file-read tool."""
+
+    def test_valid_multiple_files(self, registry: ToolRegistry, approve_cb: MagicMock):
+        with patch("aura.conversation.tools.registry.read_file") as mock_rf:
+            mock_rf.side_effect = [
+                {"ok": True, "path": "a.py", "content": "hello", "truncated": False},
+                {"ok": True, "path": "b.py", "content": "world", "truncated": False},
+            ]
+            result = _handler("read_files")(registry, {"paths": ["a.py", "b.py"]}, approve_cb, False)
+
+        assert result.ok is True
+        assert result.payload["ok"] is True
+        assert result.payload["files"]["a.py"] == {"ok": True, "content": "hello"}
+        assert result.payload["files"]["b.py"] == {"ok": True, "content": "world"}
+        assert mock_rf.call_count == 2
+
+    def test_mixed_valid_and_invalid(self, registry: ToolRegistry, approve_cb: MagicMock):
+        with patch("aura.conversation.tools.registry.read_file") as mock_rf:
+            mock_rf.side_effect = [
+                {"ok": True, "path": "good.py", "content": "data", "truncated": False},
+                {"ok": False, "error": "file not found: missing.py"},
+            ]
+            result = _handler("read_files")(registry, {"paths": ["good.py", "missing.py"]}, approve_cb, False)
+
+        assert result.payload["ok"] is True
+        assert result.payload["files"]["good.py"]["ok"] is True
+        assert result.payload["files"]["missing.py"]["ok"] is False
+        assert "file not found" in result.payload["files"]["missing.py"]["error"]
+
+    def test_missing_paths_key(self, registry: ToolRegistry, approve_cb: MagicMock):
+        result = _handler("read_files")(registry, {}, approve_cb, False)
+        assert result.ok is False
+        assert "non-empty array" in result.payload["error"]
+
+    def test_empty_paths_array(self, registry: ToolRegistry, approve_cb: MagicMock):
+        result = _handler("read_files")(registry, {"paths": []}, approve_cb, False)
+        assert result.ok is False
+        assert "non-empty array" in result.payload["error"]
+
+    def test_total_size_cap_exceeded(self, registry: ToolRegistry, approve_cb: MagicMock):
+        with patch("aura.conversation.tools.registry.read_file") as mock_rf:
+            mock_rf.side_effect = [
+                {"ok": True, "path": "a.py", "content": "x" * 200000, "truncated": False},
+                {"ok": True, "path": "b.py", "content": "y" * 200000, "truncated": False},
+                {"ok": True, "path": "c.py", "content": "z" * 200000, "truncated": False},
+            ]
+            result = _handler("read_files")(registry, {"paths": ["a.py", "b.py", "c.py"]}, approve_cb, False)
+
+        assert result.payload["ok"] is True
+        assert result.payload["files"]["a.py"]["ok"] is True
+        assert result.payload["files"]["b.py"]["ok"] is True
+        assert result.payload["files"]["c.py"]["ok"] is False
+        assert "exceeded total size limit" in result.payload["files"]["c.py"]["error"]
+
+    def test_path_escapes_workspace(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """Do NOT mock read_file; let the real _resolve_in_root reject the path."""
+        result = _handler("read_files")(registry, {"paths": ["../secret.txt"]}, approve_cb, False)
+        assert result.payload["ok"] is True
+        assert result.payload["files"]["../secret.txt"]["ok"] is False
+        error = result.payload["files"]["../secret.txt"]["error"].lower()
+        assert "not allowed" in error or "escap" in error
+
+
+# ===================================================================
 # list_directory
 # ===================================================================
 
@@ -862,9 +931,10 @@ class TestExecuteUnknown:
 class TestHandlerRegistration:
     """Verify that all expected tools are registered and callable."""
 
-    # The 21 tools registered in TOOL_HANDLERS
+    # The 22 tools registered in TOOL_HANDLERS
     EXPECTED_TOOLS = {
         "read_file",
+        "read_files",
         "list_directory",
         "glob",
         "grep_search",
