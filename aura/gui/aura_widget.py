@@ -717,7 +717,7 @@ class AuraPlayground(QWidget):
         if name == "run_terminal_command":
             # Create the terminal card immediately with a placeholder.
             # MainWindow will route output here via append_terminal_output.
-            card = TerminalCard(command="...")
+            card = TerminalCard(command="...", parent=self)
             self._terminal_cards[worker_tool_id] = card
             self._card_layout.insertWidget(self._card_layout.count() - 1, card)
             c.command_resolved.connect(card.set_command)
@@ -785,9 +785,10 @@ class AuraPlayground(QWidget):
         from aura.gui.cards import TerminalCard
         # Find existing terminal card for this tool call or create new
         if worker_tool_id not in self._terminal_cards:
-            card = TerminalCard(command="...")
+            card = TerminalCard(command="...", parent=self)
             self._terminal_cards[worker_tool_id] = card
             self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+
         
         self._terminal_cards[worker_tool_id].append_output(text)
         self._scroll_to_bottom()
