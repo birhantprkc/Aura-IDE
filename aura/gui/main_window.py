@@ -5,21 +5,13 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QRadialGradient
+from PySide6.QtGui import QColor, QIcon, QPainter, QRadialGradient
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QFileDialog,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
     QMainWindow,
     QMessageBox,
-    QPushButton,
-    QSizePolicy,
     QSplitter,
-    QStatusBar,
-    QToolBar,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -32,16 +24,11 @@ from aura.config import (
     APP_NAME,
     PROVIDERS,
     AppSettings,
-    DEFAULT_THINKING,
-    DEFAULT_WORKER_THINKING,
     ModelInfo,
-    ProviderId,
     ThinkingMode,
-    cost_usd,
     icon_path,
     load_settings,
     load_workspace_root,
-    media_path,
     save_workspace_root,
 )
 from aura.conversation.persistence import (
@@ -59,9 +46,7 @@ from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.left_pane import LeftPane
 from aura.gui.main_window_toolbar import MainWindowToolbar
-from aura.gui.theme import BORDER, FG_DIM, FG, BG_RAISED, ACCENT
 from aura.gui.aura_widget import AuraPlayground, GlassSwitch
-from aura.gui.workspace_tree import WorkspaceTree
 
 _THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
 
@@ -455,36 +440,21 @@ class MainWindow(QMainWindow):
 
     def _on_read_only_toggled(self, checked: bool) -> None:
         self._bridge.set_read_only(checked)
-        if checked:
-            self._read_only_act.setText("\U0001F512 Read-Only Mode")  # lock
-            self._read_only_badge.setText("READ-ONLY")
-        else:
-            self._read_only_act.setText("Read-Only Mode")
-            self._read_only_badge.setText("")
+        self._toolbar.set_read_only(checked)
 
     def _on_auto_dispatch_toggled(self, checked: bool) -> None:
         self._settings.auto_dispatch = checked
         self._bridge.set_auto_dispatch(checked)
-        self._refresh_auto_toggle_tooltips()
+        self._toolbar.refresh_auto_toggle_tooltips()
         from aura.config import save_settings
         save_settings(self._settings)
 
     def _on_auto_approve_toggled(self, checked: bool) -> None:
         self._settings.auto_approve = checked
         self._bridge.set_auto_approve(checked)
-        self._refresh_auto_toggle_tooltips()
+        self._toolbar.refresh_auto_toggle_tooltips()
         from aura.config import save_settings
         save_settings(self._settings)
-
-    def _refresh_auto_toggle_tooltips(self) -> None:
-        dispatch_state = "ON" if self._settings.auto_dispatch else "OFF"
-        approve_state = "ON" if self._settings.auto_approve else "OFF"
-        self._auto_dispatch_switch.setToolTip(
-            f"Auto-dispatch worker specs: {dispatch_state}"
-        )
-        self._auto_approve_switch.setToolTip(
-            f"Auto-approve file modification diffs: {approve_state}"
-        )
 
     def _on_new_conversation(self) -> None:
         if self._bridge.is_running():
