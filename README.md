@@ -688,3 +688,8 @@ python scripts/build_nuitka.py  # Build with Nuitka (faster, smaller)
 Aura is released under the [MIT License](LICENSE).
 
 The application icon is located at [`media/AurA.ico`](media/AurA.ico).
+
+
+## Technical Blog
+
+- [Planner/Worker: A Better Architecture for AI Code Generation](https://aura-ide.hashnode.dev/planner-worker-a-better-architecture-for-ai-code-generation) – A deep dive into the dual-agent architecture behind Aura, why it's more token-efficient than single-agent approaches, and what I learned building it.
