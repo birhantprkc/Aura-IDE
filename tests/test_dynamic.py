@@ -237,6 +237,35 @@ class TestAnnotationToJsonType:
         node = ast.List(elts=[])
         assert _annotation_to_json_type(node) == "string"
 
+    def test_subscript_optional_list(self):
+        """Optional[list[str]] → "array" (unwraps Optional, then sees list)."""
+        node = ast.Subscript(
+            value=ast.Name(id="Optional"),
+            slice=ast.Subscript(value=ast.Name(id="list"), slice=ast.Name(id="str")),
+        )
+        assert _annotation_to_json_type(node) == "array"
+
+    def test_subscript_list_of_lists(self):
+        """list[list[str]] → "array"."""
+        node = ast.Subscript(
+            value=ast.Name(id="list"),
+            slice=ast.Subscript(value=ast.Name(id="list"), slice=ast.Name(id="str")),
+        )
+        assert _annotation_to_json_type(node) == "array"
+
+    def test_subscript_dict_complex_value(self):
+        """dict[str, list[int]] → "object"."""
+        node = ast.Subscript(
+            value=ast.Name(id="dict"),
+            slice=ast.Tuple(
+                elts=[
+                    ast.Name(id="str"),
+                    ast.Subscript(value=ast.Name(id="list"), slice=ast.Name(id="int")),
+                ]
+            ),
+        )
+        assert _annotation_to_json_type(node) == "object"
+
 
 # ===================================================================
 # _parse_docstring_args
@@ -346,6 +375,37 @@ Some other section:
 """
         result = _parse_docstring_args(doc)
         assert result == {"name": "The name."}
+
+    def test_colon_in_description(self):
+        """Description text containing colons is handled correctly (partition on first colon only)."""
+        doc = """Do something.
+
+Args:
+    time: The format is HH:MM:SS.
+"""
+        result = _parse_docstring_args(doc)
+        assert result == {"time": "The format is HH:MM:SS."}
+
+    def test_tab_indented_args(self):
+        """Tab characters instead of spaces for indentation in Args block."""
+        doc = """Do something.
+
+Args:
+\tname: The name to use.
+\tage: The age.
+"""
+        result = _parse_docstring_args(doc)
+        assert result == {"name": "The name to use.", "age": "The age."}
+
+    def test_multi_word_param_name(self):
+        """Parameter name with underscores (e.g. user_name) is parsed correctly."""
+        doc = """Do something.
+
+Args:
+    user_name: The user's display name.
+"""
+        result = _parse_docstring_args(doc)
+        assert result == {"user_name": "The user's display name."}
 
 
 # ===================================================================
@@ -538,6 +598,125 @@ class TestParseToolSchema:
         with pytest.raises(ValueError, match="No top-level function"):
             parse_tool_schema(fp)
 
+    def test_optional_list_annotation(self, tmp_path: Path):
+        """Optional[list[str]] annotation maps to type "array"."""
+        src = (
+            "from typing import Optional\n"
+            "\n"
+            "def process(data: Optional[list[str]]) -> None:\n"
+            '    """Process data.\n\n'
+            "    Args:\n"
+            "        data: The data to process.\n"
+            '    """\n'
+            "    pass\n"
+        )
+        fp = tmp_path / "process.py"
+        fp.write_text(src, encoding="utf-8")
+        schema = parse_tool_schema(fp)
+        params = schema["function"]["parameters"]
+        assert params["properties"]["data"]["type"] == "array"
+
+    def test_list_of_lists_annotation(self, tmp_path: Path):
+        """list[list[float]] annotation maps to type "array"."""
+        src = (
+            "def transform(matrix: list[list[float]]) -> None:\n"
+            '    """Transform the matrix."""\n'
+            "    pass\n"
+        )
+        fp = tmp_path / "transform.py"
+        fp.write_text(src, encoding="utf-8")
+        schema = parse_tool_schema(fp)
+        params = schema["function"]["parameters"]
+        assert params["properties"]["matrix"]["type"] == "array"
+
+    def test_dict_with_complex_value_annotation(self, tmp_path: Path):
+        """dict[str, list[int]] annotation maps to type "object"."""
+        src = (
+            "def lookup(mapping: dict[str, list[int]]) -> None:\n"
+            '    """Look up values."""\n'
+            "    pass\n"
+        )
+        fp = tmp_path / "lookup.py"
+        fp.write_text(src, encoding="utf-8")
+        schema = parse_tool_schema(fp)
+        params = schema["function"]["parameters"]
+        assert params["properties"]["mapping"]["type"] == "object"
+
+    def test_pep604_union_annotation(self, tmp_path: Path):
+        """PEP 604 str | None annotation → type "string", not in required (has default)."""
+        src = (
+            "def greet(name: str | None = None) -> str:\n"
+            '    """Greet someone.\n\n'
+            "    Args:\n"
+            "        name: The person's name.\n"
+            '    """\n'
+            "    return f'Hello {name}'\n"
+        )
+        fp = tmp_path / "greet.py"
+        fp.write_text(src, encoding="utf-8")
+        schema = parse_tool_schema(fp)
+        params = schema["function"]["parameters"]
+        assert params["properties"]["name"]["type"] == "string"
+        assert "name" not in params["required"]
+
+    def test_float_default(self, tmp_path: Path):
+        """Parameter with float default → type "number", not in required."""
+        src = (
+            "def scale(ratio: float = 0.5) -> float:\n"
+            '    """Scale by ratio."""\n'
+            "    return ratio\n"
+        )
+        fp = tmp_path / "scale.py"
+        fp.write_text(src, encoding="utf-8")
+        schema = parse_tool_schema(fp)
+        params = schema["function"]["parameters"]
+        assert params["properties"]["ratio"]["type"] == "number"
+        assert "ratio" not in params["required"]
+
+    def test_all_default_types(self, tmp_path: Path):
+        """Mixed required/optional params: only param without default is required."""
+        src = (
+            "def config(host: str, port: int = 8080, debug: bool = False, ratio: float = 1.0) -> str:\n"
+            '    """Configure the service."""\n'
+            "    return host\n"
+        )
+        fp = tmp_path / "config.py"
+        fp.write_text(src, encoding="utf-8")
+        schema = parse_tool_schema(fp)
+        params = schema["function"]["parameters"]
+        assert params["required"] == ["host"]
+        assert params["properties"]["port"]["type"] == "integer"
+        assert params["properties"]["debug"]["type"] == "boolean"
+        assert params["properties"]["ratio"]["type"] == "number"
+
+    def test_kwonly_args_omitted(self, tmp_path: Path):
+        """Keyword-only args (after *) are silently omitted (current behavior gap)."""
+        src = (
+            "def format(*, indent: int = 2, color: bool = True) -> str:\n"
+            '    """Format output."""\n'
+            "    return ''\n"
+        )
+        fp = tmp_path / "format.py"
+        fp.write_text(src, encoding="utf-8")
+        schema = parse_tool_schema(fp)
+        params = schema["function"]["parameters"]
+        assert params["properties"] == {}
+        assert params["required"] == []
+
+    def test_empty_args_list(self, tmp_path: Path):
+        """Function with no parameters → empty properties and required."""
+        src = (
+            "def ping() -> str:\n"
+            '    """Check if alive."""\n'
+            "    return 'pong'\n"
+        )
+        fp = tmp_path / "ping.py"
+        fp.write_text(src, encoding="utf-8")
+        schema = parse_tool_schema(fp)
+        params = schema["function"]["parameters"]
+        assert params["properties"] == {}
+        assert params["required"] == []
+
 
 # ===================================================================
 # execute_dynamic_tool
@@ -716,6 +895,89 @@ class TestExecuteDynamicTool:
             workspace_root=tmp_path,
         )
         assert result == {"ok": True, "result": "hello"}
+
+    def test_sandbox_result_ok_false(self, tmp_path: Path):
+        """When SandboxResult.ok is False, empty stdout triggers JSON parse error."""
+        from aura.sandbox import SandboxResult
+
+        self.mock_executor_instance.run_dynamic_tool.return_value = SandboxResult(
+            ok=False,
+            stdout="",
+            stderr="tool error",
+            exit_code=1,
+        )
+        fp = tmp_path / "tool.py"
+        fp.write_text("def f(): pass\n", encoding="utf-8")
+        result = execute_dynamic_tool(
+            file_path=fp,
+            function_name="f",
+            arguments={},
+            workspace_root=tmp_path,
+        )
+        assert result["ok"] is False
+        assert "parse error" in result["error"].lower()
+        assert "tool error" in result["error"]
+
+    def test_timeout_value_propagated(self, tmp_path: Path):
+        """Timeout value of 30 is passed through to run_dynamic_tool."""
+        from aura.sandbox import SandboxResult
+
+        self.mock_executor_instance.run_dynamic_tool.return_value = SandboxResult(
+            ok=True,
+            stdout='{"ok": true}',
+            stderr="",
+            exit_code=0,
+        )
+        fp = tmp_path / "tool.py"
+        fp.write_text("def f(): pass\n", encoding="utf-8")
+        execute_dynamic_tool(
+            file_path=fp,
+            function_name="f",
+            arguments={},
+            workspace_root=tmp_path,
+        )
+        assert self.mock_executor_instance.run_dynamic_tool.call_args[1]["timeout"] == 30
+
+    def test_workspace_root_propagated(self, tmp_path: Path):
+        """Workspace_root is passed to SandboxExecutor constructor."""
+        from aura.sandbox import SandboxResult
+
+        self.mock_executor_instance.run_dynamic_tool.return_value = SandboxResult(
+            ok=True,
+            stdout='{"ok": true}',
+            stderr="",
+            exit_code=0,
+        )
+        fp = tmp_path / "tool.py"
+        fp.write_text("def f(): pass\n", encoding="utf-8")
+        execute_dynamic_tool(
+            file_path=fp,
+            function_name="f",
+            arguments={},
+            workspace_root=tmp_path,
+        )
+        _, kwargs = self.mock_executor_cls.call_args
+        assert kwargs["workspace_root"] == tmp_path
+
+    def test_settings_loaded_once(self, tmp_path: Path):
+        """load_settings is called exactly once during execute_dynamic_tool."""
+        from aura.sandbox import SandboxResult
+
+        self.mock_executor_instance.run_dynamic_tool.return_value = SandboxResult(
+            ok=True,
+            stdout='{"ok": true}',
+            stderr="",
+            exit_code=0,
+        )
+        fp = tmp_path / "tool.py"
+        fp.write_text("def f(): pass\n", encoding="utf-8")
+        execute_dynamic_tool(
+            file_path=fp,
+            function_name="f",
+            arguments={},
+            workspace_root=tmp_path,
+        )
+        assert self.mock_load_settings.call_count == 1
 
 
 # ===================================================================
