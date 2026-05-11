@@ -15,6 +15,8 @@ class ToolStreamController(QObject):
 
     # Emitted once when "path" is found in partial or full JSON
     path_resolved = Signal(str)
+    # Emitted once when "goal" is found (for dispatch_to_worker)
+    goal_resolved = Signal(str)
     # Emitted once when "command" is found (for run_terminal_command)
     command_resolved = Signal(str)
     # Emitted when "tasks" is found or updated (for update_todo_list)
@@ -35,12 +37,14 @@ class ToolStreamController(QObject):
         self._tool_name = tool_name
         self._buffer = ""
         self._path: str | None = None
+        self._goal: str | None = None
         self._command: str | None = None
         self._last_content: str = ""
         self._state = "running"
 
         # Regex for early extraction from partial JSON
         self._path_re = re.compile(r'"path"\s*:\s*"([^"]+)"')
+        self._goal_re = re.compile(r'"goal"\s*:\s*"([^"]+)"')
         self._command_re = re.compile(r'"command"\s*:\s*"([^"]+)"')
 
     @property
@@ -61,6 +65,12 @@ class ToolStreamController(QObject):
             if m_path:
                 self._path = m_path.group(1)
                 self.path_resolved.emit(self._path)
+
+        if self._goal is None:
+            m_goal = self._goal_re.search(self._buffer)
+            if m_goal:
+                self._goal = m_goal.group(1)
+                self.goal_resolved.emit(self._goal)
 
         if self._command is None:
             m_cmd = self._command_re.search(self._buffer)
@@ -84,6 +94,12 @@ class ToolStreamController(QObject):
                 self._path = path
                 self.path_resolved.emit(path)
 
+            # Update goal if we haven't already
+            goal = parsed.get("goal")
+            if goal and goal != self._goal:
+                self._goal = goal
+                self.goal_resolved.emit(goal)
+
             # Update command if we haven't already
             cmd = parsed.get("command")
             if cmd and cmd != self._command:
@@ -98,6 +114,8 @@ class ToolStreamController(QObject):
                 content = parsed.get("new_str", "")
             elif self._tool_name == "edit_symbol":
                 content = parsed.get("new_definition", "")
+            elif self._tool_name == "dispatch_to_worker":
+                content = parsed.get("spec", "")
 
             if content and content != self._last_content:
                 self._last_content = content
@@ -121,6 +139,8 @@ class ToolStreamController(QObject):
                 key = "new_str"
             elif self._tool_name == "edit_symbol":
                 key = "new_definition"
+            elif self._tool_name == "dispatch_to_worker":
+                key = "spec"
                 
             if key:
                 match = re.search(r'"' + key + r'"\s*:\s*"(.*)', self._buffer, re.DOTALL)

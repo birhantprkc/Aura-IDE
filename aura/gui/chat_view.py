@@ -17,6 +17,7 @@ from aura.gui.cards.assistant_card import AssistantCard
 from aura.gui.cards.code_writer_card import CodeWriterCard
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
+from aura.gui.cards.plan_writer_card import PlanWriterCard
 from aura.gui.cards.spec_card import SpecCard
 from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.user_card import UserCard
@@ -260,6 +261,18 @@ class ChatView(QScrollArea):
             # Wire code writer signals
             controller.path_resolved.connect(card.set_target_path)
             controller.content_updated.connect(card.update_content)
+            controller.state_changed.connect(lambda s: card.set_result(s == "done"))
+
+        elif name == "dispatch_to_worker":
+            card = PlanWriterCard(parent=self)
+            if not ac._tool_cluster.isVisible():
+                ac._tool_cluster.setVisible(True)
+            ac._tool_cluster_layout.addWidget(card)
+            self._tool_owner[tool_call_id] = ac
+
+            # Wire plan writer signals
+            controller.goal_resolved.connect(card.set_goal)
+            controller.content_updated.connect(card.update_spec)
             controller.state_changed.connect(lambda s: card.set_result(s == "done"))
 
         else:
