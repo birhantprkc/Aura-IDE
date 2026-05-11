@@ -22,7 +22,7 @@ from typing import Any, Callable, Literal
 from aura.conversation.tools.backup import backup_existing
 from aura.conversation.tools.dynamic import execute_dynamic_tool, parse_tool_schema
 from aura.conversation.tools.find_usages import find_usages
-from aura.conversation.tools.fs_read import glob_files, list_directory, read_file, read_file_outline
+from aura.conversation.tools.fs_handler import FsReadHandler
 from aura.conversation.tools.git_tools import (
     git_branch_list,
     git_diff,
@@ -804,6 +804,7 @@ class ToolRegistry:
         self._dynamic_cache: dict[str, Path] = {}
         self._dynamic_cache_mtimes: dict[str, float] = {}
         self._codebase_index: CodebaseIndex | None = None
+        self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
         self._mcp_clients: dict[str, MCPClient] = {}
         self._mcp_schemas: list[dict[str, Any]] = []
 
@@ -976,54 +977,20 @@ class ToolRegistry:
     # ---- handler methods (one per tool) -----------------------------------
 
     def _handle_read_file(self, args, approval_cb, reject_all) -> ToolExecResult:
-        target = self._resolve_in_root(args.get("path", ""))
-        return ToolExecResult(ok=True, payload=read_file(self._root, target))
+        payload = self._fs_handler.handle_read_file(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_read_files(self, args, approval_cb, reject_all) -> ToolExecResult:
-        paths = args.get("paths")
-        if not isinstance(paths, list) or len(paths) == 0:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "paths is required and must be a non-empty array"})
-
-        TOTAL_SIZE_CAP = 500 * 1024
-        accumulated = 0
-        files: dict[str, dict] = {}
-
-        for path in paths:
-            path_key = str(path)
-            if accumulated >= TOTAL_SIZE_CAP:
-                files[path_key] = {"ok": False, "error": "exceeded total size limit"}
-                continue
-            try:
-                target = self._resolve_in_root(str(path))
-            except ValueError as e:
-                files[path_key] = {"ok": False, "error": str(e)}
-                continue
-
-            result = read_file(self._root, target)
-            if result.get("ok"):
-                content = result["content"]
-                if accumulated + len(content) > TOTAL_SIZE_CAP:
-                    files[path_key] = {"ok": False, "error": "exceeded total size limit"}
-                    accumulated = TOTAL_SIZE_CAP
-                else:
-                    files[path_key] = {"ok": True, "content": content}
-                    accumulated += len(content)
-            else:
-                files[path_key] = {"ok": False, "error": result.get("error", "unknown error")}
-
-        return ToolExecResult(ok=True, payload={"ok": True, "files": files})
+        payload = self._fs_handler.handle_read_files(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_list_directory(self, args, approval_cb, reject_all) -> ToolExecResult:
-        target = self._resolve_in_root(args.get("path", "."))
-        return ToolExecResult(ok=True, payload=list_directory(self._root, target))
+        payload = self._fs_handler.handle_list_directory(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_glob(self, args, approval_cb, reject_all) -> ToolExecResult:
-        pattern = str(args.get("pattern", "")).strip()
-        if not pattern:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "pattern is required"})
-        if ".." in Path(pattern).parts or Path(pattern).is_absolute():
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "glob pattern must be workspace-relative"})
-        return ToolExecResult(ok=True, payload=glob_files(self._root, pattern))
+        payload = self._fs_handler.handle_glob(args)
+        return ToolExecResult(ok=payload.get("ok", False), payload=payload)
 
     def _handle_grep_search(self, args, approval_cb, reject_all) -> ToolExecResult:
         pattern = args.get("pattern", "")
@@ -1042,8 +1009,8 @@ class ToolRegistry:
         )
 
     def _handle_read_file_outline(self, args, approval_cb, reject_all) -> ToolExecResult:
-        target = self._resolve_in_root(args.get("path", ""))
-        return ToolExecResult(ok=True, payload=read_file_outline(self._root, target))
+        payload = self._fs_handler.handle_read_file_outline(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_find_usages(self, args, approval_cb, reject_all) -> ToolExecResult:
         symbol = args.get("symbol", "")

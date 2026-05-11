@@ -56,7 +56,7 @@ class TestReadFile:
     """Tests for the read_file tool."""
 
     def test_valid(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.read_file") as mock_rf:
+        with patch("aura.conversation.tools.fs_handler.read_file") as mock_rf:
             mock_rf.return_value = {
                 "ok": True, "path": "README.md", "content": "# Hello", "truncated": False,
             }
@@ -91,7 +91,7 @@ class TestReadFiles:
     """Tests for the read_files batched file-read tool."""
 
     def test_valid_multiple_files(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.read_file") as mock_rf:
+        with patch("aura.conversation.tools.fs_handler.read_file") as mock_rf:
             mock_rf.side_effect = [
                 {"ok": True, "path": "a.py", "content": "hello", "truncated": False},
                 {"ok": True, "path": "b.py", "content": "world", "truncated": False},
@@ -105,7 +105,7 @@ class TestReadFiles:
         assert mock_rf.call_count == 2
 
     def test_mixed_valid_and_invalid(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.read_file") as mock_rf:
+        with patch("aura.conversation.tools.fs_handler.read_file") as mock_rf:
             mock_rf.side_effect = [
                 {"ok": True, "path": "good.py", "content": "data", "truncated": False},
                 {"ok": False, "error": "file not found: missing.py"},
@@ -128,7 +128,7 @@ class TestReadFiles:
         assert "non-empty array" in result.payload["error"]
 
     def test_total_size_cap_exceeded(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.read_file") as mock_rf:
+        with patch("aura.conversation.tools.fs_handler.read_file") as mock_rf:
             mock_rf.side_effect = [
                 {"ok": True, "path": "a.py", "content": "x" * 200000, "truncated": False},
                 {"ok": True, "path": "b.py", "content": "y" * 200000, "truncated": False},
@@ -160,7 +160,7 @@ class TestListDirectory:
     """Tests for the list_directory tool."""
 
     def test_valid(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.list_directory") as mock_ld:
+        with patch("aura.conversation.tools.fs_handler.list_directory") as mock_ld:
             mock_ld.return_value = {"ok": True, "path": ".", "directories": [], "files": []}
             result = _handler("list_directory")(registry, {"path": "."}, approve_cb, False)
 
@@ -171,7 +171,7 @@ class TestListDirectory:
         assert result.ok is False
 
     def test_missing_path_defaults_to_dot(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.list_directory") as mock_ld:
+        with patch("aura.conversation.tools.fs_handler.list_directory") as mock_ld:
             mock_ld.return_value = {"ok": True, "path": ".", "directories": [], "files": []}
             result = _handler("list_directory")(registry, {}, approve_cb, False)
 
@@ -188,7 +188,7 @@ class TestGlob:
     """Tests for the glob tool."""
 
     def test_valid(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.glob_files") as mock_gf:
+        with patch("aura.conversation.tools.fs_handler.glob_files") as mock_gf:
             mock_gf.return_value = {"ok": True, "pattern": "**/*.py", "matches": [], "truncated": False}
             result = _handler("glob")(registry, {"pattern": "**/*.py"}, approve_cb, False)
 
@@ -203,7 +203,7 @@ class TestGlob:
         assert result.ok is False
 
     def test_absolute_pattern(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.glob_files",
+        with patch("aura.conversation.tools.fs_handler.glob_files",
                    side_effect=ValueError("absolute path")):
             result = registry.execute("glob", {"pattern": "/etc"}, approve_cb, False)
         assert result.ok is False
@@ -222,7 +222,7 @@ class TestReadFileOutline:
     """Tests for the read_file_outline tool."""
 
     def test_valid(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.read_file_outline") as mock_rfo:
+        with patch("aura.conversation.tools.fs_handler.read_file_outline") as mock_rfo:
             mock_rfo.return_value = {"ok": True, "path": "file.py", "language": "python"}
             result = _handler("read_file_outline")(registry, {"path": "file.py"}, approve_cb, False)
 
@@ -917,7 +917,7 @@ class TestExecuteUnknown:
 
     def test_value_error_caught(self, registry: ToolRegistry, approve_cb: MagicMock):
         """If a tool raises ValueError, execute catches it and returns ok=False."""
-        with patch("aura.conversation.tools.registry.read_file",
+        with patch("aura.conversation.tools.fs_handler.read_file",
                    side_effect=ValueError("boom")):
             result = registry.execute("read_file", {"path": "x"}, approve_cb, False)
         assert result.ok is False
