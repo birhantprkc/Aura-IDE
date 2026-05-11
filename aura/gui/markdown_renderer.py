@@ -6,7 +6,7 @@ import re
 
 from PySide6.QtGui import QTextDocument
 
-from aura.gui.theme import BG_ALT, FG
+from aura.gui.theme import BG_ALT, BORDER, FG
 
 try:
     from pygments import highlight  # noqa: F401
@@ -96,8 +96,36 @@ def _render_markdown_with_code(text: str, color: str | None = None, italic: bool
     # 2px was too tight, leading to 'wall of text' complaints. 4px is a better balance.
     html = html.replace("margin-top:6px; margin-bottom:6px;", "margin-top:4px; margin-bottom:4px;")
     
-    # 4. Improve list indentation. Qt defaults to a very shallow indent.
-    html = html.replace("-qt-list-indent: 1;", "-qt-list-indent: 2;")
+    # 4. Inject a style block for modern table rendering and consistent list spacing.
+    # We use this instead of hardcoded replacements where possible.
+    style_block = f"""
+    <style>
+        table {{
+            border-collapse: collapse;
+            margin-top: 8px;
+            margin-bottom: 8px;
+            border: 1px solid {BORDER};
+        }}
+        th {{
+            background-color: {BG_ALT};
+            padding: 6px;
+            border: 1px solid {BORDER};
+            font-weight: bold;
+        }}
+        td {{
+            padding: 6px;
+            border: 1px solid {BORDER};
+        }}
+    </style>
+    """
+    html = html.replace("<head>", f"<head>{style_block}")
+
+    # 5. Fix table alignment. Qt defaults tables to margin-left: 40px, 
+    # which misaligns them with Level 0 body text.
+    # NOTE: We use 1px instead of 0px because Qt's HTML parser treats 0px as 
+    # "use default" and resets it to 40px. 1px is effectively invisible but 
+    # forces the parser to respect our alignment.
+    html = re.sub(r'(<table[^>]*style=")', r'\1margin-left: 1px; ', html)
 
     for i, block in enumerate(blocks):
         token = f"AURACODEPLACEHOLDER{i}ENDAURA"
