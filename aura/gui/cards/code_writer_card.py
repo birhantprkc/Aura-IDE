@@ -31,7 +31,7 @@ class CodeWriterCard(QFrame):
         layout.setSpacing(5)
 
         # Header
-        self._header = QToolButton()
+        self._header = QToolButton(self)
         self._header.setObjectName("sectionToggle")
         self._header.setStyleSheet(
             f"QToolButton#sectionToggle {{ color: {FG_DIM}; }} "
@@ -41,13 +41,13 @@ class CodeWriterCard(QFrame):
         layout.addWidget(self._header)
 
         # Body
-        self._body = QWidget()
+        self._body = QWidget(self)
         body_layout = QVBoxLayout(self._body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(4)
 
         # File path subtitle
-        self._path_label = QLabel("")
+        self._path_label = QLabel("", self)
         self._path_label.setStyleSheet(
             f"color: {FG_DIM}; font-family: 'Geist Mono', 'JetBrains Mono', monospace; "
             "font-size: 10px;"
@@ -56,7 +56,7 @@ class CodeWriterCard(QFrame):
         body_layout.addWidget(self._path_label)
 
         # Code view
-        self._code_view = QPlainTextEdit()
+        self._code_view = QPlainTextEdit(self)
         self._code_view.setReadOnly(True)
         self._code_view.setFont(_mono_font(10))
         self._code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)

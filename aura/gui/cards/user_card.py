@@ -19,7 +19,7 @@ class UserCard(QFrame):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(6)
 
-        header = QLabel("You")
+        header = QLabel("You", parent=self)
         header.setObjectName("userHeader")
         layout.addWidget(header)
 
@@ -35,7 +35,7 @@ class UserCard(QFrame):
             layout.addLayout(row)
 
         if text:
-            body = QLabel()
+            body = QLabel(parent=self)
             body.setWordWrap(True)
             body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             body.setTextFormat(Qt.TextFormat.RichText)
@@ -56,7 +56,7 @@ class UserCard(QFrame):
             movie = QMovie(buffer)
             movie.setParent(self) # Keep buffer/movie alive
             
-            label = QLabel()
+            label = QLabel(parent=self)
             label.setStyleSheet(f"border: 1px solid {BORDER}; border-radius: 4px;")
             
             if movie.isValid() and movie.frameCount() > 1:
@@ -80,6 +80,6 @@ class UserCard(QFrame):
             
             return label
         except Exception as exc:
-            label = QLabel(f"[image: {exc}]")
+            label = QLabel(f"[image: {exc}]", parent=self)
             label.setStyleSheet(f"color: {DANGER};")
             return label

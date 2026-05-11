@@ -33,7 +33,7 @@ class ToolCallCard(QFrame):
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(5)
 
-        self._header = QToolButton()
+        self._header = QToolButton(self)
         self._header.setObjectName("sectionToggle")
         self._header.setStyleSheet(
             f"QToolButton#sectionToggle {{ color: {FG_DIM}; }} "
@@ -42,12 +42,12 @@ class ToolCallCard(QFrame):
         self._header.clicked.connect(self._toggle_body)
         layout.addWidget(self._header)
 
-        self._body = QWidget()
+        self._body = QWidget(self)
         body_layout = QVBoxLayout(self._body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(4)
 
-        self._args_view = QPlainTextEdit()
+        self._args_view = QPlainTextEdit(self._body)
         self._args_view.setReadOnly(True)
         self._args_view.setFont(_mono_font(9))
         self._args_view.setStyleSheet(
@@ -63,7 +63,7 @@ class ToolCallCard(QFrame):
                 self._args_view.document(), "json"
             )
 
-        self._result_view = QPlainTextEdit()
+        self._result_view = QPlainTextEdit(self._body)
         self._result_view.setReadOnly(True)
         self._result_view.setFont(_mono_font(9))
         self._result_view.setStyleSheet(

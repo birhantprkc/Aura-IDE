@@ -16,10 +16,10 @@ class ErrorCard(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(4)
-        head = QLabel(title)
+        head = QLabel(title, self)
         head.setStyleSheet(f"color: {DANGER}; font-weight: 600;")
         layout.addWidget(head)
-        body = QLabel(message)
+        body = QLabel(message, self)
         body.setWordWrap(True)
         body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         body.setStyleSheet(f"color: {FG};")
@@ -28,7 +28,7 @@ class ErrorCard(QFrame):
         if show_retry:
             btn_layout = QHBoxLayout()
             btn_layout.setContentsMargins(0, 4, 0, 0)
-            self._retry_btn = QPushButton("Retry")
+            self._retry_btn = QPushButton("Retry", self)
             self._retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             self._retry_btn.setStyleSheet(
                 f"color: {FG}; background: {BG_ALT}; border: 1px solid {BORDER}; padding: 4px 12px; border-radius: 4px;"

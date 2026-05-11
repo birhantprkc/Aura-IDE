@@ -40,11 +40,11 @@ class DiffCard(QFrame):
         }.get(decision, decision)
         verb_prefix = "Created" if (is_new_file and decision == "approve") else verb
 
-        title = QLabel(f"{verb_prefix}: {rel_path}")
+        title = QLabel(f"{verb_prefix}: {rel_path}", self)
         title.setStyleSheet(f"color: {title_color}; font-weight: 600;")
         layout.addWidget(title)
 
-        diff_view = QPlainTextEdit()
+        diff_view = QPlainTextEdit(self)
         diff_view.setReadOnly(True)
         diff_view.setFont(_mono_font(9))
         diff_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)

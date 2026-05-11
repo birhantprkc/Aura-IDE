@@ -29,7 +29,7 @@ class PlanWriterCard(QFrame):
         layout.setSpacing(5)
 
         # Header
-        self._header = QToolButton()
+        self._header = QToolButton(self)
         self._header.setObjectName("sectionToggle")
         self._header.setStyleSheet(
             f"QToolButton#sectionToggle {{ color: {FG_DIM}; }} "
@@ -39,13 +39,13 @@ class PlanWriterCard(QFrame):
         layout.addWidget(self._header)
 
         # Body
-        self._body = QWidget()
+        self._body = QWidget(self)
         body_layout = QVBoxLayout(self._body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(4)
 
         # Goal subtitle
-        self._goal_label = QLabel("")
+        self._goal_label = QLabel("", self)
         self._goal_label.setWordWrap(True)
         self._goal_label.setStyleSheet(
             f"color: {FG_DIM}; font-style: italic; font-size: 11px; padding-bottom: 4px;"
@@ -54,7 +54,7 @@ class PlanWriterCard(QFrame):
         body_layout.addWidget(self._goal_label)
 
         # Spec view
-        self._spec_view = QPlainTextEdit()
+        self._spec_view = QPlainTextEdit(self)
         self._spec_view.setReadOnly(True)
         self._spec_view.setFont(_mono_font(10))
         self._spec_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)

@@ -26,7 +26,7 @@ class CodeBlockCard(QFrame):
         layout.setSpacing(0)
 
         # Language header bar
-        header_row = QWidget()
+        header_row = QWidget(self)
         header_row.setStyleSheet(
             f"background: {BG_ALT}; border-top-left-radius: 6px; "
             f"border-top-right-radius: 6px; border-bottom: 1px solid {BORDER};"
@@ -36,7 +36,7 @@ class CodeBlockCard(QFrame):
         header_layout.setSpacing(0)
 
         lang_display = language if language else "code"
-        header_lbl = QLabel(lang_display.upper())
+        header_lbl = QLabel(lang_display.upper(), self)
         header_lbl.setStyleSheet(
             f"color: {FG_DIM}; font-family: 'Geist Mono', 'JetBrains Mono', monospace; "
             f"font-size: 10px; font-weight: 700;"
@@ -44,7 +44,7 @@ class CodeBlockCard(QFrame):
         header_layout.addWidget(header_lbl)
         header_layout.addStretch(1)
 
-        self._copy_btn = QToolButton()
+        self._copy_btn = QToolButton(self)
         self._copy_btn.setText("Copy")
         self._copy_btn.setStyleSheet(
             f"QToolButton {{ color: {FG_DIM}; border: none; border-radius: 3px; "
@@ -57,7 +57,7 @@ class CodeBlockCard(QFrame):
         layout.addWidget(header_row)
 
         # Code view
-        code_view = QPlainTextEdit()
+        code_view = QPlainTextEdit(self)
         code_view.setReadOnly(True)
         code_view.setFont(_mono_font(10))
         code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)

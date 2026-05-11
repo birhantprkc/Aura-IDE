@@ -42,19 +42,19 @@ class TerminalCard(QFrame):
         layout.setSpacing(5)
 
         # Header toggle
-        self._header = QToolButton()
+        self._header = QToolButton(self)
         self._header.setObjectName("sectionToggle")
         self._header.setCursor(Qt.CursorShape.PointingHandCursor)
         self._header.clicked.connect(self._toggle_body)
         layout.addWidget(self._header)
 
         # Body: output view
-        self._body = QWidget()
+        self._body = QWidget(self)
         body_layout = QVBoxLayout(self._body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(0)
 
-        self._output_view = QPlainTextEdit()
+        self._output_view = QPlainTextEdit(self._body)
         self._output_view.setReadOnly(True)
         self._output_view.setFont(_mono_font(9))
         self._output_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)

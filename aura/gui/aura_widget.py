@@ -78,7 +78,7 @@ class GlassSwitch(QWidget):
         layout.setSpacing(6)
 
         # The Track
-        self._track = QFrame()
+        self._track = QFrame(self)
         self._track.setFixedSize(32, 16)
         self._track.setCursor(Qt.CursorShape.PointingHandCursor)
         self._track.setStyleSheet(self._get_track_style())
@@ -96,7 +96,7 @@ class GlassSwitch(QWidget):
         self._track.installEventFilter(self)
         
         if label:
-            self._label = QLabel(label)
+            self._label = QLabel(label, self)
             self._label.setCursor(Qt.CursorShape.PointingHandCursor)
             self._label.installEventFilter(self)
             layout.addWidget(self._label, 0, Qt.AlignmentFlag.AlignCenter)
@@ -335,7 +335,7 @@ class TodoListWidget(QFrame):
         outer.setContentsMargins(12, 8, 12, 8)
         outer.setSpacing(4)
 
-        header = QLabel("TODO LIST")
+        header = QLabel("TODO LIST", self)
         header.setObjectName("paneTitle")
         header.setStyleSheet("padding: 0 0 4px 0;")
         outer.addWidget(header)
@@ -419,32 +419,32 @@ class ArtifactCard(QFrame):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        header = QWidget()
+        header = QWidget(self)
         h_layout = QHBoxLayout(header)
         h_layout.setContentsMargins(10, 6, 10, 6)
         
-        self._header_label = QLabel(label)
+        self._header_label = QLabel(label, self)
         self._header_label.setStyleSheet(f"color: {FG}; font-weight: 600;")
         h_layout.addWidget(self._header_label)
 
-        self._status_label = QLabel("")
+        self._status_label = QLabel("", self)
         self._status_label.setStyleSheet(f"color: {WARN}; font-size: 10px;")
         h_layout.addWidget(self._status_label)
         h_layout.addStretch(1)
 
-        copy_btn = QPushButton("Copy")
+        copy_btn = QPushButton("Copy", self)
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self._content))
         h_layout.addWidget(copy_btn)
 
         if _is_previewable(language):
-            self._toggle_btn = QPushButton("Preview")
+            self._toggle_btn = QPushButton("Preview", self)
             self._toggle_btn.clicked.connect(self._on_toggle_view)
             h_layout.addWidget(self._toggle_btn)
         
         outer.addWidget(header)
 
-        self._stack = QStackedWidget()
-        self._code_view = QPlainTextEdit()
+        self._stack = QStackedWidget(self)
+        self._code_view = QPlainTextEdit(self)
         self._code_view.setReadOnly(True)
         self._code_view.setFont(QFont("Geist Mono", 9))
         self._code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
@@ -454,7 +454,7 @@ class ArtifactCard(QFrame):
 
         self._highlighter = PygmentsHighlighter(self._code_view.document(), language) if _language_from_path else None
 
-        self._preview_view = QWebEngineView()
+        self._preview_view = QWebEngineView(self)
         self._stack.addWidget(self._preview_view)
         outer.addWidget(self._stack)
 
@@ -549,10 +549,10 @@ class WorkerLogCard(QFrame):
         self.setObjectName("workerLogCard")
         self.setStyleSheet(f"QFrame#workerLogCard {{ background: rgba(28, 28, 34, 0.4); border: 1px solid {BORDER}; border-radius: 8px; }}")
         layout = QVBoxLayout(self)
-        self._header = QLabel("⚡ Worker Activity")
+        self._header = QLabel("⚡ Worker Activity", self)
         self._header.setStyleSheet(f"color: {ACCENT}; font-weight: 700;")
         layout.addWidget(self._header)
-        self._content_view = QPlainTextEdit()
+        self._content_view = QPlainTextEdit(self)
         self._content_view.setReadOnly(True)
         self._content_view.setFont(QFont("Geist Mono", 10))
         self._content_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
@@ -597,23 +597,23 @@ class AuraPlayground(QWidget):
         layout.setSpacing(0)
 
         # Header for the playground
-        header_container = QWidget()
+        header_container = QWidget(self)
         header_layout = QVBoxLayout(header_container)
         header_layout.setContentsMargins(12, 8, 12, 4)
-        header_label = QLabel("PLAYGROUND")
+        header_label = QLabel("PLAYGROUND", self)
         header_label.setObjectName("paneTitle")
         header_layout.addWidget(header_label)
         layout.addWidget(header_container)
 
-        self._todo_widget = TodoListWidget()
+        self._todo_widget = TodoListWidget(self)
         layout.addWidget(self._todo_widget)
         
-        self._scroll = QScrollArea()
+        self._scroll = QScrollArea(self)
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
-        self._container = QWidget()
+        self._container = QWidget(self)
         self._card_layout = QVBoxLayout(self._container)
         # Increase margins to accommodate the AuraWidget glow spread (20px)
         self._card_layout.setContentsMargins(24, 16, 24, 16)
@@ -766,7 +766,7 @@ class AuraPlayground(QWidget):
         is_new_file: bool,
     ) -> None:
         from aura.gui.cards import DiffCard
-        card = DiffCard(rel_path, old, new, decision, is_new_file)
+        card = DiffCard(rel_path, old, new, decision, is_new_file, parent=self)
         # Use AuraWidget for visual consistency with streaming cards
         wrapper = AuraWidget(card, parent=self)
         self._card_layout.insertWidget(self._card_layout.count() - 1, wrapper)
@@ -777,7 +777,7 @@ class AuraPlayground(QWidget):
 
     def add_error(self, message: str) -> None:
         from aura.gui.cards import ErrorCard
-        card = ErrorCard("Worker Error", message)
+        card = ErrorCard("Worker Error", message, parent=self)
         self._card_layout.insertWidget(self._card_layout.count() - 1, card)
         self._scroll_to_bottom()
 

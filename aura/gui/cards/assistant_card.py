@@ -67,19 +67,19 @@ class AssistantCard(QFrame):
         self._outer.setSpacing(6)
 
         # Header row: "Aura" on left, tool status on right.
-        header_row = QWidget()
+        header_row = QWidget(self)
         header_row.setStyleSheet("background: transparent;")
         header_layout = QHBoxLayout(header_row)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(0)
 
-        header = QLabel("Aura")
+        header = QLabel("Aura", parent=header_row)
         header.setObjectName("assistantHeader")
         header_layout.addWidget(header)
 
         header_layout.addStretch(1)
 
-        self._thinking_label = QLabel("")
+        self._thinking_label = QLabel("", parent=header_row)
         self._thinking_label.setObjectName("thinkingIndicator")
         self._thinking_label.setVisible(False)
         f = self._thinking_label.font()
@@ -92,7 +92,7 @@ class AssistantCard(QFrame):
         self._thinking_anim: QVariantAnimation | None = None
         self._thinking_dots: int = 0
 
-        self._tool_status = QLabel("")
+        self._tool_status = QLabel("", parent=header_row)
         self._tool_status.setObjectName("toolStatus")
         font = self._tool_status.font()
         font.setPointSize(10)
@@ -109,13 +109,13 @@ class AssistantCard(QFrame):
         self._reasoning_scroll_area: QScrollArea | None = None
 
         # Content: the streamed answer.
-        self._content_label = _StreamLabel(italic=False)
+        self._content_label = _StreamLabel(italic=False, parent=self)
         self._content_label.setVisible(False)
         self._outer.addWidget(self._content_label)
 
         # Tool calls grouped under the assistant turn — indented frame with a
         # left rule so the cluster reads as supporting info under the message.
-        self._tool_cluster = QFrame()
+        self._tool_cluster = QFrame(self)
         self._tool_cluster.setObjectName("toolCluster")
         self._tool_cluster_layout = QVBoxLayout(self._tool_cluster)
         self._tool_cluster_layout.setContentsMargins(16, 6, 0, 0)
@@ -307,7 +307,7 @@ class AssistantCard(QFrame):
     ) -> QWidget:
         """Build a container widget with interleaved text (markdown) and code cards."""
         segments = self._parse_content(text)
-        container = QWidget()
+        container = QWidget(self)
         container.setStyleSheet("background: transparent;")
         container_layout = QVBoxLayout(container)
         container_layout.setContentsMargins(0, 0, 0, 0)
@@ -317,13 +317,13 @@ class AssistantCard(QFrame):
             if seg_type == "text":
                 if content.strip():
                     html = _render_markdown_with_code(content, color=color, italic=italic)
-                    block = _MarkdownTextBlock(html)
+                    block = _MarkdownTextBlock(html, parent=container)
                     # Use the provided color or the theme FG.
                     c = color if color else FG
                     block.setStyleSheet(f"background: transparent; border: none; color: {c};")
                     container_layout.addWidget(block)
             elif seg_type == "code":
-                card = CodeBlockCard(lang, content)
+                card = CodeBlockCard(lang, content, parent=container)
                 container_layout.addWidget(card)
                 if lang == "mermaid" and self._chat_view is not None:
                     self._chat_view.mermaid_detected.emit(content)

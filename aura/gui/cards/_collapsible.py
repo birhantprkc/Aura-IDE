@@ -24,7 +24,7 @@ class _CollapsibleSection(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
-        self._toggle = QToolButton()
+        self._toggle = QToolButton(self)
         self._toggle.setObjectName("reasoningToggle" if prominent else "sectionToggle")
         self._toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self._toggle.clicked.connect(self._on_toggle)

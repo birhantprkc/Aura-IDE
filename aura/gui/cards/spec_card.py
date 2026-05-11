@@ -52,21 +52,21 @@ class SpecCard(QFrame):
         outer.setContentsMargins(16, 14, 16, 16)
         outer.setSpacing(8)
 
-        header = QLabel("⚡ Dispatch to Worker")
+        header = QLabel("⚡ Dispatch to Worker", parent=self)
         header.setStyleSheet(f"color: {ACCENT}; font-weight: 700; font-size: 12px;")
         outer.addWidget(header)
 
-        self._goal_label = _MarkdownTextBlock(_render_markdown_with_code(self._goal))
+        self._goal_label = _MarkdownTextBlock(_render_markdown_with_code(self._goal), parent=self)
         self._goal_label.setStyleSheet(f"background: transparent; border: none; color: {FG}; font-size: 14px;")
         outer.addWidget(self._goal_label)
 
         # Files section
         outer.addSpacing(6)
-        self._files_header = QLabel("FILES")
+        self._files_header = QLabel("FILES", parent=self)
         self._files_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px;")
         outer.addWidget(self._files_header)
         
-        self._files_container = QWidget()
+        self._files_container = QWidget(self)
         files_layout = QVBoxLayout(self._files_container)
         files_layout.setContentsMargins(0, 0, 0, 0)
         files_layout.setSpacing(4)
@@ -76,12 +76,12 @@ class SpecCard(QFrame):
 
         # Spec section
         outer.addSpacing(12)
-        spec_header = QLabel("SPECIFICATION")
+        spec_header = QLabel("SPECIFICATION", parent=self)
         spec_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px;")
         outer.addWidget(spec_header)
 
         # Spec body (collapsible if long).
-        self._spec_label = _MarkdownTextBlock(_render_markdown_with_code(self._spec))
+        self._spec_label = _MarkdownTextBlock(_render_markdown_with_code(self._spec), parent=self)
         self._spec_label.setStyleSheet(f"background: transparent; border: none; color: {FG};")
 
         self._spec_section: _CollapsibleSection | None = None
@@ -96,30 +96,30 @@ class SpecCard(QFrame):
 
         # Acceptance section
         outer.addSpacing(12)
-        acc_header = QLabel("ACCEPTANCE CRITERIA")
+        acc_header = QLabel("ACCEPTANCE CRITERIA", parent=self)
         acc_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px;")
         outer.addWidget(acc_header)
 
-        self._acceptance_label = _MarkdownTextBlock(_render_markdown_with_code(self._acceptance))
+        self._acceptance_label = _MarkdownTextBlock(_render_markdown_with_code(self._acceptance), parent=self)
         self._acceptance_label.setStyleSheet(f"background: transparent; border: none; color: {FG_DIM};")
         outer.addWidget(self._acceptance_label)
 
         # Buttons row.
-        self._buttons_row = QWidget()
+        self._buttons_row = QWidget(self)
         btn_layout = QHBoxLayout(self._buttons_row)
         btn_layout.setContentsMargins(0, 4, 0, 0)
         btn_layout.setSpacing(8)
 
-        self._dispatch_btn = QPushButton("Dispatch")
+        self._dispatch_btn = QPushButton("Dispatch", parent=self._buttons_row)
         self._dispatch_btn.setObjectName("primary")
         self._dispatch_btn.clicked.connect(self._on_dispatch)
         btn_layout.addWidget(self._dispatch_btn)
 
-        self._edit_btn = QPushButton("Edit Spec")
+        self._edit_btn = QPushButton("Edit Spec", parent=self._buttons_row)
         self._edit_btn.clicked.connect(lambda: self.edit_clicked.emit(self._tool_call_id))
         btn_layout.addWidget(self._edit_btn)
 
-        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn = QPushButton("Cancel", parent=self._buttons_row)
         self._cancel_btn.setObjectName("danger")
         self._cancel_btn.clicked.connect(self._on_cancel)
         btn_layout.addWidget(self._cancel_btn)
@@ -129,7 +129,7 @@ class SpecCard(QFrame):
         outer.addWidget(self._buttons_row)
 
         # "View Worker" button — hidden until dispatch.
-        self._view_worker_btn = QPushButton("View Worker")
+        self._view_worker_btn = QPushButton("View Worker", parent=self)
         self._view_worker_btn.setVisible(False)
         self._view_worker_btn.clicked.connect(
             lambda: self.view_worker_clicked.emit(self._tool_call_id)
@@ -137,7 +137,7 @@ class SpecCard(QFrame):
         outer.addWidget(self._view_worker_btn)
 
         # Status label, hidden until dispatch/cancel.
-        self._status_label = QLabel("")
+        self._status_label = QLabel("", parent=self)
         self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         self._status_label.setVisible(False)
         outer.addWidget(self._status_label)
@@ -152,22 +152,22 @@ class SpecCard(QFrame):
                 child.widget().deleteLater()
 
         if not self._files:
-            lbl = QLabel("(no files listed)")
+            lbl = QLabel("(no files listed)", parent=self._files_container)
             lbl.setStyleSheet(f"color: {FG_MUTED}; font-style: italic; font-size: 11px;")
             layout.addWidget(lbl)
             return
 
         for path in self._files:
-            row = QWidget()
+            row = QWidget(self._files_container)
             h = QHBoxLayout(row)
             h.setContentsMargins(0, 0, 0, 0)
             h.setSpacing(6)
             
-            icon = QLabel("📄") # Could use a real SVG icon later
+            icon = QLabel("📄", parent=row) # Could use a real SVG icon later
             icon.setFixedWidth(16)
             h.addWidget(icon)
             
-            p_lbl = QLabel(path)
+            p_lbl = QLabel(path, parent=row)
             p_lbl.setStyleSheet(
                 f"color: {FG_DIM}; font-family: 'Geist Mono', 'JetBrains Mono', monospace; "
                 "font-size: 11px;"
