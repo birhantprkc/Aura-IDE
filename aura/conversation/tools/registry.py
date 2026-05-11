@@ -59,6 +59,7 @@ class ApprovalRequest:
 class ApprovalDecision:
     action: ApprovalAction
     note: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 ApprovalCallback = Callable[[ApprovalRequest], ApprovalDecision]
@@ -1264,7 +1265,11 @@ class ToolRegistry:
             return ToolExecResult(
                 ok=False,
                 payload={"ok": False, "error": "User rejected this change."},
-                extras={"approval": "reject", "rel_path": req.rel_path},
+                extras={
+                    "approval": "reject",
+                    "rel_path": req.rel_path,
+                    "approval_metadata": decision.metadata,
+                },
             )
         if decision.action == "reject_all":
             return ToolExecResult(
@@ -1273,7 +1278,11 @@ class ToolRegistry:
                     "ok": False,
                     "error": "User rejected this change and all further writes in this turn.",
                 },
-                extras={"approval": "reject_all", "rel_path": req.rel_path},
+                extras={
+                    "approval": "reject_all",
+                    "rel_path": req.rel_path,
+                    "approval_metadata": decision.metadata,
+                },
             )
 
         # Approve — back up if file exists, write new content.
@@ -1292,7 +1301,11 @@ class ToolRegistry:
                 "is_new_file": req.is_new_file,
                 "backup": rel_backup,
             },
-            extras={"approval": "approve", "rel_path": req.rel_path},
+            extras={
+                "approval": "approve",
+                "rel_path": req.rel_path,
+                "approval_metadata": decision.metadata,
+            },
         )
 
 
