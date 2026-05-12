@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -387,6 +388,14 @@ class SettingsDialog(QDialog):
             self._settings.auto_approve
         )
         form.addRow("", self._auto_approve_chk)
+
+        self._max_rounds_spin = QSpinBox()
+        self._max_rounds_spin.setRange(1, 500)
+        self._max_rounds_spin.setToolTip(
+            "Maximum number of tool-call rounds allowed in a single user turn."
+        )
+        self._max_rounds_spin.setValue(self._settings.max_tool_rounds)
+        form.addRow("Max tool rounds:", self._max_rounds_spin)
 
         # --- Agent Backends ---
         backend_sep = QLabel("Agent Backends")
@@ -886,6 +895,7 @@ class SettingsDialog(QDialog):
             auto_commit_enabled=self._auto_commit_chk.isChecked(),
             auto_dispatch=self._auto_dispatch_chk.isChecked(),
             auto_approve=self._auto_approve_chk.isChecked(),
+            max_tool_rounds=self._max_rounds_spin.value(),
             sandbox_mode=self._sandbox_combo.currentData(),
             tavily_api_key=self._settings.tavily_api_key, # preserve if set via other means
         )

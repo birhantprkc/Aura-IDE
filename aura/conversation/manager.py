@@ -80,6 +80,7 @@ class ConversationManager:
         thinking: ThinkingMode,
         dispatch_cb: DispatchCallback | None = None,
         temperature: float = 0.7,
+        max_tool_rounds: int | None = None,
         hook_name: str = 'generate_planner_code',
     ) -> None:
         """Run the model -> tool -> model loop until the model stops calling tools.
@@ -95,8 +96,9 @@ class ConversationManager:
         The planner uses `generate_planner_code`; workers use `generate_worker_code`.
         """
         reject_all_for_turn = False
+        limit = max_tool_rounds or MAX_TOOL_ROUNDS
 
-        for _round in range(MAX_TOOL_ROUNDS):
+        for _round in range(limit):
             if cancel_event.is_set():
                 self._cleanup_cancelled(on_event)
                 return
@@ -249,7 +251,7 @@ class ConversationManager:
         on_event(
             ApiError(
                 status_code=None,
-                message=f"Reached max tool rounds ({MAX_TOOL_ROUNDS}) without natural stop.",
+                message=f"Reached max tool rounds ({limit}) without natural stop.",
             )
         )
 

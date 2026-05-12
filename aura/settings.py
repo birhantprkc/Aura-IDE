@@ -47,12 +47,18 @@ class AppSettings:
     auto_dispatch: bool = False
     auto_approve: bool = False
     sandbox_mode: str = DEFAULT_SANDBOX_MODE
+    max_tool_rounds: int = 50
     tavily_api_key: str = ""
     first_launch_done: bool = False
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
         s = cls()
+        # Rounds
+        if "max_tool_rounds" in data:
+            raw = data["max_tool_rounds"]
+            if isinstance(raw, int):
+                s.max_tool_rounds = max(1, raw)
         # Flags
         if isinstance(data.get("first_launch_done"), bool):
             s.first_launch_done = data["first_launch_done"]

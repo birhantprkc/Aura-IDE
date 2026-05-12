@@ -221,6 +221,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.streamDone.connect(self._on_stream_done)
         self._bridge.apiError.connect(self._on_api_error)
         self._bridge.usageWithModel.connect(self._on_usage)
+        self._chat.retry_requested.connect(self._on_retry)
 
         self._input.sent.connect(lambda p: self._send_handler.handle_send(p, self.current_model(), self.current_thinking()))
         self._input.stop_requested.connect(self._send_handler.handle_stop)
@@ -534,6 +535,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.send(
             model=self.current_model(),
             thinking=self.current_thinking(),
+            max_tool_rounds=self._settings.max_tool_rounds,
         )
 
     def _on_usage(

@@ -114,9 +114,11 @@ def mock_client():
 
 @pytest.fixture(autouse=True)
 def registered_backend(mock_client):
-    """Register mock_client as the 'generate_worker_code' hook handler."""
+    """Register mock_client as the handler for both planner and worker hooks."""
+    hooks.register('generate_planner_code', mock_client)
     hooks.register('generate_worker_code', mock_client)
     yield
+    hooks.unregister('generate_planner_code')
     hooks.unregister('generate_worker_code')
 
 

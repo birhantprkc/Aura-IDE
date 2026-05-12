@@ -105,6 +105,7 @@ class _Worker(QObject):
         temperature: float = 0.7,
         workspace_root: Path | None = None,
         auto_commit_enabled: bool = True,
+        max_tool_rounds: int | None = None,
     ) -> None:
         super().__init__()
         self._manager = manager
@@ -116,6 +117,7 @@ class _Worker(QObject):
         self._temperature = temperature
         self._workspace_root = workspace_root
         self._auto_commit_enabled = auto_commit_enabled
+        self._max_tool_rounds = max_tool_rounds
         self._write_paths: list[str] = []
 
     @Slot()
@@ -135,6 +137,7 @@ class _Worker(QObject):
                 dispatch_cb=dispatch_cb,
                 temperature=self._temperature,
                 hook_name='generate_planner_code',
+                max_tool_rounds=self._max_tool_rounds,
             )
             # Auto-commit writes in single mode
             if self._auto_commit_enabled and self._write_paths and self._workspace_root is not None:
@@ -983,7 +986,7 @@ class ConversationBridge(QObject):
 
     # ---- send / cancel ----------------------------------------------------
 
-    def send(self, model: ModelId, thinking: ThinkingMode) -> None:
+    def send(self, model: ModelId, thinking: ThinkingMode, max_tool_rounds: int | None = None) -> None:
         if self.is_running():
             return
         # Capture pre-worker snapshot for reliable /undo
@@ -1007,6 +1010,7 @@ class ConversationBridge(QObject):
             temperature=self._temperature,
             workspace_root=self._registry.workspace_root,
             auto_commit_enabled=self._auto_commit_enabled,
+            max_tool_rounds=max_tool_rounds,
         )
         self._worker.moveToThread(self._thread)
 
