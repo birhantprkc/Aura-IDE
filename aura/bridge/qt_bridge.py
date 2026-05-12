@@ -29,7 +29,7 @@ from PySide6.QtCore import (
     Slot,
 )
 
-from aura.backends import APIAgentBackend
+from aura.backends import APIAgentBackend, GeminiCLIAgentBackend
 from aura.client import (
     ApiError,
     ContentDelta,
@@ -124,6 +124,7 @@ class _Worker(QObject):
                 thinking=self._thinking,
                 dispatch_cb=dispatch_cb,
                 temperature=self._temperature,
+                hook_name='generate_planner_code',
             )
             # Auto-commit writes in single mode
             if self._auto_commit_enabled and self._write_paths and self._workspace_root is not None:
@@ -503,6 +504,7 @@ class _DispatchProxy(QObject):
                 thinking=self._worker_thinking,
                 dispatch_cb=None,
                 temperature=self._worker_temperature,
+                hook_name='generate_worker_code',
             )
         except Exception as exc:
             api_errors.append(f"{type(exc).__name__}: {exc}")
@@ -654,6 +656,8 @@ class ConversationBridge(QObject):
         self._provider = provider
         self._backend = APIAgentBackend(provider=provider)
         self._client = self._backend.client  # kept for backward compat / dispatch proxy if needed
+        # Register the default API backend for both planner and worker
+        hooks.register('generate_planner_code', self._backend.stream)
         hooks.register('generate_worker_code', self._backend.stream)
         self._history = History()
         self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="single")
@@ -800,7 +804,9 @@ class ConversationBridge(QObject):
         self._backend = APIAgentBackend(provider=provider)
         self._client = self._backend.client
         hooks.unregister('generate_worker_code')
+        hooks.unregister('generate_planner_code')
         hooks.register('generate_worker_code', self._backend.stream)
+        hooks.register('generate_planner_code', self._backend.stream)
         self._manager = ConversationManager(self._history, self._registry)
         self._dispatch_proxy = _DispatchProxy(
             parent_widget=self._parent_widget,
@@ -829,6 +835,30 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.workerUsage.connect(self.workerUsage)
         self._dispatch_proxy.workerTodoListUpdated.connect(self.workerTodoListUpdated)
         self._dispatch_proxy.workerTerminalOutput.connect(self.workerTerminalOutput)
+
+    def set_planner_backend(self, backend_name: str) -> None:
+        """Swap the planner backend hook handler.
+
+        Args:
+            backend_name: 'default_api' or 'gemini_cli'
+        """
+        hooks.unregister('generate_planner_code')
+        if backend_name == 'gemini_cli':
+            hooks.register('generate_planner_code', GeminiCLIAgentBackend().stream)
+        else:
+            hooks.register('generate_planner_code', self._backend.stream)
+
+    def set_worker_backend(self, backend_name: str) -> None:
+        """Swap the worker backend hook handler.
+
+        Args:
+            backend_name: 'default_api' or 'gemini_cli'
+        """
+        hooks.unregister('generate_worker_code')
+        if backend_name == 'gemini_cli':
+            hooks.register('generate_worker_code', GeminiCLIAgentBackend().stream)
+        else:
+            hooks.register('generate_worker_code', self._backend.stream)
 
     def reset_history(self) -> None:
         self._history.messages.clear()

@@ -9,7 +9,6 @@ from typing import Callable
 
 from PySide6.QtCore import Qt, QObject, Signal, QThread
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -38,7 +37,7 @@ from aura.config import (
     save_settings,
     set_api_key,
 )
-from aura.gui.theme import FG_DIM, SUCCESS, WARN, ACCENT, BG_RAISED, BORDER, FG
+from aura.gui.theme import FG_DIM, SUCCESS, WARN
 from aura.gui.aura_widget import GlassSwitch
 
 _THINKING_ITEMS: list[tuple[str, str]] = [
@@ -334,6 +333,34 @@ class SettingsDialog(QDialog):
         )
         form.addRow("", self._auto_approve_chk)
 
+        # --- Agent Backends ---
+        backend_sep = QLabel("Agent Backends")
+        backend_sep.setStyleSheet(
+            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
+            " text-transform: uppercase; letter-spacing: 0.04em;"
+        )
+        form.addRow("", backend_sep)
+
+        backend_note = QLabel(
+            "CLI-based agents require additional setup. "
+            "Click 'Configure' next to each agent for instructions."
+        )
+        backend_note.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        backend_note.setWordWrap(True)
+        form.addRow("", backend_note)
+
+        # Gemini CLI
+        gemini_label = QLabel("Gemini CLI")
+        gemini_configure_btn = QPushButton("Configure")
+        gemini_configure_btn.clicked.connect(self._on_configure_gemini_cli)
+        gemini_row = QHBoxLayout()
+        gemini_row.setSpacing(6)
+        gemini_row.addWidget(gemini_label, 1)
+        gemini_row.addWidget(gemini_configure_btn)
+        gemini_widget = QWidget()
+        gemini_widget.setLayout(gemini_row)
+        form.addRow("", gemini_widget)
+
         # --- Sandbox ---
         sandbox_sep = QLabel("Execution Sandbox")
         sandbox_sep.setStyleSheet(
@@ -626,6 +653,21 @@ class SettingsDialog(QDialog):
         self._worker_model_combo.setEnabled(enabled)
         self._worker_thinking_combo.setEnabled(enabled)
         self._worker_temperature_spin.setEnabled(enabled)
+
+    def _on_configure_gemini_cli(self) -> None:
+        QMessageBox.information(
+            self,
+            "Gemini CLI Setup",
+            "To use the Gemini CLI backend:\n\n"
+            "1. Install the Google Cloud SDK: https://cloud.google.com/sdk/docs/install\n\n"
+            "2. Authenticate:\n"
+            "   gcloud auth application-default login\n\n"
+            "3. Set your project:\n"
+            "   gcloud config set project YOUR_PROJECT_ID\n\n"
+            "4. Enable the Vertex AI API for your project.\n\n"
+            "After setup, select 'Gemini CLI' from the Planner or Worker backend dropdown "
+            "in the main window to use it for that role.",
+        )
 
     def result_settings(self) -> AppSettings:
         """Read the current widget values and return a fresh AppSettings."""

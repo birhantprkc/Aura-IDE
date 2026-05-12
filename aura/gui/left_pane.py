@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QVBoxLayout,
-    QWidget,
 )
 
 from aura.config import (
@@ -28,6 +27,8 @@ class LeftPane(QFrame):
     planner_thinking_changed = Signal(str)
     worker_model_changed = Signal(str)
     worker_thinking_changed = Signal(str)
+    planner_backend_changed = Signal(str)  # 'default_api' or 'gemini_cli'
+    worker_backend_changed = Signal(str)   # 'default_api' or 'gemini_cli'
 
     def __init__(self, workspace_root: Path | None, parent=None) -> None:
         super().__init__(parent)
@@ -127,6 +128,46 @@ class LeftPane(QFrame):
         worker_think_row.addWidget(self._worker_thinking_combo, 1)
         layout.addLayout(worker_think_row)
 
+        # --- Backend Selection section ---
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet(f"QFrame {{ color: {BORDER}; }}")
+        layout.addWidget(sep2)
+
+        backend_label = QLabel("Agent Backends")
+        backend_label.setObjectName("paneTitle")
+        layout.addWidget(backend_label)
+
+        # Planner backend
+        planner_backend_row = QHBoxLayout()
+        planner_backend_row.setSpacing(4)
+        planner_backend_lbl = QLabel("Planner:")
+        planner_backend_lbl.setStyleSheet(f"color: {FG_DIM};")
+        planner_backend_row.addWidget(planner_backend_lbl)
+        self._planner_backend_combo = QComboBox()
+        self._planner_backend_combo.addItem("Default API", "default_api")
+        self._planner_backend_combo.addItem("Gemini CLI", "gemini_cli")
+        self._planner_backend_combo.currentIndexChanged.connect(
+            lambda: self.planner_backend_changed.emit(self._planner_backend_combo.currentData())
+        )
+        planner_backend_row.addWidget(self._planner_backend_combo, 1)
+        layout.addLayout(planner_backend_row)
+
+        # Worker backend
+        worker_backend_row = QHBoxLayout()
+        worker_backend_row.setSpacing(4)
+        worker_backend_lbl = QLabel("Worker:")
+        worker_backend_lbl.setStyleSheet(f"color: {FG_DIM};")
+        worker_backend_row.addWidget(worker_backend_lbl)
+        self._worker_backend_combo = QComboBox()
+        self._worker_backend_combo.addItem("Default API", "default_api")
+        self._worker_backend_combo.addItem("Gemini CLI", "gemini_cli")
+        self._worker_backend_combo.currentIndexChanged.connect(
+            lambda: self.worker_backend_changed.emit(self._worker_backend_combo.currentData())
+        )
+        worker_backend_row.addWidget(self._worker_backend_combo, 1)
+        layout.addLayout(worker_backend_row)
+
         self.update_workspace_label(workspace_root)
 
     def tree(self) -> WorkspaceTree:
@@ -179,6 +220,22 @@ class LeftPane(QFrame):
         keys = ["off", "high", "max"]
         if thinking in keys:
             self._worker_thinking_combo.setCurrentIndex(keys.index(thinking))
+
+    def current_planner_backend(self) -> str:
+        return self._planner_backend_combo.currentData()
+
+    def current_worker_backend(self) -> str:
+        return self._worker_backend_combo.currentData()
+
+    def set_planner_backend(self, backend: str) -> None:
+        idx = self._planner_backend_combo.findData(backend)
+        if idx >= 0:
+            self._planner_backend_combo.setCurrentIndex(idx)
+
+    def set_worker_backend(self, backend: str) -> None:
+        idx = self._worker_backend_combo.findData(backend)
+        if idx >= 0:
+            self._worker_backend_combo.setCurrentIndex(idx)
 
     def set_planner_worker_mode(self, enabled: bool) -> None:
         self._worker_model_label.setVisible(enabled)
