@@ -30,12 +30,12 @@ from aura.conversation.dispatch import (
 )
 from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager
-from aura.conversation.tools.registry import (
+from aura.conversation.tools._types import (
     ApprovalDecision,
     ApprovalRequest,
     ToolExecResult,
-    ToolRegistry,
 )
+from aura.conversation.tools.registry import ToolRegistry
 from aura.sandbox import SandboxResult
 
 

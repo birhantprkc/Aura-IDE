@@ -196,7 +196,7 @@ class TestToolRegistryMCP:
         from aura.conversation.tools.registry import TOOL_HANDLERS, ToolRegistry
 
         def dummy_approval_cb(req):
-            from aura.conversation.tools.registry import ApprovalDecision
+            from aura.conversation.tools._types import ApprovalDecision
             return ApprovalDecision(action="approve")
 
         registry = ToolRegistry(workspace_root=Path(os.getcwd()))

@@ -41,12 +41,12 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
 )
 from aura.conversation.history import History
-from aura.conversation.tools.registry import (
+from aura.conversation.tools._types import (
     ApprovalCallback,
     ApprovalDecision,
     ApprovalRequest,
-    ToolRegistry,
 )
+from aura.conversation.tools.registry import ToolRegistry
 from aura.sandbox import SandboxExecutor, SandboxResult
 
 EventCallback = Callable[[Event], None]

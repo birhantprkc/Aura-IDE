@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.conversation.tools.registry import ApprovalDecision, ApprovalRequest
+from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
 
 try:
     from aura.gui.syntax import DiffHighlighter, language_from_path

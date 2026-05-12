@@ -13,12 +13,16 @@ Modes:
 """
 from __future__ import annotations
 
-import json
 import shlex
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any
 
+from aura.conversation.tools._types import (
+    ApprovalCallback,
+    ApprovalRequest,
+    RegistryMode,
+    ToolExecResult,
+)
 from aura.conversation.tools.backup import backup_existing
 from aura.conversation.tools.dynamic import execute_dynamic_tool, parse_tool_schema
 from aura.conversation.tools.find_usages import find_usages
@@ -33,28 +37,6 @@ from aura.config import SEARCH_CODEBASE_TOP_K
 from aura.conversation.tools.web_handler import WebHandler
 from aura.mcp_client import MCPClient, _convert_tool_to_openai_schema
 from aura.memory_db import ProjectMemoryDB
-ApprovalAction = Literal["approve", "reject", "reject_all", "approve_all"]
-RegistryMode = Literal["single", "planner", "worker", "researcher"]
-
-
-@dataclass
-class ApprovalRequest:
-    """Passed to approval_cb when a write is proposed."""
-    tool_name: str  # "write_file" or "edit_file"
-    rel_path: str
-    old_content: str
-    new_content: str
-    is_new_file: bool
-
-
-@dataclass
-class ApprovalDecision:
-    action: ApprovalAction
-    note: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-ApprovalCallback = Callable[[ApprovalRequest], ApprovalDecision]
 
 READ_TOOL_DEFS: list[dict[str, Any]] = [
     {
@@ -821,16 +803,6 @@ def _make_mcp_handler(mcp_client: MCPClient, tool_name: str):
         result = mcp_client.call_tool(tool_name, args)
         return ToolExecResult(ok=result.get("ok", False), payload=result)
     return handler
-
-
-@dataclass
-class ToolExecResult:
-    ok: bool
-    payload: dict[str, Any]
-    extras: dict[str, Any] = field(default_factory=dict)
-
-    def to_tool_message_content(self) -> str:
-        return json.dumps(self.payload, ensure_ascii=False)
 
 
 class ToolRegistry:

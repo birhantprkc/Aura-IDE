@@ -12,9 +12,11 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
-from aura.conversation.tools.registry import (
+from aura.conversation.tools._types import (
     ApprovalDecision,
     ApprovalRequest,
+)
+from aura.conversation.tools.registry import (
     TOOL_HANDLERS,
     ToolRegistry,
 )
