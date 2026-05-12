@@ -80,6 +80,7 @@ class ConversationManager:
         thinking: ThinkingMode,
         dispatch_cb: DispatchCallback | None = None,
         temperature: float = 0.7,
+        hook_name: str = 'generate_planner_code',
     ) -> None:
         """Run the model -> tool -> model loop until the model stops calling tools.
 
@@ -89,6 +90,9 @@ class ConversationManager:
         only mode that exposes the `dispatch_to_worker` tool). If the tool is
         called and `dispatch_cb` is None, the call returns an error result so
         the planner can recover rather than blocking forever.
+
+        `hook_name` controls which hook to trigger for model generation.
+        The planner uses `generate_planner_code`; workers use `generate_worker_code`.
         """
         reject_all_for_turn = False
 
@@ -101,7 +105,7 @@ class ConversationManager:
             tool_defs = self._tools.tool_defs()
 
             for ev in hooks.trigger(
-                'generate_worker_code',
+                hook_name,
                 messages=self._history.for_api(),
                 tools=tool_defs,
                 model=model,
