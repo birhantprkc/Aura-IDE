@@ -381,7 +381,7 @@ class TestCancelWithToolCalls:
             # After yielding Done, set cancel_event
             cancel_event.set()
 
-mock_client.side_effect = _controlled
+        mock_client.side_effect = _controlled
         manager.send(
             on_event=on_event,
             approval_cb=_make_approval_cb(),
@@ -504,7 +504,7 @@ class TestDispatchToWorker:
         def _raising_cb(tool_call_id, req):
             raise RuntimeError("boom")
 
-mock_client.return_value = [
+        mock_client.return_value = [
             _make_done(content="", tool_calls=[tc]),
         ]
 
@@ -556,7 +556,7 @@ class TestRunTerminalCommand:
 
         tc = _tool_call("term1", "run_terminal_command",
                         {"command": "echo hello", "timeout": 30})
-mock_client.side_effect = [
+        mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([ContentDelta(text="Done"), _make_done(content="Done")]),
         ]
@@ -916,7 +916,7 @@ class TestCircuitBreaker:
         """Three identical failures trigger circuit breaker."""
         tc = _tool_call("cb1", "write_file", {"path": "test.py", "content": "data"})
 
-mock_client.side_effect = [
+        mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([_make_done(content="", tool_calls=[tc])]),
@@ -1175,7 +1175,7 @@ class TestEdgeCases:
         tc1 = _tool_call("c1", "write_file", {"path": "a.py", "content": "1"})
         tc2 = _tool_call("c2", "write_file", {"path": "b.py", "content": "2"})
 
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             _make_done(content="", tool_calls=[tc1, tc2]),
         ]
         history.append_user_text("hello")
@@ -1207,7 +1207,7 @@ class TestEdgeCases:
     def test_full_message_none(self, manager, mock_client, on_event,
                                captured_events, cancel_event, history):
         """Stream that yields no Done event at all."""
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             ContentDelta(text="Hello"),
             # No Done event
         ]
@@ -1230,7 +1230,7 @@ class TestEdgeCases:
             yield _make_done(content=None)
             cancel_event.set()
 
-        mock_client.stream.side_effect = _controlled
+        mock_client.side_effect = _controlled
 
         manager.send(
             on_event=on_event,
@@ -1251,7 +1251,7 @@ class TestEdgeCases:
         """Circuit breaker handling of non-JSON payload — appends warning to string."""
         tc = _tool_call("cb1", "write_file", {"path": "test.py", "content": "data"})
 
-        mock_client.stream.side_effect = [
+        mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([_make_done(content="", tool_calls=[tc])]),
@@ -1285,7 +1285,7 @@ class TestEdgeCases:
                                               on_event, captured_events,
                                               cancel_event, history):
         """Stream ends without yielding Done — full_message stays None, method returns."""
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             ContentDelta(text="Partial"),
             # No Done event at all
         ]
@@ -1308,7 +1308,7 @@ class TestEdgeCases:
         tc1 = _tool_call("e1", "edit_file", {"path": "a.py", "old_str": "x", "new_str": "y"})
         tc2 = _tool_call("e2", "edit_file", {"path": "b.py", "old_str": "a", "new_str": "b"})
 
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             _make_done(content="", tool_calls=[tc1, tc2]),
         ]
 
@@ -1318,8 +1318,8 @@ class TestEdgeCases:
             extras={"approval": "reject_all", "rel_path": "a.py"},
         )
 
-        mock_client.stream.side_effect = [
-            iter(mock_client.stream.return_value),
+        mock_client.side_effect = [
+            iter(mock_client.return_value),
             iter([ContentDelta(text="Done"), _make_done(content="Done")]),
         ]
 
