@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.backends import GeminiCLIAgentBackend
 from aura.config import (
     APP_NAME,
     PROVIDERS,
@@ -61,6 +62,27 @@ class DiscoveryWorker(QObject):
             self.finished.emit(self.provider_id, models, pricing, error or "")
         except Exception as exc:
             self.finished.emit(self.provider_id, {}, {}, str(exc))
+
+
+class AuthWorker(QObject):
+    """Background worker for CLI authentication."""
+
+    finished = Signal(bool)  # True if auth succeeded
+
+    def __init__(self, backend_name: str) -> None:
+        super().__init__()
+        self._backend_name = backend_name
+
+    def run(self) -> None:
+        """Run the CLI auth flow and emit finished with the result."""
+        ok = False
+        try:
+            if self._backend_name == "gemini_cli":
+                backend = GeminiCLIAgentBackend()
+                ok = backend.run_cli_auth()
+        except Exception:
+            ok = False
+        self.finished.emit(ok)
 
 
 class SettingsDialog(QDialog):
@@ -351,12 +373,14 @@ class SettingsDialog(QDialog):
 
         # Gemini CLI
         gemini_label = QLabel("Gemini CLI")
-        gemini_configure_btn = QPushButton("Configure")
-        gemini_configure_btn.clicked.connect(self._on_configure_gemini_cli)
+        self._gemini_auth_status = QLabel("Checking...")
+        self._gemini_auth_btn = QPushButton("Login")
+        self._gemini_auth_btn.clicked.connect(self._on_gemini_cli_auth)
         gemini_row = QHBoxLayout()
         gemini_row.setSpacing(6)
         gemini_row.addWidget(gemini_label, 1)
-        gemini_row.addWidget(gemini_configure_btn)
+        gemini_row.addWidget(self._gemini_auth_status)
+        gemini_row.addWidget(self._gemini_auth_btn)
         gemini_widget = QWidget()
         gemini_widget.setLayout(gemini_row)
         form.addRow("", gemini_widget)
@@ -492,6 +516,9 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
+
+        # Check initial auth status for CLI backends
+        self._check_gemini_cli_auth()
 
     def _on_provider_changed(self) -> None:
         provider_id: ProviderId = self._provider_combo.currentData()
@@ -654,21 +681,58 @@ class SettingsDialog(QDialog):
         self._worker_thinking_combo.setEnabled(enabled)
         self._worker_temperature_spin.setEnabled(enabled)
 
-    def _on_configure_gemini_cli(self) -> None:
-        QMessageBox.information(
-            self,
-            "Gemini CLI Setup",
-            "To use the Gemini CLI backend:\n\n"
-            "1. Install the Google Cloud SDK: https://cloud.google.com/sdk/docs/install\n\n"
-            "2. Authenticate:\n"
-            "   gcloud auth application-default login\n\n"
-            "3. Set your project:\n"
-            "   gcloud config set project YOUR_PROJECT_ID\n\n"
-            "4. Enable the Vertex AI API for your project.\n\n"
-            "After setup, select 'Gemini CLI' from the Planner or Worker backend dropdown "
-            "in the main window to use it for that role.",
-        )
+    def _check_gemini_cli_auth(self) -> None:
+        """Query gcloud credential state and update the UI accordingly."""
+        try:
+            backend = GeminiCLIAgentBackend()
+            authed = backend.check_auth()
+        except Exception:
+            authed = False
 
+        if authed:
+            self._gemini_auth_status.setText("\u2713 Authenticated")
+            self._gemini_auth_status.setStyleSheet(f"color: {SUCCESS};")
+            self._gemini_auth_btn.hide()
+        else:
+            self._gemini_auth_status.setText("\u2717 Login Required")
+            self._gemini_auth_status.setStyleSheet(f"color: {WARN};")
+            self._gemini_auth_btn.show()
+            self._gemini_auth_btn.setText("Login")
+            self._gemini_auth_btn.setEnabled(True)
+
+    def _on_gemini_cli_auth(self) -> None:
+        """Launch the CLI auth flow in a background thread."""
+        self._gemini_auth_btn.setEnabled(False)
+        self._gemini_auth_btn.setText("Waiting for browser login...")
+        self._gemini_auth_status.setText("Opening browser...")
+        self._gemini_auth_status.setStyleSheet(f"color: {FG_DIM};")
+
+        self._auth_thread = QThread(self)
+        self._auth_worker = AuthWorker("gemini_cli")
+        self._auth_worker.moveToThread(self._auth_thread)
+        self._auth_thread.started.connect(self._auth_worker.run)
+        self._auth_worker.finished.connect(self._on_auth_finished)
+        self._auth_worker.finished.connect(self._auth_thread.quit)
+        self._auth_worker.finished.connect(self._auth_worker.deleteLater)
+        self._auth_thread.finished.connect(self._auth_thread.deleteLater)
+        self._auth_thread.start()
+
+    def _on_auth_finished(self, ok: bool) -> None:
+        """Callback when the CLI auth thread completes."""
+        if ok:
+            self._gemini_auth_status.setText("\u2713 Authenticated")
+            self._gemini_auth_status.setStyleSheet(f"color: {SUCCESS};")
+            self._gemini_auth_btn.hide()
+        else:
+            self._gemini_auth_status.setText("\u2717 Login Required")
+            self._gemini_auth_status.setStyleSheet(f"color: {WARN};")
+            self._gemini_auth_btn.setText("Login")
+            self._gemini_auth_btn.setEnabled(True)
+            QMessageBox.warning(
+                self,
+                APP_NAME,
+                "Authentication failed. Please ensure gcloud is installed and try again.",
+            )
     def result_settings(self) -> AppSettings:
         """Read the current widget values and return a fresh AppSettings."""
         provider_id: ProviderId = self._provider_combo.currentData()

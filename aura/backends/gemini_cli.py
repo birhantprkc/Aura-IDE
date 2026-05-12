@@ -15,13 +15,13 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from aura.backends.base import AgentBackend
+from aura.backends.cli_base import CLIAgentBackend
 from aura.client.events import ApiError, ContentDelta, Done, Event
 from aura.config import ThinkingMode
 from aura.sandbox import SandboxExecutor
 
 
-class GeminiCLIAgentBackend(AgentBackend):
+class GeminiCLIAgentBackend(CLIAgentBackend):
     """Agent backend that calls Gemini via `gcloud ai models predict`.
 
     This backend shells out to the Google Cloud CLI, so the user must have
@@ -30,6 +30,8 @@ class GeminiCLIAgentBackend(AgentBackend):
 
     No API keys are managed or stored by Aura for this backend.
     """
+
+    auth_command = "gcloud auth application-default login"
 
     def __init__(
         self,
@@ -44,8 +46,38 @@ class GeminiCLIAgentBackend(AgentBackend):
             workspace_root: Working directory for sandbox execution.
                 Defaults to ``Path.cwd()``.
         """
+        super().__init__(workspace_root=workspace_root)
         self._region = region
-        self._workspace_root = workspace_root or Path.cwd()
+
+    def check_auth(self) -> bool:
+        """Check if gcloud ADC credentials are valid.
+
+        Runs ``gcloud auth application-default print-access-token``
+        and returns True if the exit code is 0 and a token was produced.
+
+        Returns:
+            True if valid credentials exist, False otherwise (including
+            when gcloud is not installed).
+        """
+        import shutil
+
+        if shutil.which("gcloud") is None:
+            return False
+
+        import subprocess
+        from aura.config import get_subprocess_kwargs
+
+        try:
+            result = subprocess.run(
+                ["gcloud", "auth", "application-default", "print-access-token"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                **get_subprocess_kwargs(),
+            )
+            return result.returncode == 0 and result.stdout.strip() != ""
+        except Exception:
+            return False
 
     def stream(
         self,

@@ -836,6 +836,34 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.workerTodoListUpdated.connect(self.workerTodoListUpdated)
         self._dispatch_proxy.workerTerminalOutput.connect(self.workerTerminalOutput)
 
+    def check_backend_auth(self, backend_name: str) -> bool:
+        """Check if the named backend is authenticated.
+
+        Args:
+            backend_name: 'default_api' or 'gemini_cli'.
+
+        Returns:
+            True if the backend is authenticated, False otherwise.
+        """
+        if backend_name == 'gemini_cli':
+            backend = GeminiCLIAgentBackend(workspace_root=self._registry.workspace_root)
+            return backend.check_auth()
+        return True  # 'default_api' is always authenticated
+
+    def run_backend_auth(self, backend_name: str) -> bool:
+        """Run the CLI auth flow for the given backend. Blocks until complete.
+
+        Args:
+            backend_name: 'default_api' or 'gemini_cli'.
+
+        Returns:
+            True if authentication succeeded, False otherwise.
+        """
+        if backend_name == 'gemini_cli':
+            backend = GeminiCLIAgentBackend(workspace_root=self._registry.workspace_root)
+            return backend.run_cli_auth()
+        return True
+
     def set_planner_backend(self, backend_name: str) -> None:
         """Swap the planner backend hook handler.
 
