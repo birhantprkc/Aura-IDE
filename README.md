@@ -9,7 +9,7 @@
 
 **Desktop AI Orchestration IDE - pair programming with full workspace awareness.**
 
-Aura is a desktop chat application where you talk to an AI agent that reads your project, searches your codebase, proposes changes, and applies them with diff approval. It supports **DeepSeek**, **OpenAI**, **Anthropic**, **Google Gemini**, and **OpenRouter** as AI backends, with a local [Ollama](https://ollama.com/) vision model for screenshot preprocessing. Built with [PySide6](https://pypi.org/project/PySide6/) (Qt for Python).
+Aura is a desktop chat application where you talk to an AI agent that reads your project, searches your codebase, proposes changes, and applies them with diff approval. It supports **DeepSeek**, **OpenAI**, **Anthropic**, **Google Gemini**, and **OpenRouter** as API backends, plus **Gemini CLI**, **Claude Code**, and **Codex CLI** as CLI-based backends, with a local [Ollama](https://ollama.com/) vision model for screenshot preprocessing. Built with [PySide6](https://pypi.org/project/PySide6/) (Qt for Python).
 
 <p align="center">
   <img src="media/plan_and_code.gif" alt="Aura planning and coding workflow demo" width="900">
@@ -49,6 +49,8 @@ Aura is a desktop chat application where you talk to an AI agent that reads your
   - [Keyboard Shortcuts & Slash Commands](#keyboard-shortcuts--slash-commands)
   - [Cross-Platform](#cross-platform)
 - [Supported Providers](#supported-providers)
+- [CLI Agent Backends](#cli-agent-backends)
+- [MCP Tool Integration](#mcp-tool-integration)
 - [Installation](#installation)
 - [First Launch Checklist](#first-launch-checklist)
 - [Usage](#usage)
@@ -345,6 +347,46 @@ Fetched models are **cached to disk** (`~/.config/Aura/models_cache.json`) and r
 
 ---
 
+## CLI Agent Backends
+
+In addition to API-based providers, Aura supports CLI-based AI tools as drop-in agent backends. These run the official CLI tools as subprocesses — authentication is handled by the CLI's own OAuth flow.
+
+| Backend | CLI Command | Authentication | Description |
+|---------|------------|----------------|-------------|
+| **Gemini CLI** | `gemini` | `gemini auth login` | Google Gemini via the official Gemini CLI (npm) |
+| **Claude Code** | `claude -p` | `claude auth login` | Anthropic Claude via Claude Code CLI |
+| **Codex CLI** | `codex exec` | `codex login` | OpenAI Codex via the Codex CLI |
+
+CLI backends are selected independently for the Planner and Worker via the **Agent Backends** dropdowns in the left sidebar. Authentication status is managed in the Settings dialog under **Agent Backends** — each backend shows its auth state and provides a one-click **Login** button.
+
+> **Tip:** CLI backends are ideal when you already have the official CLI tools installed and authenticated, and want to use them without managing separate API keys in Aura.
+
+---
+
+## MCP Tool Integration
+
+Aura supports the **Model Context Protocol (MCP)** for extending its tool suite with third-party tools. You can connect any MCP-compatible stdio server and its tools become available to the AI agents alongside Aura's built-in tools.
+
+### How It Works
+
+1. The MCP server is launched as a subprocess via a command you specify (e.g., `python -m my_mcp_server`).
+2. Aura connects over stdio, initialises an MCP session, and fetches the server's tool list.
+3. Each tool's schema is converted to OpenAI function-calling format and merged into the agent's available tools.
+4. When the AI invokes an MCP tool, Aura forwards the call to the MCP server and returns the response.
+
+### Supported Tool Features
+
+- **Tool discovery** — All tools exposed by the MCP server are automatically registered.
+- **Tool execution** — Arguments are forwarded; results are returned to the AI.
+- **Error handling** — Unknown tools return errors; connectivity issues are surfaced gracefully.
+- **Multiple servers** — Multiple MCP servers can be connected simultaneously.
+
+MCP tools are available in all conversation modes (Planner, Worker, Single, and Read-Only).
+
+> **Note:** MCP servers can be connected programmatically via `ToolRegistry.connect_mcp_server()`. A GUI for managing MCP server connections is planned for a future release.
+
+---
+
 ## Installation
 
 ### Prerequisites
@@ -518,6 +560,7 @@ Review generated changes like you would review a teammate's pull request. Keep *
 - Web search and research require a Tavily key.
 - Provider model availability, pricing, and thinking-mode support vary and can change over time.
 - Very large workspaces may require targeted prompts or `search_codebase` to keep planning fast.
+- MCP server connections are currently managed programmatically; a GUI for browsing and connecting to MCP servers is planned.
 
 ---
 
@@ -556,6 +599,7 @@ aura/
 ├── paths.py                 # Cross-platform config/data directory helpers
 ├── prompts.py               # Default system prompt templates
 ├── resources.py             # Resource path resolution (media, icons)
+├── mcp_client.py            # MCP stdio client wrapper (connect, list, call)
 ├── sandbox.py               # SandboxExecutor: host, docker, wasm modes
 ├── vision.py                # Ollama vision client for screenshot preprocessing
 ├── bridge/                  # Qt thread bridge
@@ -680,6 +724,7 @@ python scripts/build_nuitka.py  # Build with Nuitka (faster, smaller)
 | [Pillow](https://pypi.org/project/Pillow/) | Image handling for pasted screenshots |
 | [Pygments](https://pypi.org/project/Pygments/) | Syntax highlighting in diff dialogs and code blocks |
 | [httpx](https://pypi.org/project/httpx/) | HTTP client for web research and tool execution |
+| [mcp](https://pypi.org/project/mcp/) | Model Context Protocol client for extending tools via MCP servers |
 
 ---
 
