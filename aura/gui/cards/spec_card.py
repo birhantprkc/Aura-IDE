@@ -21,7 +21,7 @@ _CHIP_STYLE = (
 )
 
 _RISKY_KEYWORDS = [
-    "auth", "subprocess", "thread", "QThread", "git",
+    "auth", "subprocess", "thread", "qthread", "git",
     "delete", "destructive", "reset", "credentials", "token",
     "migration", "database", "security",
 ]
@@ -228,23 +228,23 @@ class SpecCard(QFrame):
             f"color: {FG_MUTED}; background: {BG_ALT}; "
             f"border: 1px solid {BORDER}; border-radius: 5px; padding: 5px 12px;"
         )
-        make_smaller_btn = QPushButton("Make Smaller", parent=buttons_row)
-        make_smaller_btn.setEnabled(False)
-        make_smaller_btn.setToolTip("Spec rewrite controls coming soon")
-        make_smaller_btn.setStyleSheet(steering_style)
-        btn_layout.addWidget(make_smaller_btn)
+        self._make_smaller_btn = QPushButton("Make Smaller", parent=buttons_row)
+        self._make_smaller_btn.setEnabled(False)
+        self._make_smaller_btn.setToolTip("Spec rewrite controls coming soon")
+        self._make_smaller_btn.setStyleSheet(steering_style)
+        btn_layout.addWidget(self._make_smaller_btn)
 
-        make_safer_btn = QPushButton("Make Safer", parent=buttons_row)
-        make_safer_btn.setEnabled(False)
-        make_safer_btn.setToolTip("Spec rewrite controls coming soon")
-        make_safer_btn.setStyleSheet(steering_style)
-        btn_layout.addWidget(make_safer_btn)
+        self._make_safer_btn = QPushButton("Make Safer", parent=buttons_row)
+        self._make_safer_btn.setEnabled(False)
+        self._make_safer_btn.setToolTip("Spec rewrite controls coming soon")
+        self._make_safer_btn.setStyleSheet(steering_style)
+        btn_layout.addWidget(self._make_safer_btn)
 
-        go_deeper_btn = QPushButton("Go Deeper", parent=buttons_row)
-        go_deeper_btn.setEnabled(False)
-        go_deeper_btn.setToolTip("Spec rewrite controls coming soon")
-        go_deeper_btn.setStyleSheet(steering_style)
-        btn_layout.addWidget(go_deeper_btn)
+        self._go_deeper_btn = QPushButton("Go Deeper", parent=buttons_row)
+        self._go_deeper_btn.setEnabled(False)
+        self._go_deeper_btn.setToolTip("Spec rewrite controls coming soon")
+        self._go_deeper_btn.setStyleSheet(steering_style)
+        btn_layout.addWidget(self._go_deeper_btn)
 
         cancel_btn = QPushButton("Cancel", parent=buttons_row)
         cancel_btn.setObjectName("danger")
@@ -456,6 +456,9 @@ class SpecCard(QFrame):
         self._dispatch_btn.setEnabled(False)
         self._edit_btn.setEnabled(False)
         self._cancel_btn.setEnabled(False)
+        self._make_smaller_btn.setEnabled(False)
+        self._make_safer_btn.setEnabled(False)
+        self._go_deeper_btn.setEnabled(False)
 
     def worker_finished(self, ok: bool, summary: str) -> None:
         """Update status when worker completes."""
