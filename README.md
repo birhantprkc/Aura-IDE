@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
-[![Version](https://img.shields.io/badge/version-1.2.0-orange)]()
+[![Version](https://img.shields.io/badge/version-1.2.1-orange)]()
 
 <img src="media/AurA.ico" alt="Aura icon" width="64" height="64" align="right">
 
@@ -29,6 +29,8 @@ Aura is for developers who want AI coding help without looking away.
   <img src="media/token-cost.png" alt="DeepSeek API usage dashboard showing 161M tokens for $11.36" width="600">
 </p>
 
+If you find Aura useful, consider starring the repo to help others discover it.
+
 ---
 
 ## Table of Contents
@@ -45,16 +47,23 @@ Aura is for developers who want AI coding help without looking away.
   - [Dynamic / Self-Extending Tools](#dynamic--self-extending-tools)
   - [Sandbox Execution](#sandbox-execution)
   - [Hardware-Tethered API Key Encryption](#hardware-tethered-api-key-encryption)
+  - [AST-Based Repo Map](#ast-based-repo-map)
   - [Codebase Index (BM25 Semantic Search)](#codebase-index-bm25-semantic-search)
+  - [Persistent Codebase Index](#persistent-codebase-index)
   - [Session Cost Tracking](#session-cost-tracking)
   - [Thinking Modes](#thinking-modes)
   - [Custom System Prompts](#custom-system-prompts)
   - [Separate Worker Temperature](#separate-worker-temperature)
   - [Read-Only Mode](#read-only-mode)
+  - [Focused Actions (Right-Click)](#focused-actions-right-click)
   - [Auto-Dispatch & Auto-Approve](#auto-dispatch--auto-approve)
   - [Conversation Persistence](#conversation-persistence)
+  - [In-App File Viewer](#in-app-file-viewer)
   - [Keyboard Shortcuts & Slash Commands](#keyboard-shortcuts--slash-commands)
+  - [Project Memory (SQLite+FTS5)](#project-memory-sqlitefts5)
+  - [Self-Updater](#self-updater)
   - [Cross-Platform](#cross-platform)
+- [Documentation](#documentation)
 - [Supported Providers](#supported-providers)
 - [CLI Agent Backends](#cli-agent-backends)
 - [MCP Tool Integration](#mcp-tool-integration)
@@ -94,7 +103,7 @@ Aura uses a **two-agent system** inspired by pair programming:
 
 Both agents can use **different models** and **different reasoning depths** from the same provider. For example, use a fast/cheap model for the Planner and a more capable model for the Worker.
 
-The Planner is tuned for speed: it keeps visible planning brief and puts the important implementation detail into the `dispatch_to_worker` spec. The **Spec Edit dialog** lets you modify that spec before handing it to the Worker - giving you full control over what gets implemented and how.
+The Planner is tuned for speed: it keeps visible planning brief and puts the important implementation detail into the `dispatch_to_worker` spec. This architecture acts as a **spec-as-token-firewall**: the Planner's output is a structured specification, not raw code edits, so the Worker starts from a clean, unambiguous target rather than inheriting the Planner's reasoning noise. The **Spec Edit dialog** lets you modify that spec before handing it to the Worker - giving you full control over what gets implemented and how.
 
 ### Comprehensive Tools Suite
 
@@ -327,6 +336,70 @@ Toggle these from the toolbar or Settings dialog. In the toolbar, a blue/bold la
 
 Aura runs on **Windows**, **macOS**, and **Linux** via PySide6 (Qt for Python). The same interface, the same features, everywhere.
 
+### Focused Actions (Right-Click)
+
+Right-click any selected code in the in-app file viewer to trigger context-aware AI actions:
+
+| Action | Description |
+|--------|-------------|
+| **Ask Aura** | Ask a custom question about the selected code |
+| **Explain** | Get a detailed explanation of the selected code |
+| **Fix** | Fix bugs or issues in the selected region |
+| **Refactor** | Restructure the selected code for clarity |
+| **Simplify** | Reduce complexity while preserving behaviour |
+| **Add Logging** | Insert logging statements strategically |
+| **Add Type Hints** | Annotate the selection with type hints |
+| **Write Tests** | Generate tests for the selected code |
+
+Each action builds a precise prompt with the file path, line numbers, selected code, surrounding context, and action-specific instructions. Edit actions (Fix, Refactor, Simplify, Add Logging, Add Type Hints, Write Tests) instruct the AI to use the minimal tool for the job — `edit_symbol` for whole functions, `edit_file` for smaller regions. Read-only actions (Ask, Explain) prevent any file modification.
+
+### In-App File Viewer
+
+A tabbed code viewer with syntax highlighting (Pygments) lets you inspect files directly inside Aura:
+
+- **Open files** by double-clicking in the workspace tree, or when the Worker streams file contents during edits
+- **Text selection** with line numbers tracked — select code and right-click for focused actions
+- **Worker streaming** — when the Worker reads or writes files, content appears in a live tab with typing animation
+- **Syntax highlighting** for Python, JavaScript, TypeScript, CSS, JSON, YAML, Rust, Go, Java, C/C++, and more
+- **Read-only mode aware** — viewer tabs respect the global read-only toggle
+
+### AST-Based Repo Map
+
+Every system prompt includes a structural overview of your workspace generated from AST parsing:
+
+- **Python files** — class names, base classes, method signatures, and top-level function signatures extracted via `ast`
+- **TypeScript/JavaScript files** — file paths listed (AST outline support planned)
+- **Mtime-based cache** — the repo map is regenerated only when a file changes; otherwise reused across turns
+- **>95% prompt cache hit rate** — because the map is deterministic and stable, provider-side prompt caching sees minimal churn
+- **Capped at 300 lines** — keeps the system prompt tight while giving the model a bird's-eye view of your codebase
+
+### Persistent Codebase Index
+
+The BM25 codebase index persists across restarts and updates incrementally:
+
+- **On-disk cache** — the index is saved to `.aura/codebase_index/` and restored instantly on launch
+- **Change detection** — only modified files are re-indexed; unchanged files skip processing
+- **Same scope** — up to 1,500 files, 128 KB each, 30+ extensions
+
+### Project Memory (SQLite+FTS5)
+
+Aura stores a searchable history of past tasks and saved notes in a local SQLite database with full-text search:
+
+- **FTS5 indexing** — fast full-text search across all stored memory entries
+- **Auto-record** — completed Worker dispatches are recorded as project memories
+- **Manual save** — save notes, architecture decisions, or debugging insights for later retrieval
+- **Searchable** — both the AI (via `search_project_memory` tool) and the user (via the Info Hub panel) can query past memories
+- **Per-workspace** — each workspace has its own `.aura/memory.db` database
+
+### Self-Updater
+
+Aura can update itself from the GitHub repository:
+
+- **Fast-forward safety** — only fast-forward pulls are allowed by default; no merge conflicts or force pushes
+- **Update status check** — the toolbar shows when a newer version is available on the remote
+- **One-click update** — the update dialog shows the commit history between your version and the latest, then pulls and prompts you to restart
+- **Source-only** — designed for source installs; packaged releases use their own update mechanisms
+
 ---
 
 ## Supported Providers
@@ -363,6 +436,8 @@ In addition to API-based providers, Aura supports CLI-based AI tools as drop-in 
 | **Gemini CLI** | `gemini` | `gemini auth login` | Google Gemini via the official Gemini CLI (npm) |
 | **Claude Code** | `claude -p` | `claude auth login` | Anthropic Claude via Claude Code CLI |
 | **Codex CLI** | `codex exec` | `codex login` | OpenAI Codex via the Codex CLI |
+
+CLI backends are **pluggable** — each backend is a self-contained module under `aura/backends/`. Adding a new CLI agent requires only implementing the backend interface.
 
 CLI backends are selected independently for the Planner and Worker via the **Agent Backends** dropdowns in the left sidebar. Authentication status is managed in the Settings dialog under **Agent Backends** — each backend shows its auth state and provides a one-click **Login** button.
 
@@ -601,13 +676,18 @@ aura/
 ├── __init__.py              # Package version (1.0.0)
 ├── __main__.py              # Entry point: `aura` or `python -m aura`
 ├── config.py                # Settings, provider registry, pricing, paths
+├── focused_actions.py       # Right-click context menu prompt builders
 ├── git_ops.py               # Auto-commit, /undo, snapshot/restore, git_init
 ├── key_manager.py           # Hardware-tethered Fernet key encryption
+├── memory_db.py             # SQLite+FTS5 project memory storage
 ├── paths.py                 # Cross-platform config/data directory helpers
 ├── prompts.py               # Default system prompt templates
+├── repo_map.py              # AST-based workspace structure map
 ├── resources.py             # Resource path resolution (media, icons)
 ├── mcp_client.py            # MCP stdio client wrapper (connect, list, call)
+├── models.py                # Pydantic model definitions
 ├── sandbox.py               # SandboxExecutor: host, docker, wasm modes
+├── updater.py               # Self-updater (git fast-forward pull)
 ├── vision.py                # Ollama vision client for screenshot preprocessing
 ├── bridge/                  # Qt thread bridge
 │   ├── __init__.py
@@ -644,6 +724,7 @@ aura/
     ├── __init__.py
     ├── main_window.py       # MainWindow, toolbar, status bar, model/thinking combos
     ├── chat_view.py         # Chat transcript with card-based rendering
+    ├── code_editor_pane.py  # Tabbed in-app file viewer with syntax highlighting
     ├── input_panel.py       # Message composer, attachments, Ctrl+V paste
     ├── workspace_tree.py    # File tree browser (left pane)
     ├── onboarding_dialog.py # First-launch onboarding wizard
@@ -651,6 +732,7 @@ aura/
     ├── spec_edit_dialog.py  # Spec editor before dispatch
     ├── diff_dialog.py       # Diff approval modal (Approve/Reject/Approve All/Reject All)
     ├── theme.py             # Dark theme constants
+    ├── update_dialog.py     # Self-updater dialog
     ├── aura_widget.py       # Animated "Aura" dots and GlassSwitch toggle
     ├── controllers.py       # ToolStreamController for streaming tool results
     ├── markdown_renderer.py # Markdown rendering in chat
@@ -742,6 +824,8 @@ Aura is released under the [MIT License](LICENSE).
 The application icon is located at [`media/AurA.ico`](media/AurA.ico).
 
 
-## Technical Blog
+## Documentation
 
-- [Planner/Worker: A Better Architecture for AI Code Generation](https://aura-ide.hashnode.dev/planner-worker-a-better-architecture-for-ai-code-generation) – A deep dive into the dual-agent architecture behind Aura, why it's more token-efficient than single-agent approaches, and what I learned building it.
+- [Aura Blog](https://aura-ide.hashnode.dev/) — project updates, design deep-dives, and usage guides
+- [Planner/Worker: A Better Architecture for AI Code Generation](https://aura-ide.hashnode.dev/planner-worker-a-better-architecture-for-ai-code-generation) — why the dual-agent model is more token-efficient than single-agent approaches
+- [Token-Efficient Memory: How Aura Caches BM25, Repo Maps, and Long-Term Context](https://aura-ide.hashnode.dev/token-efficient-memory-how-aura-caches-bm25-repo-maps-and-long-term-context) — a deep dive into the three memory layers that keep context fresh without burning tokens
