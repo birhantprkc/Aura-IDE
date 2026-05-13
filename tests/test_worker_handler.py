@@ -17,6 +17,16 @@ from aura.gui.worker_handler import WorkerEventHandler
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="session")
+def qapp():
+    """Ensure a QApplication exists for widget tests."""
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    yield app
+
+
 @pytest.fixture
 def bridge() -> Mock:
     b = Mock()
@@ -436,3 +446,19 @@ class TestDispatchActions:
         tasks = [{"id": "1", "desc": "Task 1"}]
         handler._on_worker_todo_list_updated("tc1", tasks)
         playground.update_todo_list.assert_called_once_with(tasks)
+
+    def test_current_spec_returns_five_values(self, qapp) -> None:
+        """SpecCard.current_spec must return (goal, files, spec, acceptance, summary)."""
+        from aura.gui.cards.spec_card import SpecCard
+        card = SpecCard("tid", "goal", ["f.py"], "spec", "acc", summary="sum")
+        result = card.current_spec()
+        assert len(result) == 5
+        assert result == ("goal", ["f.py"], "spec", "acc", "sum")
+
+    def test_update_spec_updates_summary(self, qapp) -> None:
+        """update_spec should update the summary field."""
+        from aura.gui.cards.spec_card import SpecCard
+        card = SpecCard("tid", "goal", ["f.py"], "spec", "acc", summary="old")
+        card.update_spec("new goal", ["g.py"], "new spec", "new acc", summary="new sum")
+        _, _, _, _, summary = card.current_spec()
+        assert summary == "new sum"

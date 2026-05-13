@@ -38,7 +38,7 @@ class SpecEditDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Edit dispatch spec")
+        self.setWindowTitle("Edit Plan Spec")
         self.setModal(True)
         self.resize(720, 620)
 
@@ -112,7 +112,7 @@ class SpecApprovalDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Dispatch to Worker?")
+        self.setWindowTitle("Review Plan")
         self.setModal(True)
         self.resize(800, 680)
 
@@ -128,7 +128,7 @@ class SpecApprovalDialog(QDialog):
         outer.setSpacing(10)
 
         # Header
-        header = QLabel("⚡ Review Worker Dispatch")
+        header = QLabel("⚡ Review Plan")
         header.setStyleSheet(
             f"color: {ACCENT}; font-weight: bold; font-size: 14px;"
         )

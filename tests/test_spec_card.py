@@ -1,0 +1,135 @@
+"""Tests for SpecCard — Plan Ready cockpit card."""
+
+from __future__ import annotations
+
+import pytest
+from PySide6.QtWidgets import QApplication
+
+from aura.gui.cards.spec_card import SpecCard
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    """Ensure a QApplication exists for widget tests."""
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    yield app
+
+
+@pytest.fixture
+def spec_card(qapp):
+    """Create a fresh SpecCard for each test."""
+    return SpecCard(
+        "test_tc_id",
+        "Fix the login bug",
+        ["src/auth.py", "tests/test_auth.py"],
+        "## Objective\nFix login.\n\n## Plan\nRefactor the auth module.",
+        "All tests pass",
+        summary="Refactor auth module to fix login flow",
+    )
+
+
+class TestCurrentSpec:
+    """current_spec() returns 5 values."""
+
+    def test_returns_five_values(self, spec_card):
+        result = spec_card.current_spec()
+        assert len(result) == 5
+        goal, files, spec, acceptance, summary = result
+        assert goal == "Fix the login bug"
+        assert files == ["src/auth.py", "tests/test_auth.py"]
+        assert "Fix login" in spec
+        assert acceptance == "All tests pass"
+        assert summary == "Refactor auth module to fix login flow"
+
+    def test_summary_preserved_after_update(self, spec_card):
+        spec_card.update_spec(
+            "New goal", ["new.py"], "New spec", "New acc", summary="New summary"
+        )
+        _, _, _, _, summary = spec_card.current_spec()
+        assert summary == "New summary"
+
+    def test_files_preserved_after_update(self, spec_card):
+        spec_card.update_spec(
+            "New goal", ["a.py", "b.py"], "New spec", "New acc", summary="s"
+        )
+        _, files, _, _, _ = spec_card.current_spec()
+        assert files == ["a.py", "b.py"]
+
+
+class TestStrategyText:
+    """STRATEGY section should not duplicate full spec."""
+
+    def test_strategy_prefers_summary(self, spec_card):
+        # summary is set, so strategy should use it
+        text = spec_card._compute_strategy_text()
+        assert text == "Refactor auth module to fix login flow"
+
+    def test_strategy_truncates_spec_when_no_summary(self, qapp):
+        card = SpecCard(
+            "tid", "goal", ["f.py"],
+            "## Objective\nDo something.\n\n## Details\n" + "x" * 500,
+            "acc", summary=""
+        )
+        text = card._compute_strategy_text()
+        # Should NOT be the full spec
+        assert len(text) <= 303  # 300 + "…"
+        assert "Objective" not in text or text.startswith("Do something")
+
+    def test_strategy_never_returns_full_long_spec(self, qapp):
+        long_spec = "## Heading\n" + ("A" * 1000)
+        card = SpecCard("tid", "goal", ["f.py"], long_spec, "acc", summary="")
+        text = card._compute_strategy_text()
+        assert len(text) < len(long_spec)
+        assert len(text) <= 303
+
+
+class TestChips:
+    """Computed chips should reflect spec characteristics."""
+
+    def test_mode_chip_fast_plan(self, qapp):
+        card = SpecCard("tid", "goal", ["f.py"], "short spec", "acc", summary="")
+        card._compute_chips()
+        assert "Fast Plan" in card._mode_chip.text()
+
+    def test_mode_chip_careful_plan(self, qapp):
+        card = SpecCard("tid", "goal", ["a.py", "b.py", "c.py"], "x" * 900, "acc", summary="")
+        card._compute_chips()
+        assert "Careful Plan" in card._mode_chip.text()
+
+    def test_risk_chip_high_risk_auth(self, qapp):
+        card = SpecCard("tid", "Fix auth token", ["auth.py"], "Use subprocess for auth", "acc", summary="")
+        card._compute_chips()
+        assert "High Risk" in card._risk_chip.text()
+
+    def test_risk_chip_low_risk(self, qapp):
+        card = SpecCard("tid", "Add docstring", ["README.md"], "Add docstring", "acc", summary="")
+        card._compute_chips()
+        assert "Low Risk" in card._risk_chip.text()
+
+    def test_scope_chip_shows_file_count(self, qapp):
+        card = SpecCard("tid", "goal", ["a.py", "b.py", "c.py"], "spec", "acc", summary="")
+        card._compute_chips()
+        assert "3 files" in card._scope_chip.text()
+
+    def test_scope_chip_no_files(self, qapp):
+        card = SpecCard("tid", "goal", [], "spec", "acc", summary="")
+        card._compute_chips()
+        assert "No files" in card._scope_chip.text()
+
+
+class TestFullSpecCollapsed:
+    """FULL WORKER SPEC should always be collapsed by default."""
+
+    def test_full_spec_section_exists(self, spec_card):
+        assert spec_card._raw_spec_section is not None
+
+    def test_full_spec_starts_collapsed(self, spec_card):
+        assert spec_card._raw_spec_section._open is False
+        assert not spec_card._spec_body_label.isVisible()
+
+
+class TestToolCallId:
+    def test_tool_call_id(self, spec_card):
+        assert spec_card.tool_call_id() == "test_tc_id"

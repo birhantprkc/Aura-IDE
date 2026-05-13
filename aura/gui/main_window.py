@@ -535,7 +535,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 goal = ""
                 spec_card = self._chat.get_spec_card(tool_id)
                 if spec_card:
-                    goal, _, _, _ = spec_card.current_spec()
+                    goal, _files, _spec, _acceptance, _summary = spec_card.current_spec()
                 self._chat.add_worker_summary(tool_id, goal, ok, summary)
 
     def _on_diff_decided(
