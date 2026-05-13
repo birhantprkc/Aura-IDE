@@ -1,14 +1,8 @@
-"""Independent bottom-right Terminal drawer for terminal output logs.
-
-The TerminalDrawer sits below the workspace splitter and provides a "$" launcher
-button that toggles a dark drawer panel showing the current terminal session's
-output. It replaces the terminal tab behaviour that previously lived inside
-InfoHubPane.
-"""
+"""Terminal drawer panel — shows streaming terminal output from run_terminal_command."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -19,17 +13,18 @@ from PySide6.QtWidgets import (
 )
 
 from aura.gui.cards.terminal_card import TerminalCard
-from aura.gui.theme import BG, BORDER, DANGER, FG_DIM, SUCCESS, TERMINAL_BG
+from aura.gui.theme import BG, BORDER, FG_DIM, TERMINAL_BG
 
 
 class TerminalDrawer(QWidget):
-    """Bottom-right sliding drawer for terminal output logs.
+    """Sliding drawer for terminal output logs.
+
+    Emits terminal_started when a new command begins and terminal_finished(exit_code)
+    when a command completes.
 
     Layout (top-to-bottom):
       1. Drawer panel (QFrame, initially hidden) — contains a header bar with
          close button + a TerminalCard for streaming output.
-      2. Launcher bar (QFrame, always visible, 28px height) — right-aligned "$"
-         QToolButton.
 
     Public API:
         set_command(tool_id, command) -> None
@@ -41,6 +36,9 @@ class TerminalDrawer(QWidget):
         clear() -> None
     """
 
+    terminal_started = Signal()
+    terminal_finished = Signal(int)  # exit_code: 0=success, nonzero=failure
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumSize(0, 0)
@@ -51,12 +49,6 @@ class TerminalDrawer(QWidget):
         self._current_tool_id: str | None = None
         self._terminal_card: TerminalCard | None = None
         self._last_exit_code: int | None = None
-
-        # Timer for resetting launcher colour after success flash
-        self._state_timer = QTimer(self)
-        self._state_timer.setSingleShot(True)
-        self._state_timer.setInterval(2000)
-        self._state_timer.timeout.connect(self._reset_launcher_after_success)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -130,45 +122,6 @@ class TerminalDrawer(QWidget):
 
         layout.addWidget(self._drawer)
 
-        # --- Launcher bar (always visible) ---
-        self._launcher_bar = QFrame(self)
-        self._launcher_bar.setObjectName("terminalLauncherBar")
-        self._launcher_bar.setFixedHeight(28)
-        self._launcher_bar.setStyleSheet(
-            f"QFrame#terminalLauncherBar {{"
-            f"  background: {BG};"
-            f"  border-top: 1px solid {BORDER};"
-            f"}}"
-        )
-
-        launcher_layout = QHBoxLayout(self._launcher_bar)
-        launcher_layout.setContentsMargins(0, 0, 8, 0)
-        launcher_layout.setSpacing(0)
-        launcher_layout.addStretch(1)
-
-        self._launcher_btn = QToolButton(self._launcher_bar)
-        self._launcher_btn.setText("$")
-        self._launcher_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._launcher_btn.setToolTip("Toggle terminal drawer")
-        self._launcher_btn.setStyleSheet(
-            f"QToolButton {{"
-            f"  background: transparent;"
-            f"  color: {FG_DIM};"
-            f"  border: none;"
-            f"  font-family: 'Geist Mono', 'JetBrains Mono', monospace;"
-            f"  font-size: 14px;"
-            f"  font-weight: 600;"
-            f"  padding: 2px 8px;"
-            f"}}"
-            f"QToolButton:hover {{"
-            f"  color: #ffffff;"
-            f"}}"
-        )
-        self._launcher_btn.clicked.connect(self.toggle)
-        launcher_layout.addWidget(self._launcher_btn)
-
-        layout.addWidget(self._launcher_bar)
-
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -176,7 +129,7 @@ class TerminalDrawer(QWidget):
     def set_command(self, tool_id: str, command: str) -> None:
         """Replace current TerminalCard with a new one for *tool_id*.
 
-        Resets the launcher colour to FG_DIM and clears the last exit code.
+        Clears the last exit code and emits terminal_started.
         """
         self._current_tool_id = tool_id
         self._last_exit_code = None
@@ -191,21 +144,7 @@ class TerminalDrawer(QWidget):
         container_layout = self._card_container.layout()
         container_layout.addWidget(card)
 
-        # Reset launcher colour
-        self._launcher_btn.setStyleSheet(
-            f"QToolButton {{"
-            f"  background: transparent;"
-            f"  color: {FG_DIM};"
-            f"  border: none;"
-            f"  font-family: 'Geist Mono', 'JetBrains Mono', monospace;"
-            f"  font-size: 14px;"
-            f"  font-weight: 600;"
-            f"  padding: 2px 8px;"
-            f"}}"
-            f"QToolButton:hover {{"
-            f"  color: #ffffff;"
-            f"}}"
-        )
+        self.terminal_started.emit()
 
     def append_output(self, tool_id: str, text: str) -> None:
         """Forward output text to the current TerminalCard if *tool_id* matches."""
@@ -217,8 +156,7 @@ class TerminalDrawer(QWidget):
     def set_result(self, tool_id: str, exit_code: int) -> None:
         """Set the result (exit code) for the terminal session.
 
-        Updates the launcher colour: green flash on success (2s), red persistent
-        on failure. Auto-opens the drawer on failure.
+        Auto-opens the drawer on failure and emits terminal_finished(exit_code).
         """
         if tool_id != self._current_tool_id:
             return
@@ -230,56 +168,25 @@ class TerminalDrawer(QWidget):
             if self._is_open:
                 self._terminal_card.expand()
 
-        if exit_code == 0:
-            # Success: flash green, then reset after 2s
-            self._launcher_btn.setStyleSheet(
-                f"QToolButton {{"
-                f"  background: transparent;"
-                f"  color: {SUCCESS};"
-                f"  border: none;"
-                f"  font-family: 'Geist Mono', 'JetBrains Mono', monospace;"
-                f"  font-size: 14px;"
-                f"  font-weight: 600;"
-                f"  padding: 2px 8px;"
-                f"}}"
-                f"QToolButton:hover {{"
-                f"  color: #ffffff;"
-                f"}}"
-            )
-            self._state_timer.start()
-        else:
-            # Failure: red persistent, auto-open drawer
-            self._launcher_btn.setStyleSheet(
-                f"QToolButton {{"
-                f"  background: transparent;"
-                f"  color: {DANGER};"
-                f"  border: none;"
-                f"  font-family: 'Geist Mono', 'JetBrains Mono', monospace;"
-                f"  font-size: 14px;"
-                f"  font-weight: 600;"
-                f"  padding: 2px 8px;"
-                f"}}"
-                f"QToolButton:hover {{"
-                f"  color: #ffffff;"
-                f"}}"
-            )
+        # Auto-open drawer on failure
+        if exit_code != 0:
             self.open()
 
+        self.terminal_finished.emit(exit_code)
+
     def open(self) -> None:
-        """Show the drawer panel, expand the TerminalCard, and update launcher."""
+        """Show the drawer panel and expand the TerminalCard."""
         self._is_open = True
         self._drawer.setVisible(True)
         if self._terminal_card is not None:
             self._terminal_card.expand()
-        self._update_launcher_state()
 
     def close(self) -> None:
-        """Hide the drawer panel and restore launcher colour based on last state."""
+        """Hide the drawer panel and collapse the TerminalCard."""
         self._is_open = False
         self._drawer.setVisible(False)
         if self._terminal_card is not None:
             self._terminal_card.collapse()
-        self._update_launcher_state()
 
     def toggle(self) -> None:
         """Toggle between open and closed states."""
@@ -289,27 +196,12 @@ class TerminalDrawer(QWidget):
             self.open()
 
     def clear(self) -> None:
-        """Delete the TerminalCard, reset all state, hide panel, reset launcher."""
+        """Delete the TerminalCard, reset all state, and hide panel."""
         self._current_tool_id = None
         self._last_exit_code = None
-        self._state_timer.stop()
         self._remove_card()
         self._drawer.setVisible(False)
         self._is_open = False
-        self._launcher_btn.setStyleSheet(
-            f"QToolButton {{"
-            f"  background: transparent;"
-            f"  color: {FG_DIM};"
-            f"  border: none;"
-            f"  font-family: 'Geist Mono', 'JetBrains Mono', monospace;"
-            f"  font-size: 14px;"
-            f"  font-weight: 600;"
-            f"  padding: 2px 8px;"
-            f"}}"
-            f"QToolButton:hover {{"
-            f"  color: #ffffff;"
-            f"}}"
-        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -322,29 +214,3 @@ class TerminalDrawer(QWidget):
             layout.removeWidget(self._terminal_card)
             self._terminal_card.deleteLater()
             self._terminal_card = None
-
-    def _update_launcher_state(self) -> None:
-        """Update launcher colour based on last exit code.
-
-        Failure → DANGER (persistent). Success/unknown → FG_DIM.
-        The green flash is set directly by set_result and reset by timer.
-        """
-        color = DANGER if (self._last_exit_code is not None and self._last_exit_code != 0) else FG_DIM
-        self._launcher_btn.setStyleSheet(
-            f"QToolButton {{"
-            f"  background: transparent;"
-            f"  color: {color};"
-            f"  border: none;"
-            f"  font-family: 'Geist Mono', 'JetBrains Mono', monospace;"
-            f"  font-size: 14px;"
-            f"  font-weight: 600;"
-            f"  padding: 2px 8px;"
-            f"}}"
-            f"QToolButton:hover {{"
-            f"  color: #ffffff;"
-            f"}}"
-        )
-
-    def _reset_launcher_after_success(self) -> None:
-        """Reset launcher colour to FG_DIM after the success flash timer expires."""
-        self._update_launcher_state()

@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QPushButton,
     QSizePolicy,
+    QToolButton,
 )
 
 from aura.gui.theme import (
@@ -49,7 +50,8 @@ from aura.gui.theme import (
     FG_DIM, 
     BG, 
     SUCCESS, 
-    WARN
+    WARN,
+    DANGER,
 )
 from aura.gui.controllers import ToolStreamController
 from aura.gui.syntax import PygmentsHighlighter, language_from_path as _language_from_path
@@ -603,11 +605,12 @@ class WorkerLogCard(QFrame):
 
 class AuraPlayground(QWidget):
     """Right-side workspace panel with code editor (top), info hub (middle),
-    and terminal drawer (bottom).
+    terminal drawer (bottom), and a right-side tab rail with launchers.
 
     Uses a vertical QSplitter to divide the space between a tabbed code editor
     pane and a tabbed info hub pane (Worker Log). A TerminalDrawer sits below
-    the splitter with a "$" launcher bar and a sliding drawer for terminal logs.
+    the splitter, and a side tab rail on the right edge provides "$" terminal
+    launcher and checkpoints placeholder tabs.
     """
 
     focused_action_requested = Signal(str)
@@ -616,7 +619,16 @@ class AuraPlayground(QWidget):
         super().__init__(parent)
         self.setMinimumWidth(320)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        layout = QVBoxLayout(self)
+
+        # Outer HBox: content (left) | side tab rail (right)
+        outer_layout = QHBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        # ---- Content area (left) ----
+        _content_widget = QWidget(self)
+        _content_widget.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(_content_widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
@@ -632,7 +644,6 @@ class AuraPlayground(QWidget):
 
         header_layout.addStretch(1)
 
-        from PySide6.QtWidgets import QToolButton
         close_all_btn = QToolButton(self)
         close_all_btn.setText("Close All")
         close_all_btn.setObjectName("closeAllBtn")
@@ -672,9 +683,15 @@ class AuraPlayground(QWidget):
 
         layout.addWidget(self._splitter, 1)
 
-        # Terminal drawer (bottom-right, below splitter)
+        # Terminal drawer (below splitter)
         self._terminal_drawer = TerminalDrawer(self)
         layout.addWidget(self._terminal_drawer)
+
+        outer_layout.addWidget(_content_widget, 1)
+
+        # ---- Side tab rail (right edge) ----
+        self._side_rail = self._build_side_tab_rail()
+        outer_layout.addWidget(self._side_rail)
 
         # Tool stream controllers keyed by worker_tool_id
         self._controllers: dict[str, ToolStreamController] = {}
@@ -695,6 +712,113 @@ class AuraPlayground(QWidget):
         if self._aura_wrapper:
             self._aura_wrapper.stop_aura()
 
+    # ------------------------------------------------------------------
+    # Side tab rail
+    # ------------------------------------------------------------------
+
+    def _build_side_tab_rail(self) -> QFrame:
+        """Build the right-side tabbed rail with terminal and checkpoints launchers."""
+        rail = QFrame(self)
+        rail.setObjectName("sideTabRail")
+        rail.setFixedWidth(36)
+        rail.setStyleSheet(
+            "QFrame#sideTabRail {"
+            "  background: transparent;"
+            "  border: none;"
+            "}"
+        )
+
+        rlayout = QVBoxLayout(rail)
+        rlayout.setContentsMargins(0, 0, 0, 8)
+        rlayout.setSpacing(2)
+
+        # Top spacer pushes tabs toward bottom
+        rlayout.addStretch(1)
+
+        # --- Terminal tab "$" ---
+        self._terminal_tab = QToolButton(rail)
+        self._terminal_tab.setText("$")
+        self._terminal_tab.setToolTip("Terminal Logs")
+        self._terminal_tab.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._terminal_tab.setFixedSize(36, 28)
+        self._terminal_tab.setCheckable(True)
+        self._terminal_tab.setStyleSheet(self._tab_style(state="dim"))
+        self._terminal_tab.clicked.connect(self._terminal_drawer.toggle)
+        rlayout.addWidget(self._terminal_tab)
+
+        # --- Checkpoints tab (placeholder) ---
+        self._checkpoints_tab = QToolButton(rail)
+        self._checkpoints_tab.setText("☰")
+        self._checkpoints_tab.setToolTip("Checkpoints (coming soon)")
+        self._checkpoints_tab.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._checkpoints_tab.setFixedSize(36, 28)
+        self._checkpoints_tab.setEnabled(False)
+        self._checkpoints_tab.setStyleSheet(self._tab_style(state="checkpoints"))
+        rlayout.addWidget(self._checkpoints_tab)
+
+        # Bottom spacer (small)
+        rlayout.addSpacing(4)
+
+        # Connect terminal state signals
+        self._terminal_drawer.terminal_started.connect(self._on_terminal_started)
+        self._terminal_drawer.terminal_finished.connect(self._on_terminal_finished)
+        self._terminal_drawer.terminal_started.connect(
+            lambda: self._terminal_tab.setChecked(True)
+        )
+
+        return rail
+
+    def _tab_style(self, state: str = "dim") -> str:
+        """Build stylesheet for a side tab button."""
+        colors = {
+            "dim":         (FG_DIM, "transparent", BORDER),
+            "active":      (FG,     BG_RAISED,     BORDER),
+            "running":     (WARN,   BG_RAISED,     WARN),
+            "failed":      (DANGER, BG_RAISED,     DANGER),
+            "success":     (SUCCESS, BG_RAISED,    SUCCESS),
+            "checkpoints": ("#00ff66", "transparent", "#00ff66"),
+        }
+        fg, bg, border = colors.get(state, colors["dim"])
+
+        return (
+            f"QToolButton {{"
+            f"  background: {bg};"
+            f"  color: {fg};"
+            f"  border: 1px solid {border};"
+            f"  border-left: none;"
+            f"  border-top-right-radius: 8px;"
+            f"  border-bottom-right-radius: 8px;"
+            f"  font-family: 'Geist Mono', 'JetBrains Mono', monospace;"
+            f"  font-weight: 700;"
+            f"  font-size: 15px;"
+            f"  padding: 0;"
+            f"  margin: 0;"
+            f"}}"
+            f"QToolButton:hover {{"
+            f"  background: {BG_RAISED};"
+            f"  color: {FG};"
+            f"}}"
+            f"QToolButton:checked {{"
+            f"  background: {BG_RAISED};"
+            f"  color: {FG};"
+            f"  border-color: {BORDER};"
+            f"}}"
+        )
+
+    def _on_terminal_started(self) -> None:
+        """Terminal command started — show amber/running state."""
+        self._terminal_tab.setStyleSheet(self._tab_style("running"))
+        self._terminal_tab.setChecked(True)
+
+    def _on_terminal_finished(self, exit_code: int) -> None:
+        """Terminal command finished — update tab state."""
+        if exit_code == 0:
+            self._terminal_tab.setStyleSheet(self._tab_style("success"))
+            # Reset to dim after 2s
+            QTimer.singleShot(2000, lambda: self._terminal_tab.setStyleSheet(self._tab_style("dim")))
+        else:
+            self._terminal_tab.setStyleSheet(self._tab_style("failed"))
+
     def set_workspace_root(self, root: Path | None) -> None:
         self._code_editor.set_workspace_root(root)
 
@@ -713,6 +837,7 @@ class AuraPlayground(QWidget):
         self._code_editor.close_worker_tabs()
         self._info_hub.clear()
         self._terminal_drawer.clear()
+        self._terminal_tab.setStyleSheet(self._tab_style("dim"))
         self._controllers.clear()
         self._worker_code_paths.clear()
         self._pending_worker_code_content.clear()
@@ -820,6 +945,7 @@ class AuraPlayground(QWidget):
         self._code_editor.close_all_tabs()
         self._info_hub.clear()
         self._terminal_drawer.clear()
+        self._terminal_tab.setStyleSheet(self._tab_style("dim"))
         self._controllers.clear()
         self._worker_code_paths.clear()
         self._pending_worker_code_content.clear()
