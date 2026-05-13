@@ -99,6 +99,167 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
         return False, "git commit failed."
 
 
+def recent_commits(workspace_root: Path, limit: int = 30) -> tuple[bool, list[dict], str]:
+    """Return recent commits for the workspace repository.
+
+    Each commit dict includes sha, short_sha, subject, author, relative_date,
+    changed_files_count, and changed_files.
+    """
+    if not is_git_repo(workspace_root):
+        return False, [], "Not a git repository."
+
+    safe_limit = max(1, min(limit, 200))
+    record_sep = "\x1e"
+    field_sep = "\x1f"
+    fmt = f"{record_sep}%H{field_sep}%h{field_sep}%s{field_sep}%an{field_sep}%cr"
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "log",
+                f"-n{safe_limit}",
+                "--date=relative",
+                f"--format={fmt}",
+                "--name-only",
+            ],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            **get_subprocess_kwargs(),
+        )
+    except FileNotFoundError:
+        return False, [], "git executable not found."
+    except subprocess.TimeoutExpired:
+        return False, [], "git log timed out."
+
+    if result.returncode != 0:
+        err = result.stderr.strip() if result.stderr else "git log failed."
+        if "does not have any commits yet" in err or "bad default revision" in err:
+            return True, [], ""
+        return False, [], err
+
+    commits: list[dict] = []
+    for raw_record in result.stdout.split(record_sep):
+        record = raw_record.strip()
+        if not record:
+            continue
+        lines = record.splitlines()
+        fields = lines[0].split(field_sep)
+        if len(fields) < 5:
+            continue
+
+        changed_files = [line.strip() for line in lines[1:] if line.strip()]
+        commits.append(
+            {
+                "sha": fields[0],
+                "short_sha": fields[1],
+                "subject": fields[2],
+                "author": fields[3],
+                "relative_date": fields[4],
+                "changed_files_count": len(changed_files),
+                "changed_files": changed_files,
+            }
+        )
+
+    return True, commits, ""
+
+
+def commit_changed_files(workspace_root: Path, sha: str) -> tuple[bool, list[str], str]:
+    """Return file paths changed by a commit."""
+    if not is_git_repo(workspace_root):
+        return False, [], "Not a git repository."
+
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "diff-tree",
+                "--root",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                sha,
+            ],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            **get_subprocess_kwargs(),
+        )
+    except FileNotFoundError:
+        return False, [], "git executable not found."
+    except subprocess.TimeoutExpired:
+        return False, [], "git diff-tree timed out."
+
+    if result.returncode != 0:
+        err = result.stderr.strip() if result.stderr else "git diff-tree failed."
+        return False, [], err
+
+    return True, [line.strip() for line in result.stdout.splitlines() if line.strip()], ""
+
+
+def commit_diff(workspace_root: Path, sha: str) -> tuple[bool, str, str]:
+    """Return a readable patch for a commit."""
+    if not is_git_repo(workspace_root):
+        return False, "", "Not a git repository."
+
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "show",
+                "--format=fuller",
+                "--stat",
+                "--patch",
+                "--no-ext-diff",
+                "--no-color",
+                sha,
+            ],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            **get_subprocess_kwargs(),
+        )
+    except FileNotFoundError:
+        return False, "", "git executable not found."
+    except subprocess.TimeoutExpired:
+        return False, "", "git show timed out."
+
+    if result.returncode != 0:
+        err = result.stderr.strip() if result.stderr else "git show failed."
+        return False, "", err
+
+    return True, result.stdout, ""
+
+
+def working_tree_status(workspace_root: Path) -> tuple[bool, str, str]:
+    """Return git status --porcelain output for restore warnings."""
+    if not is_git_repo(workspace_root):
+        return False, "", "Not a git repository."
+
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            **get_subprocess_kwargs(),
+        )
+    except FileNotFoundError:
+        return False, "", "git executable not found."
+    except subprocess.TimeoutExpired:
+        return False, "", "git status timed out."
+
+    if result.returncode != 0:
+        err = result.stderr.strip() if result.stderr else "git status failed."
+        return False, "", err
+
+    return True, result.stdout, ""
+
+
 def undo_last_commit(workspace_root: Path) -> tuple[bool, str]:
     """Soft-reset HEAD~1, keeping changes in the working directory.
 

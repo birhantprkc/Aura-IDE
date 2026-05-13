@@ -30,6 +30,7 @@ from aura.config import (
 )
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.git_ops import git_init, is_git_repo
+from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.chat_view import ChatView
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.send_handler import SendHandler
@@ -90,6 +91,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.read_only_toggled.connect(self._on_read_only_toggled)
         self._toolbar.auto_dispatch_toggled.connect(self._on_auto_dispatch_toggled)
         self._toolbar.auto_approve_toggled.connect(self._on_auto_approve_toggled)
+        self._toolbar.checkpoints_requested.connect(self._on_open_checkpoints)
         self._toolbar.update_requested.connect(self._on_open_update)
         self._toolbar.settings_requested.connect(self._on_open_settings)
         self._toolbar.minimize_requested.connect(self.showMinimized)
@@ -467,6 +469,28 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_open_update(self) -> None:
         dlg = UpdateDialog(self)
         dlg.exec()
+
+    def _on_open_checkpoints(self) -> None:
+        if self._workspace_root is None or not self._workspace_root.exists():
+            QMessageBox.information(
+                self,
+                "Checkpoints",
+                "Choose a workspace before opening checkpoint history.",
+            )
+            return
+
+        if not is_git_repo(self._workspace_root):
+            QMessageBox.information(
+                self,
+                "Checkpoints",
+                "This workspace is not a git repository yet.\n\n"
+                "Aura checkpoints are based on git commits.",
+            )
+            return
+
+        dlg = CheckpointDialog(self._workspace_root, self)
+        dlg.exec()
+        self._tree.set_root(self._workspace_root)
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
         self._bridge.set_planner_worker_mode(enabled)

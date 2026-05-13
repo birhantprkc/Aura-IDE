@@ -5,16 +5,18 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from aura.git_ops import (
     auto_commit,
+    commit_changed_files,
+    commit_diff,
     ensure_aura_gitignored,
     git_init,
     is_git_repo,
+    recent_commits,
     restore_to_snapshot,
     snapshot,
     undo_last_commit,
+    working_tree_status,
 )
 
 
@@ -268,6 +270,133 @@ class TestAutoCommit:
         assert committed_msg.endswith("... (truncated)")
         # The truncated part should be <= 2000 + len("\n... (truncated)")
         assert len(committed_msg) <= 2000 + len("\n... (truncated)")
+
+
+# ===================================================================
+# TestCheckpointHelpers
+# ===================================================================
+
+
+class TestCheckpointHelpers:
+    """Checkpoint history helpers."""
+
+    def test_recent_commits_not_a_repo(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: False)
+        ok, commits, msg = recent_commits(tmp_path)
+        assert ok is False
+        assert commits == []
+        assert msg == "Not a git repository."
+
+    def test_recent_commits_parses_log_records(
+        self, monkeypatch, tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
+        stdout = (
+            "\x1eabc123def\x1fabc123d\x1fAdd thing\x1fAda\x1f2 hours ago\n"
+            "a.txt\n"
+            "b.txt\n"
+            "\x1edef456ghi\x1fdef456g\x1fFix thing\x1fGrace\x1fyesterday\n"
+            "src/main.py\n"
+        )
+        monkeypatch.setattr(subprocess, "run", _make_run([MockResult(stdout=stdout)]))
+
+        ok, commits, msg = recent_commits(tmp_path, limit=2)
+
+        assert ok is True
+        assert msg == ""
+        assert commits == [
+            {
+                "sha": "abc123def",
+                "short_sha": "abc123d",
+                "subject": "Add thing",
+                "author": "Ada",
+                "relative_date": "2 hours ago",
+                "changed_files_count": 2,
+                "changed_files": ["a.txt", "b.txt"],
+            },
+            {
+                "sha": "def456ghi",
+                "short_sha": "def456g",
+                "subject": "Fix thing",
+                "author": "Grace",
+                "relative_date": "yesterday",
+                "changed_files_count": 1,
+                "changed_files": ["src/main.py"],
+            },
+        ]
+
+    def test_recent_commits_reports_git_error(
+        self, monkeypatch, tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            _make_run([MockResult(returncode=128, stderr="fatal: bad revision")]),
+        )
+        ok, commits, msg = recent_commits(tmp_path)
+        assert ok is False
+        assert commits == []
+        assert msg == "fatal: bad revision"
+
+    def test_recent_commits_empty_repo(
+        self, monkeypatch, tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            _make_run([
+                MockResult(
+                    returncode=128,
+                    stderr="fatal: your current branch does not have any commits yet",
+                ),
+            ]),
+        )
+        ok, commits, msg = recent_commits(tmp_path)
+        assert ok is True
+        assert commits == []
+        assert msg == ""
+
+    def test_commit_changed_files_success(
+        self, monkeypatch, tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            _make_run([MockResult(stdout="a.txt\nsrc/main.py\n")]),
+        )
+        ok, files, msg = commit_changed_files(tmp_path, "abc123")
+        assert ok is True
+        assert files == ["a.txt", "src/main.py"]
+        assert msg == ""
+
+    def test_commit_diff_success(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            _make_run([MockResult(stdout="commit abc123\n+hello\n")]),
+        )
+        ok, diff, msg = commit_diff(tmp_path, "abc123")
+        assert ok is True
+        assert diff == "commit abc123\n+hello\n"
+        assert msg == ""
+
+    def test_working_tree_status_success(
+        self, monkeypatch, tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            _make_run([MockResult(stdout=" M aura/git_ops.py\n")]),
+        )
+        ok, status, msg = working_tree_status(tmp_path)
+        assert ok is True
+        assert status == " M aura/git_ops.py\n"
+        assert msg == ""
 
 
 # ===================================================================
