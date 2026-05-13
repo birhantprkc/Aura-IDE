@@ -5,7 +5,6 @@ All Qt dependencies are mocked; no QApplication needed.
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -258,11 +257,11 @@ class TestDispatch:
 
         with patch("aura.gui.spec_edit_dialog.SpecApprovalDialog") as mock_dlg:
             handler._on_worker_dispatch_requested(
-                "tc1", "goal text", ["f.py"], "spec text", "acc text",
+                "tc1", "goal text", ["f.py"], "spec text", "acc text", "",
             )
 
         bridge.user_dispatched.assert_called_once_with(
-            "tc1", "goal text", ["f.py"], "spec text", "acc text",
+            "tc1", "goal text", ["f.py"], "spec text", "acc text", "",
         )
         mock_dlg.assert_not_called()
 
@@ -280,16 +279,17 @@ class TestDispatch:
             dlg_instance.files.return_value = ["f1.py", "f2.py"]
             dlg_instance.spec.return_value = "edited spec"
             dlg_instance.acceptance.return_value = "edited acceptance"
+            dlg_instance.summary.return_value = ""
 
             handler._on_worker_dispatch_requested(
-                "tc1", "goal text", ["f.py"], "spec text", "acc text",
+                "tc1", "goal text", ["f.py"], "spec text", "acc text", "",
             )
 
         mock_dlg.assert_called_once_with(
-            "goal text", ["f.py"], "spec text", "acc text", parent=handler.parent(),
+            "goal text", ["f.py"], "spec text", "acc text", "", parent=handler.parent(),
         )
         bridge.user_dispatched.assert_called_once_with(
-            "tc1", "edited goal", ["f1.py", "f2.py"], "edited spec", "edited acceptance",
+            "tc1", "edited goal", ["f1.py", "f2.py"], "edited spec", "edited acceptance", "",
         )
         bridge.user_cancelled_dispatch.assert_not_called()
 
@@ -303,7 +303,7 @@ class TestDispatch:
             dlg_instance.exec.return_value = 0  # Rejected
 
             handler._on_worker_dispatch_requested(
-                "tc1", "goal text", ["f.py"], "spec text", "acc text",
+                "tc1", "goal text", ["f.py"], "spec text", "acc text", "",
             )
 
         bridge.user_dispatched.assert_not_called()
@@ -379,12 +379,12 @@ class TestDispatchActions:
         self, handler: WorkerEventHandler, chat: Mock, bridge: Mock,
     ) -> None:
         card = Mock()
-        card.current_spec.return_value = ("goal", ["f.py"], "spec", "acc")
+        card.current_spec.return_value = ("goal", ["f.py"], "spec", "acc", "")
         chat.get_spec_card.return_value = card
 
         handler._on_dispatch_clicked("tc1")
         chat.get_spec_card.assert_called_once_with("tc1")
-        bridge.user_dispatched.assert_called_once_with("tc1", "goal", ["f.py"], "spec", "acc")
+        bridge.user_dispatched.assert_called_once_with("tc1", "goal", ["f.py"], "spec", "acc", "")
 
     def test_dispatch_clicked_no_card(
         self, handler: WorkerEventHandler, chat: Mock, bridge: Mock,
@@ -397,7 +397,7 @@ class TestDispatchActions:
         self, handler: WorkerEventHandler, chat: Mock,
     ) -> None:
         card = Mock()
-        card.current_spec.return_value = ("goal", ["f.py"], "spec", "acc")
+        card.current_spec.return_value = ("goal", ["f.py"], "spec", "acc", "")
         chat.get_spec_card.return_value = card
 
         with patch("aura.gui.spec_edit_dialog.SpecEditDialog") as mock_dlg:
@@ -409,11 +409,12 @@ class TestDispatchActions:
             dlg_instance.files.return_value = ["new.py"]
             dlg_instance.spec.return_value = "new spec"
             dlg_instance.acceptance.return_value = "new acc"
+            dlg_instance.summary.return_value = ""
 
             handler._on_edit_spec_clicked("tc1")
 
         card.update_spec.assert_called_once_with(
-            "new goal", ["new.py"], "new spec", "new acc"
+            "new goal", ["new.py"], "new spec", "new acc", ""
         )
 
     def test_edit_spec_clicked_no_card(

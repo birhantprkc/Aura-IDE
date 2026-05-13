@@ -1,13 +1,13 @@
 """Worker dispatch spec — collapsible, with Dispatch/Edit/Cancel buttons."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from aura.gui.cards._collapsible import _CollapsibleSection
 from aura.gui.cards._helpers import _MarkdownTextBlock
 from aura.gui.markdown_renderer import _render_markdown_with_code
-from aura.gui.theme import ACCENT, BG_ALT, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS
+from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 
 
 class SpecCard(QFrame):
@@ -29,6 +29,7 @@ class SpecCard(QFrame):
         files: list[str],
         spec: str,
         acceptance: str,
+        summary: str = "",
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -38,7 +39,7 @@ class SpecCard(QFrame):
         self._files = files
         self._spec = spec
         self._acceptance = acceptance
-        self._summary = "" # Will be populated via update_spec or initially
+        self._summary = summary
         self._dispatched = False
         self._cancelled = False
         self._worker_running = False
@@ -53,59 +54,96 @@ class SpecCard(QFrame):
         outer.setContentsMargins(16, 14, 16, 16)
         outer.setSpacing(8)
 
-        header = QLabel("⚡ Dispatch to Worker", parent=self)
-        header.setStyleSheet(f"color: {ACCENT}; font-weight: 700; font-size: 12px;")
-        outer.addWidget(header)
+        # ---- Header row: "Plan Ready" + chips ----
+        header_row = QHBoxLayout()
+        header_label = QLabel("⚡ Plan Ready", parent=self)
+        header_label.setStyleSheet(f"color: {ACCENT}; font-weight: 700; font-size: 12px;")
+        header_row.addWidget(header_label)
+        header_row.addStretch(1)
 
+        _chip_style = (
+            f"background: {BG_RAISED}; color: {FG_DIM}; "
+            f"border: 1px solid {BORDER}; border-radius: 4px; "
+            f"padding: 2px 8px; font-size: 10px; font-weight: 600;"
+        )
+        planner_chip = QLabel("Planner", parent=self)
+        planner_chip.setStyleSheet(_chip_style)
+        header_row.addWidget(planner_chip)
+
+        review_chip = QLabel("Review", parent=self)
+        review_chip.setStyleSheet(
+            _chip_style.replace(f"color: {FG_DIM}", f"color: {WARN}")
+        )
+        header_row.addWidget(review_chip)
+
+        outer.addLayout(header_row)
+
+        # ---- Goal ----
         self._goal_label = _MarkdownTextBlock(_render_markdown_with_code(self._goal), parent=self)
         self._goal_label.setStyleSheet(f"background: transparent; border: none; color: {FG}; font-size: 14px;")
         outer.addWidget(self._goal_label)
 
-        # Files section
+        # ---- STRATEGY section ----
         outer.addSpacing(6)
-        self._files_header = QLabel("FILES", parent=self)
+        strategy_header = QLabel("STRATEGY", parent=self)
+        strategy_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px;")
+        outer.addWidget(strategy_header)
+
+        strategy_text = self._compute_strategy_text()
+        self._strategy_label = _MarkdownTextBlock(
+            _render_markdown_with_code(strategy_text), parent=self
+        )
+        self._strategy_label.setStyleSheet(f"background: transparent; border: none; color: {FG};")
+        outer.addWidget(self._strategy_label)
+
+        # ---- SCOPE section (formerly FILES) ----
+        outer.addSpacing(6)
+        self._files_header = QLabel("SCOPE", parent=self)
         self._files_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px;")
         outer.addWidget(self._files_header)
-        
+
         self._files_container = QWidget(self)
         files_layout = QVBoxLayout(self._files_container)
         files_layout.setContentsMargins(0, 0, 0, 0)
         files_layout.setSpacing(4)
         outer.addWidget(self._files_container)
-        
+
         self._refresh_files_list(files_layout)
 
-        # Spec section
-        outer.addSpacing(12)
-        spec_header = QLabel("SPECIFICATION", parent=self)
-        spec_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px;")
-        outer.addWidget(spec_header)
-
-        # Spec body (collapsible if long).
-        self._spec_label = _MarkdownTextBlock(_render_markdown_with_code(self._spec), parent=self)
-        self._spec_label.setStyleSheet(f"background: transparent; border: none; color: {FG};")
-
-        self._spec_section: _CollapsibleSection | None = None
-        if self._spec.count("\n") > 6 or len(self._spec) > 600:
-            section = _CollapsibleSection(
-                "Expand Spec", self._spec_label, start_open=False, prominent=False
-            )
-            self._spec_section = section
-            outer.addWidget(section)
-        else:
-            outer.addWidget(self._spec_label)
-
-        # Acceptance section
-        outer.addSpacing(12)
-        acc_header = QLabel("ACCEPTANCE CRITERIA", parent=self)
+        # ---- VALIDATION section (formerly ACCEPTANCE CRITERIA) ----
+        outer.addSpacing(6)
+        acc_header = QLabel("VALIDATION", parent=self)
         acc_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px;")
         outer.addWidget(acc_header)
 
-        self._acceptance_label = _MarkdownTextBlock(_render_markdown_with_code(self._acceptance), parent=self)
+        self._acceptance_label = _MarkdownTextBlock(
+            _render_markdown_with_code(self._acceptance), parent=self
+        )
         self._acceptance_label.setStyleSheet(f"background: transparent; border: none; color: {FG_DIM};")
         outer.addWidget(self._acceptance_label)
 
-        # Buttons row.
+        # ---- FULL WORKER SPEC section ----
+        outer.addSpacing(6)
+        raw_spec_header = QLabel("FULL WORKER SPEC", parent=self)
+        raw_spec_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px;")
+        outer.addWidget(raw_spec_header)
+
+        self._spec_body_label = _MarkdownTextBlock(
+            _render_markdown_with_code(self._spec), parent=self
+        )
+        self._spec_body_label.setStyleSheet(f"background: transparent; border: none; color: {FG};")
+
+        self._raw_spec_section: _CollapsibleSection | None = None
+        if self._spec.count("\n") > 6 or len(self._spec) > 600:
+            section = _CollapsibleSection(
+                "Show Full Spec", self._spec_body_label, start_open=False, prominent=False
+            )
+            self._raw_spec_section = section
+            outer.addWidget(section)
+        else:
+            outer.addWidget(self._spec_body_label)
+
+        # ---- Buttons row ----
         self._buttons_row = QWidget(self)
         btn_layout = QHBoxLayout(self._buttons_row)
         btn_layout.setContentsMargins(0, 4, 0, 0)
@@ -120,6 +158,21 @@ class SpecCard(QFrame):
         self._edit_btn.clicked.connect(lambda: self.edit_clicked.emit(self._tool_call_id))
         btn_layout.addWidget(self._edit_btn)
 
+        self._make_smaller_btn = QPushButton("Make Smaller", parent=self._buttons_row)
+        self._make_smaller_btn.setEnabled(False)
+        self._make_smaller_btn.setToolTip("Spec rewrite controls coming soon")
+        btn_layout.addWidget(self._make_smaller_btn)
+
+        self._make_safer_btn = QPushButton("Make Safer", parent=self._buttons_row)
+        self._make_safer_btn.setEnabled(False)
+        self._make_safer_btn.setToolTip("Spec rewrite controls coming soon")
+        btn_layout.addWidget(self._make_safer_btn)
+
+        self._go_deeper_btn = QPushButton("Go Deeper", parent=self._buttons_row)
+        self._go_deeper_btn.setEnabled(False)
+        self._go_deeper_btn.setToolTip("Spec rewrite controls coming soon")
+        btn_layout.addWidget(self._go_deeper_btn)
+
         self._cancel_btn = QPushButton("Cancel", parent=self._buttons_row)
         self._cancel_btn.setObjectName("danger")
         self._cancel_btn.clicked.connect(self._on_cancel)
@@ -129,7 +182,7 @@ class SpecCard(QFrame):
 
         outer.addWidget(self._buttons_row)
 
-        # "View Worker" button — hidden until dispatch.
+        # ---- "View Worker" button — hidden until dispatch ----
         self._view_worker_btn = QPushButton("View Worker", parent=self)
         self._view_worker_btn.setVisible(False)
         self._view_worker_btn.clicked.connect(
@@ -137,7 +190,7 @@ class SpecCard(QFrame):
         )
         outer.addWidget(self._view_worker_btn)
 
-        # Status label, hidden until dispatch/cancel.
+        # ---- Status label, hidden until dispatch/cancel ----
         self._status_label = QLabel("", parent=self)
         self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         self._status_label.setVisible(False)
@@ -183,24 +236,41 @@ class SpecCard(QFrame):
             return "(no files listed)"
         return "  ".join(f"• {p}" for p in files)
 
+    def _compute_strategy_text(self) -> str:
+        """Return the text to display in the STRATEGY section."""
+        if self._summary:
+            return self._summary
+        if len(self._spec) <= 600 and self._spec.count("\n") <= 6:
+            return self._spec
+        return self._spec[:300] + "…"
+
     def update_spec(
-        self, goal: str, files: list[str], spec: str, acceptance: str
+        self, goal: str, files: list[str], spec: str, acceptance: str, summary: str = ""
     ) -> None:
         self._goal = goal
         self._files = list(files)
         self._spec = spec
         self._acceptance = acceptance
+        self._summary = summary
         self._goal_label.setHtml(_render_markdown_with_code(self._goal))
-        
+
         # Refresh files list
         if hasattr(self, "_files_container"):
             self._refresh_files_list(self._files_container.layout())
-            
-        self._spec_label.setHtml(_render_markdown_with_code(self._spec))
+
+        # Update strategy label
+        strategy_text = self._compute_strategy_text()
+        if hasattr(self, "_strategy_label"):
+            self._strategy_label.setHtml(_render_markdown_with_code(strategy_text))
+
+        # Update raw spec body
+        if hasattr(self, "_spec_body_label"):
+            self._spec_body_label.setHtml(_render_markdown_with_code(self._spec))
+
         self._acceptance_label.setHtml(_render_markdown_with_code(self._acceptance))
 
-    def current_spec(self) -> tuple[str, list[str], str, str]:
-        return (self._goal, list(self._files), self._spec, self._acceptance)
+    def current_spec(self) -> tuple[str, list[str], str, str, str]:
+        return (self._goal, list(self._files), self._spec, self._acceptance, self._summary)
 
     def tool_call_id(self) -> str:
         return self._tool_call_id
@@ -211,7 +281,7 @@ class SpecCard(QFrame):
         self._dispatched = True
         self._worker_running = True
         self._buttons_row.setVisible(False)
-        self._status_label.setText("Dispatched — worker running…")
+        self._status_label.setText("Worker running…")
         self._status_label.setVisible(True)
         self._view_worker_btn.setVisible(True)
         self.dispatch_clicked.emit(self._tool_call_id)
@@ -228,6 +298,9 @@ class SpecCard(QFrame):
         self._dispatch_btn.setEnabled(False)
         self._edit_btn.setEnabled(False)
         self._cancel_btn.setEnabled(False)
+        self._make_smaller_btn.setEnabled(False)
+        self._make_safer_btn.setEnabled(False)
+        self._go_deeper_btn.setEnabled(False)
 
     def worker_finished(self, ok: bool, summary: str) -> None:
         self._worker_running = False
