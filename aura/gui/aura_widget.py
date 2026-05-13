@@ -614,21 +614,15 @@ class AuraPlayground(QWidget):
     """
 
     focused_action_requested = Signal(str)
+    checkpoints_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(320)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        # Outer HBox: content (left) | side tab rail (right)
-        outer_layout = QHBoxLayout(self)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
-        outer_layout.setSpacing(0)
-
-        # ---- Content area (left) ----
-        _content_widget = QWidget(self)
-        _content_widget.setStyleSheet("background: transparent;")
-        layout = QVBoxLayout(_content_widget)
+        # Flat QVBoxLayout — no outer HBox or _content_widget wrapper
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
@@ -687,11 +681,9 @@ class AuraPlayground(QWidget):
         self._terminal_drawer = TerminalDrawer(self)
         layout.addWidget(self._terminal_drawer)
 
-        outer_layout.addWidget(_content_widget, 1)
-
-        # ---- Side tab rail (right edge) ----
+        # ---- Side tab rail (right edge, free-floating overlay) ----
         self._side_rail = self._build_side_tab_rail()
-        outer_layout.addWidget(self._side_rail)
+        # NOTE: NOT added to any layout — positioned manually in resizeEvent
 
         # Tool stream controllers keyed by worker_tool_id
         self._controllers: dict[str, ToolStreamController] = {}
@@ -713,6 +705,35 @@ class AuraPlayground(QWidget):
             self._aura_wrapper.stop_aura()
 
     # ------------------------------------------------------------------
+    # Overlay positioning for side tab rail
+    # ------------------------------------------------------------------
+
+    def resizeEvent(self, event) -> None:
+        """Reposition the side tab rail on the far-right edge when resized."""
+        super().resizeEvent(event)
+        rail = self._side_rail
+        if rail is None:
+            return
+        rail_w = rail.width()
+        rail_h = rail.sizeHint().height()
+        # Position at far-right edge, near the bottom
+        x = self.width() - rail_w
+        y = self.height() - rail_h - 64
+        rail.setGeometry(x, y, rail_w, rail_h)
+        rail.raise_()
+
+    def showEvent(self, event) -> None:
+        """Position the side rail correctly when first shown."""
+        super().showEvent(event)
+        if self._side_rail is not None:
+            rail_w = self._side_rail.width()
+            rail_h = self._side_rail.sizeHint().height()
+            x = self.width() - rail_w
+            y = self.height() - rail_h - 64
+            self._side_rail.setGeometry(x, y, rail_w, rail_h)
+            self._side_rail.raise_()
+
+    # ------------------------------------------------------------------
     # Side tab rail
     # ------------------------------------------------------------------
 
@@ -729,11 +750,8 @@ class AuraPlayground(QWidget):
         )
 
         rlayout = QVBoxLayout(rail)
-        rlayout.setContentsMargins(0, 0, 0, 8)
+        rlayout.setContentsMargins(0, 0, 0, 0)
         rlayout.setSpacing(2)
-
-        # Top spacer pushes tabs toward bottom
-        rlayout.addStretch(1)
 
         # --- Terminal tab "$" ---
         self._terminal_tab = QToolButton(rail)
@@ -746,18 +764,16 @@ class AuraPlayground(QWidget):
         self._terminal_tab.clicked.connect(self._terminal_drawer.toggle)
         rlayout.addWidget(self._terminal_tab)
 
-        # --- Checkpoints tab (placeholder) ---
+        # --- Checkpoints tab ---
         self._checkpoints_tab = QToolButton(rail)
         self._checkpoints_tab.setText("☰")
-        self._checkpoints_tab.setToolTip("Checkpoints (coming soon)")
+        self._checkpoints_tab.setToolTip("Checkpoints")
         self._checkpoints_tab.setCursor(Qt.CursorShape.PointingHandCursor)
         self._checkpoints_tab.setFixedSize(36, 28)
-        self._checkpoints_tab.setEnabled(False)
+        self._checkpoints_tab.setEnabled(True)
         self._checkpoints_tab.setStyleSheet(self._tab_style(state="checkpoints"))
+        self._checkpoints_tab.clicked.connect(self.checkpoints_requested.emit)
         rlayout.addWidget(self._checkpoints_tab)
-
-        # Bottom spacer (small)
-        rlayout.addSpacing(4)
 
         # Connect terminal state signals
         self._terminal_drawer.terminal_started.connect(self._on_terminal_started)
