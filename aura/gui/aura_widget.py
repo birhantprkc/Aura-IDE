@@ -671,6 +671,8 @@ class AuraPlayground(QWidget):
 
         # Tool stream controllers keyed by worker_tool_id
         self._controllers: dict[str, ToolStreamController] = {}
+        self._worker_code_paths: dict[str, str] = {}
+        self._pending_worker_code_content: dict[str, str] = {}
         
         # Aura wrapper reference for atmospheric synchronization
         self._aura_wrapper: AuraWidget | None = None
@@ -704,6 +706,8 @@ class AuraPlayground(QWidget):
         self._code_editor.close_worker_tabs()
         self._info_hub.clear()
         self._controllers.clear()
+        self._worker_code_paths.clear()
+        self._pending_worker_code_content.clear()
 
     def append_reasoning(self, text: str):
         self._info_hub.append_reasoning(text)
@@ -718,12 +722,16 @@ class AuraPlayground(QWidget):
         if name == "update_todo_list":
             c.todo_updated.connect(self.update_todo_list)
 
-        if name in ("write_file", "edit_file"):
+        if name in ("write_file", "edit_file", "edit_symbol"):
             c.path_resolved.connect(
-                lambda path, tid=worker_tool_id: self._code_editor.open_or_focus_tab(tid, path)
+                lambda path, tid=worker_tool_id: self._on_code_path_resolved(
+                    tid, path
+                )
             )
             c.content_updated.connect(
-                lambda content, tid=worker_tool_id: self._code_editor.stream_content(tid, content)
+                lambda content, tid=worker_tool_id: self._on_code_content_updated(
+                    tid, content
+                )
             )
 
         if name == "run_terminal_command":
@@ -744,6 +752,8 @@ class AuraPlayground(QWidget):
 
         # Finalize code editor tab if this was a file tool
         self._code_editor.finalize_tab(worker_tool_id)
+        self._worker_code_paths.pop(worker_tool_id, None)
+        self._pending_worker_code_content.pop(worker_tool_id, None)
 
         # Finalize terminal tab if this was a terminal tool
         exit_code = 0
@@ -757,6 +767,19 @@ class AuraPlayground(QWidget):
 
     def update_todo_list(self, tasks: list):
         self._info_hub.update_todo_list(tasks)
+
+    def _on_code_path_resolved(self, worker_tool_id: str, path: str) -> None:
+        self._worker_code_paths[worker_tool_id] = path
+        self._code_editor.open_or_focus_tab(worker_tool_id, path)
+        pending_content = self._pending_worker_code_content.pop(worker_tool_id, None)
+        if pending_content is not None:
+            self._code_editor.stream_content(worker_tool_id, pending_content)
+
+    def _on_code_content_updated(self, worker_tool_id: str, content: str) -> None:
+        if worker_tool_id not in self._worker_code_paths:
+            self._pending_worker_code_content[worker_tool_id] = content
+            return
+        self._code_editor.stream_content(worker_tool_id, content)
 
     def add_diff_card(
         self,
@@ -789,6 +812,8 @@ class AuraPlayground(QWidget):
         self._code_editor.close_all_tabs()
         self._info_hub.clear()
         self._controllers.clear()
+        self._worker_code_paths.clear()
+        self._pending_worker_code_content.clear()
 
     def add_mermaid_artifact(self, code: str):
         pass

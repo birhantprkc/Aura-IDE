@@ -176,12 +176,18 @@ class ToolStreamController(QObject):
         escaped = False
         for char in raw_tail:
             if escaped:
-                if char == 'n': content_chars.append('\n')
-                elif char == 't': content_chars.append('\t')
-                elif char == 'r': content_chars.append('\r')
-                elif char == '"': content_chars.append('"')
-                elif char == '\\': content_chars.append('\\')
-                else: content_chars.append('\\' + char)
+                if char == 'n':
+                    content_chars.append('\n')
+                elif char == 't':
+                    content_chars.append('\t')
+                elif char == 'r':
+                    content_chars.append('\r')
+                elif char == '"':
+                    content_chars.append('"')
+                elif char == '\\':
+                    content_chars.append('\\')
+                else:
+                    content_chars.append('\\' + char)
                 escaped = False
             elif char == '\\':
                 escaped = True

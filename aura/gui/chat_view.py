@@ -33,6 +33,7 @@ class ChatView(QScrollArea):
 
     retry_requested = Signal()
     mermaid_detected = Signal(str)  # emits the raw mermaid code
+    _CODE_TOOL_NAMES = {"write_file", "edit_file", "edit_symbol"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -56,6 +57,13 @@ class ChatView(QScrollArea):
         self._terminal_cards: dict[str, TerminalCard] = {}
         # Map tool_call_id -> ToolStreamController.
         self._controllers: dict[str, ToolStreamController] = {}
+        # Per assistant turn: route repeated write/edit calls for the same path
+        # into one visible CodeWriterCard.
+        self._code_cards_by_path: dict[str, CodeWriterCard] = {}
+        self._tool_to_code_card: dict[str, CodeWriterCard] = {}
+        self._code_card_paths_by_tool: dict[str, str] = {}
+        self._pending_code_content: dict[str, str] = {}
+        self._pending_code_results: dict[str, bool] = {}
         self._empty_hint: QLabel | None = None
         self._scroll_anim: QPropertyAnimation | None = None
         self._compact_tools: bool = False
@@ -164,6 +172,7 @@ class ChatView(QScrollArea):
         self._spec_cards.clear()
         self._terminal_cards.clear()
         self._controllers.clear()
+        self._clear_code_card_routes()
         self._compact_tool_names.clear()
         self._auto_follow_bottom = True
         self._last_scroll_max = 0
@@ -184,6 +193,7 @@ class ChatView(QScrollArea):
         self._current_assistant = None  # next assistant turn opens a new card
 
     def begin_assistant(self) -> AssistantCard:
+        self._clear_code_card_routes()
         card = AssistantCard(compact_tools=self._compact_tools, parent=self)
         card._chat_view = self
         self._current_assistant = card
@@ -198,6 +208,68 @@ class ChatView(QScrollArea):
         if self._current_assistant is None:
             return self.begin_assistant()
         return self._current_assistant
+
+    def _clear_code_card_routes(self) -> None:
+        self._code_cards_by_path.clear()
+        self._tool_to_code_card.clear()
+        self._code_card_paths_by_tool.clear()
+        self._pending_code_content.clear()
+        self._pending_code_results.clear()
+
+    def _code_card_key(self, path: str) -> str:
+        return path.strip()
+
+    def _ensure_tool_cluster_visible(self, ac: AssistantCard) -> None:
+        if not ac._tool_cluster.isVisible():
+            ac._tool_cluster.setVisible(True)
+
+    def _resolve_code_card(
+        self, tool_call_id: str, name: str, path: str, ac: AssistantCard
+    ) -> None:
+        key = self._code_card_key(path)
+        if not key:
+            return
+
+        card = self._tool_to_code_card.get(tool_call_id)
+        if card is None:
+            card = self._code_cards_by_path.get(key)
+            if card is None:
+                card = CodeWriterCard(name, parent=self)
+                self._ensure_tool_cluster_visible(ac)
+                ac._tool_cluster_layout.addWidget(card)
+                self._code_cards_by_path[key] = card
+            card.begin_update(name)
+            self._tool_to_code_card[tool_call_id] = card
+            self._code_card_paths_by_tool[tool_call_id] = key
+        else:
+            old_key = self._code_card_paths_by_tool.get(tool_call_id)
+            if old_key and old_key != key and self._code_cards_by_path.get(old_key) is card:
+                self._code_cards_by_path.pop(old_key, None)
+            self._code_cards_by_path[key] = card
+            self._code_card_paths_by_tool[tool_call_id] = key
+
+        card.set_target_path(path)
+        pending_content = self._pending_code_content.pop(tool_call_id, None)
+        if pending_content is not None:
+            card.update_content(pending_content)
+        pending_result = self._pending_code_results.pop(tool_call_id, None)
+        if pending_result is not None:
+            card.set_result(pending_result)
+        self._scroll_to_bottom()
+
+    def _update_code_content(self, tool_call_id: str, content: str) -> None:
+        card = self._tool_to_code_card.get(tool_call_id)
+        if card is None:
+            self._pending_code_content[tool_call_id] = content
+            return
+        card.update_content(content)
+
+    def _set_code_result(self, tool_call_id: str, ok: bool) -> None:
+        card = self._tool_to_code_card.get(tool_call_id)
+        if card is None:
+            self._pending_code_results[tool_call_id] = ok
+            return
+        card.set_result(ok)
 
     def append_reasoning(self, text: str) -> None:
         self.current_assistant().append_reasoning(text)
@@ -244,17 +316,24 @@ class ChatView(QScrollArea):
             self._controllers[tool_call_id] = controller
 
         ac = self.current_assistant()
-        if name in ("write_file", "edit_file", "edit_symbol"):
-            card = CodeWriterCard(name, parent=self)
-            if not ac._tool_cluster.isVisible():
-                ac._tool_cluster.setVisible(True)
-            ac._tool_cluster_layout.addWidget(card)
+        if name in self._CODE_TOOL_NAMES:
             self._tool_owner[tool_call_id] = ac
 
-            # Wire code writer signals
-            controller.path_resolved.connect(card.set_target_path)
-            controller.content_updated.connect(card.update_content)
-            controller.state_changed.connect(lambda s: card.set_result(s == "done"))
+            # Defer visible card creation until the target path is known. Once
+            # resolved, multiple tool calls for the same path share one card.
+            controller.path_resolved.connect(
+                lambda path, tid=tool_call_id, tool=name, owner=ac: self._resolve_code_card(
+                    tid, tool, path, owner
+                )
+            )
+            controller.content_updated.connect(
+                lambda content, tid=tool_call_id: self._update_code_content(
+                    tid, content
+                )
+            )
+            controller.state_changed.connect(
+                lambda s, tid=tool_call_id: self._set_code_result(tid, s == "done")
+            )
 
         elif name == "dispatch_to_worker" or name == "run_research":
             card = PlanWriterCard(parent=self)

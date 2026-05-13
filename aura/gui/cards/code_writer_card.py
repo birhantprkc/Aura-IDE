@@ -1,7 +1,7 @@
 """Card for showing code being written/edited in real time."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QFrame,
@@ -36,6 +36,14 @@ class CodeWriterCard(QFrame):
         self._name = name
         self._path: str = ""
         self._state = self.STATE_RUNNING
+        self._operation_count = 0
+        self._completed_operations = 0
+        self._active_operations = 0
+        self._pending_content: str | None = None
+        self._content_timer = QTimer(self)
+        self._content_timer.setSingleShot(True)
+        self._content_timer.setInterval(35)
+        self._content_timer.timeout.connect(self._apply_pending_content)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -95,6 +103,15 @@ class CodeWriterCard(QFrame):
 
         _fade_in_widget(self)
 
+    def begin_update(self, name: str | None = None) -> None:
+        """Mark that another write/edit operation is streaming into this card."""
+        if name:
+            self._name = name
+        self._operation_count += 1
+        self._active_operations += 1
+        self._state = self.STATE_RUNNING
+        self._refresh_header()
+
     def _toggle_body(self) -> None:
         self._body.setVisible(not self._body.isVisible())
         self._refresh_header()
@@ -103,7 +120,7 @@ class CodeWriterCard(QFrame):
         chev = "v" if self._body.isVisible() else ">"
         state_str = {
             self.STATE_RUNNING: "…",
-            self.STATE_DONE: "Applied ✓",
+            self.STATE_DONE: self._done_label(),
             self.STATE_FAILED: "Failed ✗",
         }[self._state]
         state_color = {
@@ -111,7 +128,7 @@ class CodeWriterCard(QFrame):
             self.STATE_DONE: SUCCESS,
             self.STATE_FAILED: DANGER,
         }[self._state]
-        label = self._path if self._path else "Writing code…"
+        label = self._path if self._path else "Editing path…"
         prefix = f"{chev} 📝 "
         suffix = f"  {state_str}"
         metrics = QFontMetrics(self._header.font())
@@ -144,10 +161,23 @@ class CodeWriterCard(QFrame):
 
     def update_content(self, content: str) -> None:
         """Update code content and adjust height."""
-        self._code_view.setPlainText(content)
-        self._auto_size_code_view()
+        self._pending_content = content
+        self._content_timer.start()
         if not self._body.isVisible():
             self._body.setVisible(True)
+
+    def _apply_pending_content(self) -> None:
+        """Apply the latest buffered content update.
+
+        TODO: This is the boundary for future delete/retype animation and diff
+        highlights. For now, the newest complete content replaces the view.
+        """
+        if self._pending_content is None:
+            return
+        content = self._pending_content
+        self._pending_content = None
+        self._code_view.setPlainText(content)
+        self._auto_size_code_view()
 
     def _auto_size_code_view(self) -> None:
         doc = self._code_view.document()
@@ -158,8 +188,25 @@ class CodeWriterCard(QFrame):
         self._code_view.setFixedHeight(int(clamped))
 
     def set_result(self, ok: bool) -> None:
-        self._state = self.STATE_DONE if ok else self.STATE_FAILED
+        if self._pending_content is not None:
+            self._content_timer.stop()
+            self._apply_pending_content()
+
+        if ok:
+            self._completed_operations += 1
+        if self._active_operations > 0:
+            self._active_operations -= 1
+
+        if ok and self._active_operations > 0:
+            self._state = self.STATE_RUNNING
+        else:
+            self._state = self.STATE_DONE if ok else self.STATE_FAILED
         if not ok:
             # Auto-expand body on failure
             self._body.setVisible(True)
         self._refresh_header()
+
+    def _done_label(self) -> str:
+        if self._completed_operations > 1:
+            return f"{self._completed_operations} edits applied ✓"
+        return "Applied ✓"

@@ -66,6 +66,8 @@ class CodeEditorPane(QWidget):
         # Internal tracking
         self._editors: dict[str, QPlainTextEdit] = {}
         self._typing_state: dict[str, dict] = {}
+        self._tool_aliases: dict[str, str] = {}
+        self._worker_tabs_by_path: dict[str, str] = {}
         # Map tab index -> tool_id so we can clean up on close
         self._tab_index_to_tool_id: dict[int, str] = {}
         self._file_tabs: dict[Path, QPlainTextEdit] = {}
@@ -125,14 +127,35 @@ class CodeEditorPane(QWidget):
             file_path: Absolute or relative path to the file being edited.
         """
         # If a tab for this tool_id already exists, just focus it
-        if tool_id in self._editors:
-            idx = self._tabs.indexOf(self._editors[tool_id])
+        canonical_tool_id = self._canonical_tool_id(tool_id)
+        if canonical_tool_id in self._editors:
+            idx = self._tabs.indexOf(self._editors[canonical_tool_id])
             if idx >= 0:
                 self._tabs.setCurrentIndex(idx)
             return
 
+        path_key = self._worker_path_key(file_path)
         basename = Path(file_path).name
         language = language_from_path(file_path)
+        existing_tool_id = self._worker_tabs_by_path.get(path_key)
+        existing_editor = (
+            self._editors.get(existing_tool_id) if existing_tool_id is not None else None
+        )
+        if existing_tool_id is not None and existing_editor is not None:
+            self._tool_aliases[tool_id] = existing_tool_id
+            self._editors[tool_id] = existing_editor
+            state = self._typing_state.get(existing_tool_id)
+            if state is not None:
+                state["active_count"] = state.get("active_count", 0) + 1
+                state["target"] = ""
+                state["position"] = 0
+                state["timer"].stop()
+            existing_editor.clear()
+            idx = self._tabs.indexOf(existing_editor)
+            if idx >= 0:
+                self._tabs.setTabText(idx, f"{basename} ●")
+                self._tabs.setCurrentIndex(idx)
+            return
 
         editor = self._create_editor(Path(file_path))
 
@@ -143,6 +166,8 @@ class CodeEditorPane(QWidget):
         self._tabs.setCurrentIndex(idx)
 
         self._editors[tool_id] = editor
+        self._tool_aliases[tool_id] = tool_id
+        self._worker_tabs_by_path[path_key] = tool_id
         self._tab_index_to_tool_id[idx] = tool_id
 
         # Initialise typing state
@@ -152,7 +177,9 @@ class CodeEditorPane(QWidget):
             "position": 0,
             "language": language,
             "path": file_path,
+            "path_key": path_key,
             "basename": basename,
+            "active_count": 1,
         }
         timer: QTimer = self._typing_state[tool_id]["timer"]
         timer.timeout.connect(lambda tid=tool_id: self._on_typing_tick(tid))
@@ -169,9 +196,16 @@ class CodeEditorPane(QWidget):
             tool_id: The worker_tool_id previously passed to open_or_focus_tab.
             content: The latest full content of the file.
         """
-        state = self._typing_state.get(tool_id)
+        canonical_tool_id = self._canonical_tool_id(tool_id)
+        state = self._typing_state.get(canonical_tool_id)
         if state is None:
             return
+        editor = self._editors.get(canonical_tool_id)
+        if editor is not None:
+            visible_content = editor.toPlainText()
+            if visible_content and not content.startswith(visible_content):
+                state["position"] = 0
+                editor.clear()
         state["target"] = content
         timer: QTimer = state["timer"]
         if not timer.isActive():
@@ -183,14 +217,15 @@ class CodeEditorPane(QWidget):
         Args:
             tool_id: The worker_tool_id previously passed to open_or_focus_tab.
         """
-        state = self._typing_state.get(tool_id)
+        canonical_tool_id = self._canonical_tool_id(tool_id)
+        state = self._typing_state.get(canonical_tool_id)
         if state is None:
             return
 
         timer: QTimer = state["timer"]
         timer.stop()
 
-        editor = self._editors.get(tool_id)
+        editor = self._editors.get(canonical_tool_id)
         if editor is not None:
             # Flush all remaining content
             target = state["target"]
@@ -200,8 +235,13 @@ class CodeEditorPane(QWidget):
             sb.setValue(sb.maximum())
 
         # Update tab label
+        state["active_count"] = max(0, state.get("active_count", 1) - 1)
+        self._tool_aliases.pop(tool_id, None)
+        if tool_id != canonical_tool_id:
+            self._editors.pop(tool_id, None)
+
         idx = self._tabs.indexOf(editor) if editor is not None else -1
-        if idx >= 0:
+        if idx >= 0 and state["active_count"] == 0:
             basename = state["basename"]
             self._tabs.setTabText(idx, f"{basename} ✓")
 
@@ -215,6 +255,8 @@ class CodeEditorPane(QWidget):
 
         self._typing_state.clear()
         self._editors.clear()
+        self._tool_aliases.clear()
+        self._worker_tabs_by_path.clear()
         self._tab_index_to_tool_id.clear()
         self._file_tabs.clear()
         self._editor_file_paths.clear()
@@ -231,9 +273,11 @@ class CodeEditorPane(QWidget):
             timer: QTimer = state["timer"]
             timer.stop()
             timer.deleteLater()
-        worker_editors = list(self._editors.values())
+        worker_editors = list(dict.fromkeys(self._editors.values()))
         self._typing_state.clear()
         self._editors.clear()
+        self._tool_aliases.clear()
+        self._worker_tabs_by_path.clear()
         self._tab_index_to_tool_id.clear()
 
         self._tabs.blockSignals(True)
@@ -274,6 +318,12 @@ class CodeEditorPane(QWidget):
     def _current_editor(self) -> QPlainTextEdit | None:
         current = self._tabs.currentWidget()
         return current if isinstance(current, QPlainTextEdit) else None
+
+    def _canonical_tool_id(self, tool_id: str) -> str:
+        return self._tool_aliases.get(tool_id, tool_id)
+
+    def _worker_path_key(self, file_path: str) -> str:
+        return Path(file_path).as_posix()
 
     def _on_editor_context_menu(self, editor: QPlainTextEdit, pos) -> None:
         menu = QMenu(editor)
@@ -377,11 +427,12 @@ class CodeEditorPane(QWidget):
 
     def _on_typing_tick(self, tool_id: str) -> None:
         """Reveal ~5 more characters of the target content."""
-        state = self._typing_state.get(tool_id)
+        canonical_tool_id = self._canonical_tool_id(tool_id)
+        state = self._typing_state.get(canonical_tool_id)
         if state is None:
             return
 
-        editor = self._editors.get(tool_id)
+        editor = self._editors.get(canonical_tool_id)
         if editor is None:
             return
 
@@ -410,6 +461,14 @@ class CodeEditorPane(QWidget):
                 timer: QTimer = state["timer"]
                 timer.stop()
                 timer.deleteLater()
+                self._worker_tabs_by_path.pop(state.get("path_key", ""), None)
+            aliases = [
+                tid for tid, canonical in self._tool_aliases.items()
+                if canonical == tool_id
+            ]
+            for alias in aliases:
+                self._tool_aliases.pop(alias, None)
+                self._editors.pop(alias, None)
             self._editors.pop(tool_id, None)
 
         self._tabs.removeTab(index)
@@ -420,6 +479,8 @@ class CodeEditorPane(QWidget):
         # Rebuild the index -> tool_id mapping since indices shifted
         self._tab_index_to_tool_id.clear()
         for tid, editor in self._editors.items():
+            if self._canonical_tool_id(tid) != tid:
+                continue
             idx = self._tabs.indexOf(editor)
             if idx >= 0:
                 self._tab_index_to_tool_id[idx] = tid
