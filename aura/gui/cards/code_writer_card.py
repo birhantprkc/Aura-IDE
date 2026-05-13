@@ -29,6 +29,36 @@ class CodeWriterCard(QFrame):
     STATE_DONE = "done"
     STATE_FAILED = "failed"
 
+    # Animation timing / thresholds
+    _ANIM_TICK_MS = 16          # ~60 fps
+    _DELETE_CHARS_PER_TICK = 3
+    _RETYPE_CHARS_PER_TICK = 5
+    _INSTANT_TOTAL_CHARS = 5000
+    _INSTANT_CHANGED_CHARS = 1500
+
+    @staticmethod
+    def _compute_changed_region(old_text: str, new_text: str) -> tuple[int, int, str, str]:
+        """Return (prefix_len, suffix_len, old_middle, new_middle).
+
+        Finds the longest common prefix and the longest common suffix that
+        does not overlap the prefix, isolating the changed middle region.
+        """
+        prefix_len = 0
+        while prefix_len < len(old_text) and prefix_len < len(new_text) and old_text[prefix_len] == new_text[prefix_len]:
+            prefix_len += 1
+
+        suffix_len = 0
+        # Common suffix must not overlap the prefix region in either string
+        while (suffix_len < len(old_text) - prefix_len
+               and suffix_len < len(new_text) - prefix_len
+               and old_text[len(old_text) - 1 - suffix_len] == new_text[len(new_text) - 1 - suffix_len]):
+            suffix_len += 1
+
+        old_middle = old_text[prefix_len:len(old_text) - suffix_len] if suffix_len else old_text[prefix_len:]
+        new_middle = new_text[prefix_len:len(new_text) - suffix_len] if suffix_len else new_text[prefix_len:]
+
+        return (prefix_len, suffix_len, old_middle, new_middle)
+
     def __init__(self, name: str, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("toolCard")
@@ -44,6 +74,21 @@ class CodeWriterCard(QFrame):
         self._content_timer.setSingleShot(True)
         self._content_timer.setInterval(35)
         self._content_timer.timeout.connect(self._apply_pending_content)
+
+        # Animation state
+        self._animating = False
+        self._animation_target: str | None = None
+        self._animation_phase: str = ""       # "delete" | "retype" | ""
+        self._animation_prefix = ""
+        self._animation_suffix = ""
+        self._animation_old_middle = ""
+        self._animation_new_middle = ""
+        self._animation_char_index = 0
+
+        self._animation_timer = QTimer(self)
+        self._animation_timer.setSingleShot(False)
+        self._animation_timer.setInterval(self._ANIM_TICK_MS)
+        self._animation_timer.timeout.connect(self._tick_animation)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -166,18 +211,29 @@ class CodeWriterCard(QFrame):
         if not self._body.isVisible():
             self._body.setVisible(True)
 
-    def _apply_pending_content(self) -> None:
-        """Apply the latest buffered content update.
+    def _set_code_text(self, text: str) -> None:
+        """Set code view text without triggering auto-size (for animation frames)."""
+        self._code_view.setPlainText(text)
 
-        TODO: This is the boundary for future delete/retype animation and diff
-        highlights. For now, the newest complete content replaces the view.
-        """
+    def _apply_text_immediately(self, text: str) -> None:
+        """Instantly replace code view content and auto-size."""
+        self._code_view.setPlainText(text)
+        self._auto_size_code_view()
+
+    def _apply_pending_content(self) -> None:
+        """Apply the latest buffered content update with animation if appropriate."""
         if self._pending_content is None:
             return
-        content = self._pending_content
+        new_text = self._pending_content
         self._pending_content = None
-        self._code_view.setPlainText(content)
-        self._auto_size_code_view()
+
+        if self._animating:
+            # Store as latest target; current animation will chain to it on finish
+            self._animation_target = new_text
+            return
+
+        old_text = self._code_view.toPlainText()
+        self._animate_to_content(old_text, new_text)
 
     def _auto_size_code_view(self) -> None:
         doc = self._code_view.document()
@@ -187,10 +243,102 @@ class CodeWriterCard(QFrame):
         clamped = max(120, min(doc_height, 600))
         self._code_view.setFixedHeight(int(clamped))
 
+    def _should_animate(self, old_text: str, new_text: str) -> bool:
+        """Return True if delete/retype animation should be used.
+
+        Skips animation for very large texts, empty old text (no prior
+        content), or when the changed region is too large.
+        """
+        if len(old_text) > self._INSTANT_TOTAL_CHARS or len(new_text) > self._INSTANT_TOTAL_CHARS:
+            return False
+        if not old_text:
+            return False
+        if old_text == new_text:
+            return False
+
+        _prefix_len, _suffix_len, old_mid, new_mid = self._compute_changed_region(old_text, new_text)
+        return max(len(old_mid), len(new_mid)) <= self._INSTANT_CHANGED_CHARS
+
+    def _animate_to_content(self, old_text: str, new_text: str) -> None:
+        """Animate from old_text to new_text, or instantly replace if animation is skipped."""
+        if old_text == new_text:
+            return
+        if not self._should_animate(old_text, new_text):
+            self._apply_text_immediately(new_text)
+            return
+        self._start_animation(old_text, new_text)
+
+    def _start_animation(self, old_text: str, new_text: str) -> None:
+        """Begin the delete/retype animation from old_text to new_text."""
+        prefix_len, suffix_len, old_mid, new_mid = self._compute_changed_region(old_text, new_text)
+
+        self._animation_prefix = old_text[:prefix_len]
+        self._animation_suffix = old_text[len(old_text) - suffix_len:] if suffix_len > 0 else ""
+        self._animation_old_middle = old_mid
+        self._animation_new_middle = new_mid
+
+        if old_mid:
+            self._animation_phase = "delete"
+            self._animation_char_index = len(old_mid)
+        else:
+            self._animation_phase = "retype"
+            self._animation_char_index = 0
+
+        self._animation_target = None
+        self._animating = True
+        self._animation_timer.start()
+
+    def _tick_animation(self) -> None:
+        """Process one animation frame (connected to _animation_timer.timeout)."""
+        if self._animation_phase == "delete":
+            self._animation_char_index = max(0, self._animation_char_index - self._DELETE_CHARS_PER_TICK)
+            display = self._animation_prefix + self._animation_old_middle[:self._animation_char_index] + self._animation_suffix
+            self._set_code_text(display)
+            if self._animation_char_index == 0:
+                # Transition to retype phase
+                if self._animation_new_middle:
+                    self._animation_phase = "retype"
+                    self._animation_char_index = 0
+                else:
+                    self._finish_animation()
+        elif self._animation_phase == "retype":
+            self._animation_char_index = min(len(self._animation_new_middle),
+                                             self._animation_char_index + self._RETYPE_CHARS_PER_TICK)
+            display = self._animation_prefix + self._animation_new_middle[:self._animation_char_index] + self._animation_suffix
+            self._set_code_text(display)
+            if self._animation_char_index >= len(self._animation_new_middle):
+                self._finish_animation()
+
+    def _finish_animation(self) -> None:
+        """Complete the current animation and chain to queued target if any."""
+        self._animation_timer.stop()
+        final_text = self._animation_prefix + self._animation_new_middle + self._animation_suffix
+        next_target = self._animation_target
+        self._animation_target = None
+        self._animating = False
+
+        if next_target is not None and next_target != final_text:
+            self._animate_to_content(final_text, next_target)
+        else:
+            self._apply_text_immediately(final_text)
+
+    def _force_finish_animation(self) -> None:
+        """Immediately stop any running animation and show final content."""
+        if not self._animating:
+            return
+        self._animation_timer.stop()
+        final_text = self._animation_prefix + self._animation_new_middle + self._animation_suffix
+        next_target = self._animation_target
+        self._animation_target = None
+        self._animating = False
+        self._apply_text_immediately(next_target if next_target is not None else final_text)
+
     def set_result(self, ok: bool) -> None:
         if self._pending_content is not None:
             self._content_timer.stop()
             self._apply_pending_content()
+
+        self._force_finish_animation()
 
         if ok:
             self._completed_operations += 1

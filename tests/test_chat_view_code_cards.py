@@ -52,3 +52,40 @@ def test_buffers_code_content_until_path_resolves(qapp) -> None:
 
     assert len(cards) == 1
     assert chat._pending_code_content == {}
+
+
+class TestComputeChangedRegion:
+    """Tests for CodeWriterCard._compute_changed_region pure helper."""
+
+    def test_identical_text(self):
+        assert CodeWriterCard._compute_changed_region("abc", "abc") == (3, 0, "", "")
+
+    def test_insertion_middle(self):
+        assert CodeWriterCard._compute_changed_region("abc", "abXYZc") == (2, 1, "", "XYZ")
+
+    def test_deletion_middle(self):
+        assert CodeWriterCard._compute_changed_region("abXYZc", "abc") == (2, 1, "XYZ", "")
+
+    def test_replacement_middle(self):
+        assert CodeWriterCard._compute_changed_region("abXXXc", "abYYc") == (2, 1, "XXX", "YY")
+
+    def test_no_common_suffix(self):
+        assert CodeWriterCard._compute_changed_region("abcdef", "abcXYZ") == (3, 0, "def", "XYZ")
+
+    def test_no_common_prefix(self):
+        assert CodeWriterCard._compute_changed_region("XXXX", "YYYY") == (0, 0, "XXXX", "YYYY")
+
+    def test_empty_old(self):
+        assert CodeWriterCard._compute_changed_region("", "hello") == (0, 0, "", "hello")
+
+    def test_empty_new(self):
+        assert CodeWriterCard._compute_changed_region("hello", "") == (0, 0, "hello", "")
+
+    def test_both_empty(self):
+        assert CodeWriterCard._compute_changed_region("", "") == (0, 0, "", "")
+
+    def test_prefix_overlaps_suffix(self):
+        # "aba" vs "aca": prefix="a", suffix="a" (position 2, no overlap with prefix at 0)
+        # prefix_len=1, suffix_len=1, old_mid="b", new_mid="c"
+        result = CodeWriterCard._compute_changed_region("aba", "aca")
+        assert result == (1, 1, "b", "c"), f"Got {result}"
