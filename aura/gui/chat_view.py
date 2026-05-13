@@ -368,6 +368,7 @@ class ChatView(QScrollArea):
         files: list[str],
         spec: str,
         acceptance: str,
+        summary: str = "",
     ) -> SpecCard:
         # Hide any in-flight plan writer card for this call ID (baton pass).
         controller = self._controllers.get(tool_call_id)
@@ -383,9 +384,9 @@ class ChatView(QScrollArea):
 
         existing = self._spec_cards.get(tool_call_id)
         if existing is not None:
-            existing.update_spec(goal, files, spec, acceptance)
+            existing.update_spec(goal, files, spec, acceptance, summary)
             return existing
-        card = SpecCard(tool_call_id, goal, files, spec, acceptance, parent=self)
+        card = SpecCard(tool_call_id, goal, files, spec, acceptance, summary=summary, parent=self)
         ac = self.current_assistant()
         ac.add_footer_widget(card)
         self._spec_cards[tool_call_id] = card
