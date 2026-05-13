@@ -186,8 +186,8 @@ def get_update_status(
 ) -> UpdateStatus:
     """Fetch update status for Aura, automatically choosing the correct backend."""
     if is_packaged():
-        return _get_packaged_update_status(output_callback)
-    return _get_git_update_status(repo_root, output_callback)
+        return _get_packaged_update_status(output_callback=output_callback)
+    return _get_git_update_status(repo_root, output_callback=output_callback)
 
 
 def _get_packaged_update_status(

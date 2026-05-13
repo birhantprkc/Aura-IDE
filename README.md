@@ -818,6 +818,10 @@ python scripts/build_exe.py     # Build a standalone executable (PyInstaller)
 python scripts/build_nuitka.py  # Build with Nuitka (faster, smaller)
 ```
 
+### Release Process
+
+To publish a Windows release, bump `aura/version.py`, create a GitHub Release tagged `vX.Y.Z`, and the release workflow will attach `Aura-Windows-x64.zip` automatically.
+
 ### Requirements
 
 - Python 3.10+
