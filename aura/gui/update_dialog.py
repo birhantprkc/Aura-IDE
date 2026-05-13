@@ -1,7 +1,6 @@
 """Updater dialog for Aura, supporting both Git and packaged updates."""
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -168,6 +167,16 @@ class UpdateDialog(QDialog):
 
     def _on_action(self) -> None:
         if is_packaged():
+            from PySide6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self,
+                "Install Update",
+                "Aura will close, install the update, and relaunch. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
             self._append_output("Downloading and installing update...")
             self._start_worker("install")
         else:
@@ -249,9 +258,10 @@ class UpdateDialog(QDialog):
         if result.success:
             if is_packaged():
                 self._summary.setText("Update script launched. Aura will now exit.")
+                from PySide6.QtCore import QTimer
+                from PySide6.QtWidgets import QApplication
                 # Automatically exit after a short delay to allow the script to take over
-                QThread.msleep(2000)
-                sys.exit(0)
+                QTimer.singleShot(2000, QApplication.quit)
             else:
                 old_commit = _short(result.old_commit)
                 new_commit = _short(result.new_commit)

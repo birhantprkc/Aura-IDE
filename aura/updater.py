@@ -56,6 +56,15 @@ class GitHubRelease:
     @property
     def packaged_asset(self) -> GitHubAsset | None:
         """Find a ZIP asset likely to be the Windows packaged app."""
+        # Prefer exact match
+        for asset in self.assets:
+            if asset.name.lower() == "aura-windows-x64.zip":
+                return asset
+        # Fall back to likely candidates
+        for asset in self.assets:
+            name = asset.name.lower()
+            if name.endswith(".zip") and ("windows" in name or "win" in name) and "x64" in name:
+                return asset
         for asset in self.assets:
             name = asset.name.lower()
             if name.endswith(".zip") and ("windows" in name or "win" in name or "aura" in name):
@@ -253,8 +262,14 @@ def install_packaged_update(
             output_callback("Extracting update...")
 
         extract_dir = temp_dir / "extracted"
+        extract_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(extract_dir)
+            for member in zip_ref.infolist():
+                member_path = Path(member.filename)
+                if member_path.is_absolute() or ".." in member_path.parts:
+                    logger.warning("Skipping unsafe zip member: %s", member.filename)
+                    continue
+                zip_ref.extract(member, extract_dir)
 
         # Locate the new app folder/executable
         new_app_dir: Path | None = None
@@ -279,12 +294,39 @@ def install_packaged_update(
             return PullResult(False, None, message=msg, error=msg)
 
         current_app_dir = get_current_app_dir()
+        
+        # --- Strict Validation before Robocopy ---
+        if not current_app_dir.exists():
+            return PullResult(False, None, message="Current app directory does not exist.")
+        if not (current_app_dir / "Aura.exe").exists() or not (current_app_dir / "media").exists():
+            return PullResult(False, None, message="Current app is missing critical files (Aura.exe or media folder).")
+            
+        current_name = current_app_dir.name.lower()
+        if current_name != "aura.dist" and "aura" not in current_name:
+            return PullResult(False, None, message="Current app directory does not look like a packaged Aura install.")
+            
+        home_dir = Path.home().resolve()
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        curr_resolved = current_app_dir.resolve()
+        if curr_resolved == home_dir or curr_resolved == temp_root or curr_resolved.parent == curr_resolved:
+            return PullResult(False, None, message="Current app directory is a protected system directory.")
+            
+        if not (new_app_dir / "Aura.exe").exists() or not (new_app_dir / "media").exists():
+            return PullResult(False, None, message="Extracted update is missing critical files.")
+            
+        try:
+            if not new_app_dir.resolve().is_relative_to(temp_dir.resolve()):
+                return PullResult(False, None, message="Extracted update is outside the temporary directory.")
+        except ValueError:
+            return PullResult(False, None, message="Extracted update is outside the temporary directory.")
+        # -----------------------------------------
+
         if output_callback:
             output_callback(f"Found new version in {new_app_dir}")
             output_callback("Launching external updater...")
 
         # Create the updater script
-        script_path = _create_windows_updater(new_app_dir, current_app_dir)
+        script_path = _create_windows_updater(new_app_dir, current_app_dir, temp_dir, os.getpid())
         
         # Launch detached
         if sys.platform == "win32":
@@ -304,13 +346,16 @@ def install_packaged_update(
         return PullResult(False, None, message=f"Update failed: {exc}", error=str(exc))
 
 
-def _create_windows_updater(new_app_dir: Path, current_app_dir: Path) -> Path:
+def _create_windows_updater(new_app_dir: Path, current_app_dir: Path, temp_update_dir: Path, pid: int) -> Path:
     """Generate a .cmd script to replace the app files and relaunch Aura."""
+    if not temp_update_dir.exists() or temp_update_dir.resolve() == Path(tempfile.gettempdir()).resolve():
+        raise RuntimeError("Invalid temp update dir for cleanup")
+
     script_content = f"""@echo off
 setlocal
 echo Waiting for Aura to exit...
 :wait
-tasklist /FI "IMAGENAME eq Aura.exe" 2>NUL | find /I /N "Aura.exe">NUL
+tasklist /FI "PID eq {pid}" 2>NUL | find /I "{pid}">NUL
 if "%ERRORLEVEL%"=="0" (
     timeout /t 1 /nobreak >nul
     goto wait
@@ -327,7 +372,7 @@ if %ERRORLEVEL% GEQ 8 (
 
 echo Update successful!
 echo Cleaning up...
-rmdir /s /q "{new_app_dir.parent.parent}"
+rmdir /s /q "{temp_update_dir}"
 
 echo Relaunching Aura...
 start "" "{current_app_dir}\\Aura.exe"
