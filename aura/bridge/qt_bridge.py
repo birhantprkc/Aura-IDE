@@ -367,8 +367,10 @@ class _DispatchProxy(QObject):
     ) -> WorkerDispatchResult:
         worker_history = History()
         base_prompt = self._worker_system_prompt if self._worker_system_prompt else WORKER_SYSTEM_PROMPT
-        from aura.prompts import inject_tier1_context
-        worker_history.set_system(inject_tier1_context(base_prompt, self._tier1_context))
+        from aura.prompts import inject_private_worker_style, inject_tier1_context
+        full_prompt = inject_tier1_context(base_prompt, self._tier1_context)
+        full_prompt = inject_private_worker_style(full_prompt)
+        worker_history.set_system(full_prompt)
         worker_history.append_user_text(_format_spec_as_user_message(req))
 
         worker_registry = self._registry_factory("worker")

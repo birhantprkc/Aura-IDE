@@ -27,3 +27,6 @@ env/
 Thumbs.db
 /GEMINI.md
 /build/
+/aura/private_style.py
+/aura/private_style.md
+/aura/private_style_local.py

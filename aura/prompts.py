@@ -203,6 +203,39 @@ def inject_tier1_context(prompt: str, tier1_context: str) -> str:
     return prompt.replace(TIER1_CONTEXT_PLACEHOLDER, tier1_context, 1)
 
 
+def inject_private_worker_style(prompt: str) -> str:
+    """Attempt to read private style guidance from aura/private_style.md and append it.
+
+    This is a local-only private feature. If the file is missing or empty,
+    returns the original prompt.
+    """
+    from pathlib import Path
+
+    # We look for aura/private_style.md relative to this file's parent
+    # but more robustly, we can just check the current working directory's aura/ folder
+    # or use paths.py if available. aura/prompts.py is in aura/
+    try:
+        style_path = Path(__file__).parent / "private_style.md"
+        if style_path.is_file():
+            content = style_path.read_text(encoding="utf-8").strip()
+            if content:
+                return prompt + "\n\nPrivate implementation style guidance:\n" + content
+    except Exception:
+        pass
+
+    # Fallback/alternative: check for the python module if that was the intent
+    try:
+        from aura import private_style_local
+        style = getattr(private_style_local, "PRIVATE_WORKER_STYLE", "").strip()
+        if style:
+            return prompt + "\n\nPrivate implementation style guidance:\n" + style
+    except (ImportError, AttributeError):
+        pass
+
+    return prompt
+
+
+
 def build_tier1_context(workspace_root: Path) -> str:
     """Compose the Tier 1 (Core Context) string for a given workspace.
 
