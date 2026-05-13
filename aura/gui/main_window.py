@@ -31,7 +31,7 @@ from aura.config import (
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
-from aura.gui.input_panel import InputPanel
+from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.send_handler import SendHandler
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.onboarding_dialog import OnboardingDialog
@@ -142,6 +142,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Right pane: worker activity (embedded, not a separate window)
         self._playground = AuraPlayground(parent=self)
+        self._playground.set_workspace_root(self._workspace_root)
+        self._playground.set_read_only_mode(False)
         self._playground_aura = AuraWidget(
             self._playground, glow_color="#00e5ff", glow_spread=24, parent=self
         )
@@ -226,6 +228,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._input.sent.connect(lambda p: self._send_handler.handle_send(p, self.current_model(), self.current_thinking()))
         self._input.stop_requested.connect(self._send_handler.handle_stop)
+        self._tree.file_activated.connect(self._playground.open_file)
+        self._playground.focused_action_requested.connect(self._on_focused_action_requested)
 
         # Worker signal wiring (delegated to WorkerEventHandler).
         self._worker_handler.connect_bridge_signals()
@@ -336,6 +340,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.set_workspace_root(path)
         self._input.set_workspace_root(path)
         self._send_handler.set_workspace_root(path)
+        self._playground.set_workspace_root(path)
         self._tree.set_root(path)
         save_workspace_root(path)
         # New workspace — drop any current conversation pointer (different .aura/).
@@ -371,6 +376,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_read_only_toggled(self, checked: bool) -> None:
         self._bridge.set_read_only(checked)
         self._toolbar.set_read_only(checked)
+        self._playground.set_read_only_mode(checked)
+
+    def _on_focused_action_requested(self, prompt: str) -> None:
+        payload = SendPayload(text=prompt, attachments=[])
+        self._send_handler.handle_send(payload, self.current_model(), self.current_thinking())
 
     def _on_auto_dispatch_toggled(self, checked: bool) -> None:
         self._settings.auto_dispatch = checked

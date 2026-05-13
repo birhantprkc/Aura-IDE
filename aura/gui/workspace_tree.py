@@ -1,8 +1,8 @@
 """Read-only workspace tree pane.
 
 Backed by QFileSystemModel + a thin proxy that hides clutter (dotfiles except
-`.aura`, build/cache directories). Double-click opens
-files in the OS default editor; right-click shows reveal/copy actions.
+`.aura`, build/cache directories). Double-click opens files inside Aura;
+right-click shows Aura/open/reveal/copy actions.
 """
 from __future__ import annotations
 
@@ -99,7 +99,7 @@ class _WorkspaceFilterProxy(QSortFilterProxyModel):
 class WorkspaceTree(QWidget):
     """Filtered file tree rooted at the current workspace.
 
-    Read-only — clicking a file opens it in the OS default editor.
+    Read-only — activating a file asks the main window to open it in Aura.
     """
 
     file_activated = Signal(Path)
@@ -173,7 +173,6 @@ class WorkspaceTree(QWidget):
         if path is None or path.is_dir():
             return
         self.file_activated.emit(path)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _on_context_menu(self, pos) -> None:
         proxy_index = self._view.indexAt(pos)
@@ -184,6 +183,18 @@ class WorkspaceTree(QWidget):
             return
 
         menu = QMenu(self)
+        if path.is_file():
+            open_aura = QAction("Open in Aura", menu)
+            open_aura.triggered.connect(lambda: self.file_activated.emit(path))
+            menu.addAction(open_aura)
+
+            open_external = QAction("Open externally", menu)
+            open_external.triggered.connect(
+                lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+            )
+            menu.addAction(open_external)
+            menu.addSeparator()
+
         reveal_act = QAction("Reveal in Explorer", menu)
         reveal_act.triggered.connect(lambda: self._reveal(path))
         menu.addAction(reveal_act)

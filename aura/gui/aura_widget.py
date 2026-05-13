@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 
 from PySide6.QtCore import (
     QAbstractAnimation, 
@@ -607,6 +608,8 @@ class AuraPlayground(QWidget):
     pane and a tabbed info hub pane (Worker Log + terminal tabs).
     """
 
+    focused_action_requested = Signal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(320)
@@ -651,6 +654,9 @@ class AuraPlayground(QWidget):
         self._info_hub = InfoHubPane(self._splitter)
         self._code_editor.setMinimumHeight(96)
         self._info_hub.setMinimumHeight(48)
+        self._code_editor.focused_action_requested.connect(
+            self.focused_action_requested.emit
+        )
 
         self._splitter.addWidget(self._code_editor)
         self._splitter.addWidget(self._info_hub)
@@ -680,13 +686,22 @@ class AuraPlayground(QWidget):
         if self._aura_wrapper:
             self._aura_wrapper.stop_aura()
 
+    def set_workspace_root(self, root: Path | None) -> None:
+        self._code_editor.set_workspace_root(root)
+
+    def set_read_only_mode(self, enabled: bool) -> None:
+        self._code_editor.set_read_only_mode(enabled)
+
+    def open_file(self, path: Path) -> None:
+        self._code_editor.open_file(path)
+
     # ------------------------------------------------------------------
     # Public API (backward-compatible with worker_handler.py)
     # ------------------------------------------------------------------
 
     def begin_assistant(self):
         """Reset the workspace for a new assistant run."""
-        self._code_editor.close_all_tabs()
+        self._code_editor.close_worker_tabs()
         self._info_hub.clear()
         self._controllers.clear()
 
@@ -771,7 +786,9 @@ class AuraPlayground(QWidget):
         pass
 
     def clear(self):
-        self.begin_assistant()
+        self._code_editor.close_all_tabs()
+        self._info_hub.clear()
+        self._controllers.clear()
 
     def add_mermaid_artifact(self, code: str):
         pass
