@@ -289,6 +289,7 @@ class ConversationManager:
                 files=list(req.files),
                 spec=req.spec,
                 acceptance=req.acceptance,
+                summary=req.summary,
             )
         )
         try:

@@ -455,8 +455,15 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         "How the worker (and the user) knows the task is done. Concrete, checkable."
                     ),
                 },
+                "summary": {
+                    "type": "string",
+                    "description": (
+                        "A concise, user-friendly summary of the intended changes. This will be "
+                        "shown to the user in the UI after the worker completes."
+                    ),
+                },
             },
-            "required": ["goal", "files", "spec", "acceptance"],
+            "required": ["goal", "files", "spec", "acceptance", "summary"],
         },
     },
 }

@@ -324,13 +324,14 @@ class _DispatchProxy(QObject):
         files: list[str],
         spec: str,
         acceptance: str,
+        summary: str,
     ) -> None:
         with self._lock:
             pending = self._pending.get(tool_call_id)
         if pending is None:
             return
         pending.edited_request = WorkerDispatchRequest(
-            goal=goal, files=list(files), spec=spec, acceptance=acceptance
+            goal=goal, files=list(files), spec=spec, acceptance=acceptance, summary=summary
         )
         pending.cancelled = False
         pending.decision_event.set()
@@ -1050,6 +1051,12 @@ class ConversationBridge(QObject):
         if self._worker is not None:
             self._worker.deleteLater()
         self._thread = None
+        self._worker = None
+        self.finished.emit()
+
+
+def _dummy_root():
+    return Path.home()
         self._worker = None
         self.finished.emit()
 

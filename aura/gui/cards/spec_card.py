@@ -35,9 +35,10 @@ class SpecCard(QFrame):
         self.setObjectName("card")
         self._tool_call_id = tool_call_id
         self._goal = goal
-        self._files = list(files)
+        self._files = files
         self._spec = spec
         self._acceptance = acceptance
+        self._summary = "" # Will be populated via update_spec or initially
         self._dispatched = False
         self._cancelled = False
         self._worker_running = False

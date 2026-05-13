@@ -94,19 +94,20 @@ class WorkerEventHandler(QObject):
         files: list,
         spec: str,
         acceptance: str,
+        summary: str,
     ) -> None:
         """Auto-dispatch or open the SpecApprovalDialog for user review."""
         if self._bridge.auto_dispatch:
-            self._bridge.user_dispatched(tool_call_id, goal, list(files), spec, acceptance)
+            self._bridge.user_dispatched(tool_call_id, goal, list(files), spec, acceptance, summary)
             return
         # Delayed import to avoid circular dependency at module level.
         from PySide6.QtWidgets import QDialog
         from aura.gui.spec_edit_dialog import SpecApprovalDialog
 
-        dlg = SpecApprovalDialog(goal, list(files), spec, acceptance, parent=self.parent())
+        dlg = SpecApprovalDialog(goal, list(files), spec, acceptance, summary, parent=self.parent())
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._bridge.user_dispatched(
-                tool_call_id, dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance()
+                tool_call_id, dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance(), dlg.summary()
             )
         else:
             self._bridge.user_cancelled_dispatch(tool_call_id)
@@ -116,8 +117,8 @@ class WorkerEventHandler(QObject):
         card = self._chat.get_spec_card(tool_call_id)
         if card is None:
             return
-        goal, files, spec, acceptance = card.current_spec()
-        self._bridge.user_dispatched(tool_call_id, goal, files, spec, acceptance)
+        goal, files, spec, acceptance, summary = card.current_spec()
+        self._bridge.user_dispatched(tool_call_id, goal, files, spec, acceptance, summary)
 
     def _on_edit_spec_clicked(self, tool_call_id: str) -> None:
         """Open the SpecEditDialog pre-populated with the spec card's values."""
@@ -126,10 +127,10 @@ class WorkerEventHandler(QObject):
         card = self._chat.get_spec_card(tool_call_id)
         if card is None:
             return
-        goal, files, spec, acceptance = card.current_spec()
-        dlg = SpecEditDialog(goal, files, spec, acceptance, parent=self.parent())
+        goal, files, spec, acceptance, summary = card.current_spec()
+        dlg = SpecEditDialog(goal, files, spec, acceptance, summary, parent=self.parent())
         if dlg.exec() == SpecEditDialog.DialogCode.Accepted:
-            card.update_spec(dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance())
+            card.update_spec(dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance(), dlg.summary())
 
     def _on_cancel_dispatch_clicked(self, tool_call_id: str) -> None:
         """Cancel the pending dispatch."""

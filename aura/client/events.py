@@ -84,6 +84,7 @@ class WorkerDispatchRequested:
     files: list[str]
     spec: str
     acceptance: str
+    summary: str
 
 
 @dataclass

@@ -26,7 +26,7 @@ from aura.gui.theme import (
 
 
 class SpecEditDialog(QDialog):
-    """Edit goal / files / spec / acceptance before dispatching."""
+    """Edit goal / files / spec / acceptance / summary before dispatching."""
 
     def __init__(
         self,
@@ -34,12 +34,13 @@ class SpecEditDialog(QDialog):
         files: list[str],
         spec: str,
         acceptance: str,
+        summary: str,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit dispatch spec")
         self.setModal(True)
-        self.resize(720, 560)
+        self.resize(720, 620)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(18, 16, 18, 12)
@@ -65,6 +66,11 @@ class SpecEditDialog(QDialog):
         self._acceptance_edit.setMinimumHeight(80)
         form.addRow("Acceptance:", self._acceptance_edit)
 
+        self._summary_edit = QPlainTextEdit(summary)
+        self._summary_edit.setMinimumHeight(60)
+        self._summary_edit.setPlaceholderText("Concise summary of intended changes for the user")
+        form.addRow("Summary:", self._summary_edit)
+
         outer.addLayout(form)
 
         buttons = QDialogButtonBox(
@@ -89,6 +95,9 @@ class SpecEditDialog(QDialog):
     def acceptance(self) -> str:
         return self._acceptance_edit.toPlainText().strip()
 
+    def summary(self) -> str:
+        return self._summary_edit.toPlainText().strip()
+
 
 class SpecApprovalDialog(QDialog):
     """Modal dialog for reviewing and confirming a worker dispatch."""
@@ -99,18 +108,20 @@ class SpecApprovalDialog(QDialog):
         files: list[str],
         spec: str,
         acceptance: str,
+        summary: str,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Dispatch to Worker?")
         self.setModal(True)
-        self.resize(800, 600)
+        self.resize(800, 680)
 
         # Store initial values for editing.
         self._goal = goal
         self._files = list(files)
         self._spec = spec
         self._acceptance = acceptance
+        self._summary = summary
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(18, 16, 18, 12)
@@ -166,6 +177,18 @@ class SpecApprovalDialog(QDialog):
         )
         outer.addWidget(self._acceptance_view)
 
+        # Summary view
+        self._summary_view = QPlainTextEdit()
+        self._summary_view.setReadOnly(True)
+        self._summary_view.setPlainText(self._summary)
+        self._summary_view.setFont(mono)
+        self._summary_view.setMinimumHeight(60)
+        self._summary_view.setStyleSheet(
+            f"QPlainTextEdit {{ background: {BG}; color: {FG_DIM}; "
+            f"border: 1px solid {BORDER}; border-radius: 6px; padding: 8px; font-style: italic; }}"
+        )
+        outer.addWidget(self._summary_view)
+
         # Button row
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
@@ -196,17 +219,19 @@ class SpecApprovalDialog(QDialog):
 
     def _on_edit_spec(self) -> None:
         dlg = SpecEditDialog(
-            self._goal, list(self._files), self._spec, self._acceptance, parent=self
+            self._goal, list(self._files), self._spec, self._acceptance, self._summary, parent=self
         )
         if dlg.exec() == SpecEditDialog.DialogCode.Accepted:
             self._goal = dlg.goal()
             self._files = dlg.files()
             self._spec = dlg.spec()
             self._acceptance = dlg.acceptance()
+            self._summary = dlg.summary()
             self._goal_label.setText(self._goal)
             self._files_label.setText(self._format_files(self._files))
             self._spec_view.setPlainText(self._spec)
             self._acceptance_view.setPlainText(self._acceptance)
+            self._summary_view.setPlainText(self._summary)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Escape:
@@ -227,6 +252,9 @@ class SpecApprovalDialog(QDialog):
 
     def acceptance(self) -> str:
         return self._acceptance
+
+    def summary(self) -> str:
+        return self._summary
 
     def dispatched(self) -> bool:
         return self.result() == QDialog.DialogCode.Accepted

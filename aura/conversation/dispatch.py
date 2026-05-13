@@ -18,6 +18,7 @@ class WorkerDispatchRequest:
     files: list[str]
     spec: str
     acceptance: str
+    summary: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -25,6 +26,7 @@ class WorkerDispatchRequest:
             "files": list(self.files),
             "spec": self.spec,
             "acceptance": self.acceptance,
+            "summary": self.summary,
         }
 
     @classmethod
@@ -37,6 +39,7 @@ class WorkerDispatchRequest:
             files=[str(f) for f in files],
             spec=str(data.get("spec", "")),
             acceptance=str(data.get("acceptance", "")),
+            summary=str(data.get("summary", "")),
         )
 
 
