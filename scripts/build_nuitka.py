@@ -3,17 +3,25 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 
+# ---------------------------------------------------------------------------
 # Configuration
+# ---------------------------------------------------------------------------
+
 APP_NAME = "Aura"
-ENTRY_POINT = "aura/__main__.py"
+PACKAGE_NAME = "aura"
+
 ICON_PATH = "media/AurA.ico"
 MEDIA_DIR = "media"
 OUTPUT_DIR = "build"
+
+FINAL_DIST_NAME = f"{APP_NAME}.dist"
+FINAL_EXE_NAME = f"{APP_NAME}.exe"
 
 REQUIRED_MEDIA_FILES = [
     "account_tree_.svg",
@@ -46,6 +54,10 @@ SIGN_CERT = os.environ.get("AURA_SIGN_CERT")
 SIGN_PASS = os.environ.get("AURA_SIGN_PASS")
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def run(cmd: list[str]) -> None:
     """Run a subprocess command and fail loudly if it errors."""
     print(f"Running: {' '.join(cmd)}")
@@ -77,10 +89,10 @@ def ensure_build_dependencies() -> None:
 def validate_project_paths(root: Path) -> None:
     """Validate required project paths before starting the expensive build."""
     required_paths = [
-        root / ENTRY_POINT,
+        root / PACKAGE_NAME,
+        root / PACKAGE_NAME / "__main__.py",
         root / ICON_PATH,
         root / MEDIA_DIR,
-        root / "aura",
     ]
 
     missing = [path for path in required_paths if not path.exists()]
@@ -93,9 +105,9 @@ def validate_project_paths(root: Path) -> None:
     sys.exit(1)
 
 
-def validate_media_files(root: Path) -> None:
-    """Validate media assets that must be bundled into the distribution."""
-    missing = []
+def validate_source_media_files(root: Path) -> None:
+    """Validate media assets exist before starting the build."""
+    missing: list[Path] = []
 
     for filename in REQUIRED_MEDIA_FILES:
         path = root / MEDIA_DIR / filename
@@ -111,16 +123,102 @@ def validate_media_files(root: Path) -> None:
     print(f"Validated {len(REQUIRED_MEDIA_FILES)} required media files.")
 
 
+def clean_previous_dist_dirs(root: Path) -> None:
+    """Remove stale Nuitka dist folders so post-build detection is reliable."""
+    build_dir = root / OUTPUT_DIR
+    build_dir.mkdir(parents=True, exist_ok=True)
+
+    for dist_dir in build_dir.glob("*.dist"):
+        print(f"Removing stale dist folder: {dist_dir}")
+        shutil.rmtree(dist_dir, ignore_errors=True)
+
+
+def find_created_dist_dir(root: Path) -> Path:
+    """Find the dist folder Nuitka created for this build."""
+    build_dir = root / OUTPUT_DIR
+    candidates = sorted(
+        build_dir.glob("*.dist"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+    if not candidates:
+        print(f"\nBuild finished, but no .dist folder was found in: {build_dir}")
+        sys.exit(1)
+
+    exe_candidates: list[Path] = []
+    for dist_dir in candidates:
+        exe_path = dist_dir / FINAL_EXE_NAME
+        if exe_path.exists():
+            exe_candidates.append(dist_dir)
+
+    if exe_candidates:
+        return exe_candidates[0]
+
+    print("\nBuild finished, but no dist folder contained the expected executable.")
+    print(f"Expected executable name: {FINAL_EXE_NAME}")
+    print("Found dist folders:")
+    for dist_dir in candidates:
+        print(f"  - {dist_dir}")
+    sys.exit(1)
+
+
+def normalize_dist_dir(root: Path, created_dist_dir: Path) -> Path:
+    """Ensure the final distribution folder is always build/Aura.dist."""
+    final_dist_dir = root / OUTPUT_DIR / FINAL_DIST_NAME
+
+    if created_dist_dir.resolve() == final_dist_dir.resolve():
+        return final_dist_dir
+
+    if final_dist_dir.exists():
+        print(f"Removing existing final dist folder: {final_dist_dir}")
+        shutil.rmtree(final_dist_dir, ignore_errors=True)
+
+    print(f"Renaming dist folder:")
+    print(f"  From: {created_dist_dir}")
+    print(f"  To:   {final_dist_dir}")
+    created_dist_dir.rename(final_dist_dir)
+
+    return final_dist_dir
+
+
+def validate_built_distribution(final_dist_dir: Path) -> None:
+    """Validate the compiled distribution has the executable and media assets."""
+    exe_path = final_dist_dir / FINAL_EXE_NAME
+    if not exe_path.exists():
+        print(f"\nBuild finished, but expected EXE was not found: {exe_path}")
+        sys.exit(1)
+
+    missing_media: list[Path] = []
+    for filename in REQUIRED_MEDIA_FILES:
+        path = final_dist_dir / MEDIA_DIR / filename
+        if not path.exists():
+            missing_media.append(path)
+
+    if missing_media:
+        print("\nBuild finished, but required media files are missing from the dist:")
+        for path in missing_media:
+            print(f"  - {path}")
+        sys.exit(1)
+
+    print(f"Validated packaged executable: {exe_path}")
+    print(f"Validated packaged media files: {len(REQUIRED_MEDIA_FILES)}")
+
+
+# ---------------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------------
+
 def build() -> None:
     """Build the Aura standalone distribution with Nuitka."""
     print(f"Starting Nuitka build for {APP_NAME}...")
 
-    # Ensure we are in the project root.
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
 
     validate_project_paths(root)
-    validate_media_files(root)
+    validate_source_media_files(root)
+    clean_previous_dist_dirs(root)
 
     cmd = [
         sys.executable,
@@ -136,7 +234,8 @@ def build() -> None:
         f"--output-filename={APP_NAME}",
         "--clean-cache=all",
         "--assume-yes-for-downloads",
-        ENTRY_POINT,
+        "--python-flag=-m",
+        PACKAGE_NAME,
     ]
 
     if SIGN_CERT:
@@ -157,20 +256,16 @@ def build() -> None:
         print(f"\nBuild failed with exit code {exc.returncode}")
         sys.exit(exc.returncode)
 
-    dist_dir = root / OUTPUT_DIR / f"{APP_NAME}.dist"
-    exe_path = dist_dir / f"{APP_NAME}.exe"
+    created_dist_dir = find_created_dist_dir(root)
+    final_dist_dir = normalize_dist_dir(root, created_dist_dir)
+    validate_built_distribution(final_dist_dir)
 
-    if not dist_dir.exists():
-        print(f"\nBuild finished, but expected dist folder was not found: {dist_dir}")
-        sys.exit(1)
+    exe_path = final_dist_dir / FINAL_EXE_NAME
 
-    if not exe_path.exists():
-        print(f"\nBuild finished, but expected EXE was not found: {exe_path}")
-        sys.exit(1)
-
-    print(f"\nBuild successful! The compiled application is in: {dist_dir}")
-    print(f"Executable: {exe_path}")
-    print("To distribute, zip the entire .dist directory.")
+    print("\nBuild successful.")
+    print(f"Distribution folder: {final_dist_dir}")
+    print(f"Executable:          {exe_path}")
+    print("To distribute, zip the entire Aura.dist directory.")
 
 
 if __name__ == "__main__":
