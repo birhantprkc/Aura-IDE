@@ -489,13 +489,33 @@ class _DispatchProxy(QObject):
         if cancel_event.is_set():
             worker_history.pop_if_empty_assistant_message()
 
-        continuation = _parse_continuation_report(_last_assistant_content(worker_history))
-        summary = _build_worker_summary(req, worker_history, write_results, api_errors, continuation)
+        final_report = _last_assistant_content(worker_history)
+        continuation = _parse_continuation_report(final_report)
+        result_errors = list(api_errors)
+        result_caveats: list[str] = []
+        if _final_report_claims_failure(final_report):
+            result_errors.append(
+                "Worker final report claims a blocker, failed validation, failed acceptance, "
+                "or unverified acceptance."
+            )
+        if req.acceptance.strip() and not _final_report_claims_validation(final_report):
+            result_caveats.append(
+                "Worker final report did not clearly mention validation or acceptance verification."
+            )
+        summary = _build_worker_summary(
+            req,
+            worker_history,
+            write_results,
+            result_errors,
+            continuation,
+            result_caveats,
+        )
         phase_boundary = phase_boundary_info is not None
         ok = (
-            not api_errors
+            not result_errors
+            and not result_caveats
             and not phase_boundary
-            and bool(write_results or _last_assistant_content(worker_history))
+            and bool(write_results or final_report)
         )
         modified_files = continuation.get("modified_files") or [
             str(w["path"]) for w in write_results if isinstance(w.get("path"), str) and w.get("path")
@@ -550,7 +570,8 @@ class _DispatchProxy(QObject):
             suggested_next_spec=continuation.get("recommended_next_step"),
             extras={
                 "writes": write_results,
-                "errors": api_errors,
+                "errors": result_errors,
+                "caveats": result_caveats,
                 "limit": phase_boundary_info or {},
             },
         )
@@ -574,8 +595,17 @@ def _format_spec_as_user_message(req: WorkerDispatchRequest) -> str:
         f"Files involved:\n{files_block}\n\n"
         f"Spec:\n{req.spec}\n\n"
         f"Acceptance criteria:\n{req.acceptance}\n\n"
-        "Begin. Read the listed files first, then make the change(s). When done, "
-        "respond with a concise summary of what you changed and which files were touched."
+        "Worker contract:\n"
+        "- Read every listed file before editing.\n"
+        "- Implement the smallest complete solution that satisfies the spec.\n"
+        "- Do not add public-library, demo, or tutorial ceremony unless requested.\n"
+        "- Do not add module summary docstrings or Args/Returns/Raises docstrings for normal app/tool code.\n"
+        "- Do not add clever fallback behavior unless requested.\n"
+        "- Lower-level helpers return values or raise errors; CLI/UI/app boundaries report to users.\n"
+        "- Verify transformed or generated output content when relevant.\n"
+        "- Do not report success if any acceptance check failed.\n"
+        "- Final response must explicitly verify each acceptance criterion or report a blocker.\n\n"
+        "Begin. Read the listed files first, then make the change(s)."
     )
 
 
@@ -588,21 +618,79 @@ def _last_assistant_content(history: History) -> str:
     return ""
 
 
+def _final_report_claims_failure(content: str) -> bool:
+    text = content.lower()
+    return any(
+        phrase in text
+        for phrase in (
+            "blocker",
+            "blocked",
+            "failed validation",
+            "validation failed",
+            "failed acceptance",
+            "acceptance failed",
+            "could not verify",
+            "couldn't verify",
+            "cannot verify",
+            "unable to verify",
+            "not verified",
+            "could not run",
+            "couldn't run",
+            "unable to run",
+            "tests failed",
+            "pytest failed",
+            "lint failed",
+        )
+    )
+
+
+def _final_report_claims_validation(content: str) -> bool:
+    text = content.lower()
+    return any(
+        phrase in text
+        for phrase in (
+            "verified",
+            "validated",
+            "validation",
+            "passes",
+            "pass",
+            "pytest",
+            "py_compile",
+            "ruff",
+            "mypy",
+            "test",
+            "check",
+            "compiled",
+            "exit code 0",
+            "exits 0",
+        )
+    )
+
+
 def _build_worker_summary(
     req: WorkerDispatchRequest,
     history: History,
     writes: list[dict[str, Any]],
     errors: list[str],
     continuation: dict[str, Any] | None = None,
+    caveats: list[str] | None = None,
 ) -> str:
     lines: list[str] = []
     continuation = continuation or {}
+    caveats = caveats or []
     
     # 1. Errors first
     if errors:
         lines.append("Worker encountered errors:")
         for err in errors:
             lines.append(f"  - {err}")
+
+    if caveats:
+        if lines:
+            lines.append("")
+        lines.append("Worker validation caveats:")
+        for caveat in caveats:
+            lines.append(f"  - {caveat}")
             
     # 2. Planner's intended summary (if no errors, or as context)
     if req.summary:

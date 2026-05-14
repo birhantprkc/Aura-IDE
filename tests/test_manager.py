@@ -74,6 +74,33 @@ def _make_approval_cb(decision: str = "approve") -> MagicMock:
     return cb
 
 
+def _valid_dispatch_args(goal: str = "Fix bug", files: list[str] | None = None, core: str = "Change X to Y") -> dict:
+    return {
+        "goal": goal,
+        "files": files or ["test.py"],
+        "spec": (
+            "Core Behavior\n"
+            f"{core}\n\n"
+            "Failure Behavior\n"
+            "Preserve existing error behavior and do not add clever fallback behavior unless requested.\n\n"
+            "Code Shape\n"
+            "Implement the smallest complete change. Use direct app/tool code with no module summary "
+            "docstrings or Args/Returns/Raises docstrings.\n\n"
+            "Implementation Steps\n"
+            "- Read the listed files before editing.\n"
+            "- Make only the requested change.\n\n"
+            "Acceptance Checks\n"
+            "- pytest tests/test_manager.py passes and the requested behavior is verified.\n\n"
+            "Non-Goals\n"
+            "- No unrelated refactors."
+        ),
+        "acceptance": (
+            "Run `pytest tests/test_manager.py` and verify it passes with exit code 0. "
+            "Confirm the requested behavior is verified."
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -412,11 +439,7 @@ class TestDispatchToWorker:
     def test_dispatch_ok(self, manager, mock_client, mock_tools, on_event,
                          captured_events, cancel_event, history):
         type(mock_tools).mode = PropertyMock(return_value="planner")
-        tc = _tool_call("dispatch1", "dispatch_to_worker", {            "goal": "Fix bug",
-            "files": ["test.py"],
-            "spec": "Change X to Y",
-            "acceptance": "Tests pass",
-        })
+        tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
 
         mock_client.return_value = [
             _make_done(content="", tool_calls=[tc]),
@@ -464,11 +487,7 @@ class TestDispatchToWorker:
 def test_dispatch_no_callback(manager, mock_client, mock_tools, on_event,
                                   captured_events, cancel_event, history):
         type(mock_tools).mode = PropertyMock(return_value="planner")
-        tc = _tool_call("dispatch1", "dispatch_to_worker", {            "goal": "Fix bug",
-            "files": ["test.py"],
-            "spec": "Change X to Y",
-            "acceptance": "Tests pass",
-        })
+        tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
 
         # Stream first yields the tool call, then yields a content-only response
         mock_client.side_effect = [
@@ -492,14 +511,47 @@ def test_dispatch_no_callback(manager, mock_client, mock_tools, on_event,
         assert dispatch_results[0].ok is False
         assert "not enabled" in dispatch_results[0].result.lower()
 
+def test_dispatch_rejects_weak_spec_before_worker(manager, mock_client, mock_tools, on_event,
+                                                  captured_events, cancel_event, history):
+        type(mock_tools).mode = PropertyMock(return_value="planner")
+        tc = _tool_call("dispatch1", "dispatch_to_worker", {
+            "goal": "Fix bug",
+            "files": ["test.py"],
+            "spec": "Change X to Y",
+            "acceptance": "Done",
+        })
+        dispatch_cb = MagicMock()
+
+        mock_client.side_effect = [
+            iter([_make_done(content="", tool_calls=[tc])]),
+            iter([ContentDelta(text="Retrying"), _make_done(content="Retrying")]),
+        ]
+
+        manager.send(
+            on_event=on_event,
+            approval_cb=_make_approval_cb(),
+            cancel_event=cancel_event,
+            model="deepseek-chat",
+            thinking="off",
+            dispatch_cb=dispatch_cb,
+        )
+
+        dispatch_cb.assert_not_called()
+        assert not any(isinstance(e, WorkerDispatchRequested) for e in captured_events)
+
+        tool_results = [e for e in captured_events if isinstance(e, ToolResult)]
+        dispatch_results = [tr for tr in tool_results if tr.name == "dispatch_to_worker"]
+        assert len(dispatch_results) == 1
+        assert dispatch_results[0].ok is False
+        parsed = json.loads(dispatch_results[0].result)
+        assert parsed["ok"] is False
+        assert parsed["extras"]["dispatch_spec_rejected"] is True
+        assert "dispatch rejected" in parsed["summary"].lower()
+
 def test_dispatch_cb_raises(manager, mock_client, mock_tools, on_event,
                                 captured_events, cancel_event, history):
         type(mock_tools).mode = PropertyMock(return_value="planner")
-        tc = _tool_call("dispatch1", "dispatch_to_worker", {            "goal": "Fix bug",
-            "files": ["test.py"],
-            "spec": "Change X to Y",
-            "acceptance": "Tests pass",
-        })
+        tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
 
         def _raising_cb(tool_call_id, req):
             raise RuntimeError("boom")
@@ -532,12 +584,7 @@ def test_recoverable_worker_phase_boundary_allows_planner_to_continue(
     manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
 ):
     type(mock_tools).mode = PropertyMock(return_value="planner")
-    tc = _tool_call("dispatch1", "dispatch_to_worker", {
-        "goal": "Fix bug",
-        "files": ["test.py"],
-        "spec": "Change X to Y",
-        "acceptance": "Tests pass",
-    })
+    tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
     mock_client.side_effect = [
         iter([_make_done(content="", tool_calls=[tc])]),
         iter([ContentDelta(text="Continuing"), _make_done(content="Continuing")]),
@@ -574,12 +621,11 @@ def test_redispatch_counter_stops_runaway_followups(
 ):
     type(mock_tools).mode = PropertyMock(return_value="planner")
     dispatches = [
-        _tool_call(f"dispatch{i}", "dispatch_to_worker", {
-            "goal": f"Pass {i}",
-            "files": ["test.py"],
-            "spec": f"Do pass {i}",
-            "acceptance": "Done",
-        })
+        _tool_call(
+            f"dispatch{i}",
+            "dispatch_to_worker",
+            _valid_dispatch_args(goal=f"Pass {i}", core=f"Do pass {i}"),
+        )
         for i in range(3)
     ]
     mock_client.side_effect = [
@@ -1439,12 +1485,11 @@ class TestToolLimitIntegration:
                                                            history):
         """Planner dispatch cap rejects a second dispatch_to_worker in one model round."""
         type(mock_tools).mode = PropertyMock(return_value="planner")
-        tc1 = _tool_call("d1", "dispatch_to_worker", {
-            "goal": "Fix A",
-            "files": ["a.py"],
-            "spec": "Change A",
-            "acceptance": "Done",
-        })
+        tc1 = _tool_call(
+            "d1",
+            "dispatch_to_worker",
+            _valid_dispatch_args(goal="Fix A", files=["a.py"], core="Change A"),
+        )
         tc2 = _tool_call("d2", "dispatch_to_worker", {
             "goal": "Fix B",
             "files": ["b.py"],

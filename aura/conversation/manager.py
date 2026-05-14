@@ -41,6 +41,7 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
 )
 from aura.conversation.history import History
+from aura.conversation.spec_quality import validate_worker_dispatch_spec
 from aura.conversation.tool_limits import (
     MAX_WORKER_REDISPATCHES_PER_USER_TURN,
     ToolLimitState,
@@ -232,6 +233,8 @@ class ConversationManager:
                         dispatch_cb=dispatch_cb,
                     )
                     if result is not None and not result.cancelled:
+                        if result.extras.get("dispatch_spec_rejected"):
+                            continue
                         if result.recoverable and result.phase_boundary:
                             if worker_redispatches >= MAX_WORKER_REDISPATCHES_PER_USER_TURN:
                                 self._append_redispatch_limit_message(result, on_event)
@@ -375,6 +378,39 @@ class ConversationManager:
         on_event: EventCallback,
         dispatch_cb: DispatchCallback | None,
     ) -> WorkerDispatchResult | None:
+        req = WorkerDispatchRequest.from_dict(args)
+        quality = validate_worker_dispatch_spec(req.spec, req.acceptance)
+        if not quality.ok:
+            error_message = (
+                "Planner dispatch rejected: Worker specs must include a concrete "
+                "implementation contract before Worker runs. Missing quality items:\n"
+                + "\n".join(f"- {item}" for item in quality.errors)
+            )
+            result = WorkerDispatchResult(
+                ok=False,
+                summary=error_message,
+                extras={
+                    "dispatch_spec_rejected": True,
+                    "quality_errors": list(quality.errors),
+                },
+            )
+            payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(
+                ToolResult(
+                    tool_call_id=tool_call_id,
+                    name="dispatch_to_worker",
+                    ok=False,
+                    result=payload,
+                    extras={
+                        "dispatch_spec_rejected": True,
+                        "summary": error_message,
+                        "quality_errors": list(quality.errors),
+                    },
+                )
+            )
+            return result
+
         if dispatch_cb is None:
             err = (
                 "dispatch_to_worker is not enabled for this manager — "
@@ -392,7 +428,6 @@ class ConversationManager:
             )
             return
 
-        req = WorkerDispatchRequest.from_dict(args)
         on_event(
             WorkerDispatchRequested(
                 tool_call_id=tool_call_id,

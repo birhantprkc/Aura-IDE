@@ -444,15 +444,22 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                 "spec": {
                     "type": "string",
                     "description": (
-                        "Full prose specification of the change. Be specific. Reference "
-                        "function names, line behavior, error cases. The worker has not "
-                        "seen the conversation, so include necessary context."
+                        "Full self-contained Markdown implementation contract. It must "
+                        "include these exact sections as headings: Core Behavior, Failure "
+                        "Behavior, Code Shape, Implementation Steps, Acceptance Checks, "
+                        "and Non-Goals. Be specific about function names, line behavior, "
+                        "error cases, smallest complete implementation scope, and "
+                        "no-ceremony/docstring constraints. The worker has not seen the "
+                        "conversation, so include necessary context."
                     ),
                 },
                 "acceptance": {
                     "type": "string",
                     "description": (
-                        "How the worker (and the user) knows the task is done. Concrete, checkable."
+                        "Concrete pass/fail checks proving the task is done. Include "
+                        "validation commands when possible, concrete output/content checks "
+                        "for generated or transformed output, and failure behavior checks "
+                        "when parsing, config, user input, or batch processing is involved."
                     ),
                 },
                 "summary": {
