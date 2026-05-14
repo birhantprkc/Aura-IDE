@@ -44,6 +44,7 @@ from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
 from aura.conversation.tools.web_handler import WebHandler
 from aura.mcp_client import MCPClient, _convert_tool_to_openai_schema
 
+from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools._schemas import (
     DISPATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
@@ -109,6 +110,7 @@ class ToolRegistry(
         self._web_handler = WebHandler()
         self._mcp_clients: dict[str, MCPClient] = {}
         self._mcp_schemas: list[dict[str, Any]] = []
+        self._catalog = ToolCatalog()
 
     @property
     def workspace_root(self) -> Path:
@@ -139,33 +141,21 @@ class ToolRegistry(
         self._mode = mode
 
     def tool_defs(self) -> list[dict[str, Any]]:
-        # Read-only is the safety floor — strips writes AND dispatch (since
-        # there's nothing for a worker to do without writes).
-        tools: list[dict[str, Any]] = []
-        if self._read_only:
-            tools = list(READ_TOOL_DEFS) + list(GIT_TOOL_DEFS)
-        elif self._mode == "researcher":
-            tools = list(WEB_TOOL_DEFS)
-        elif self._mode == "planner":
-            tools = list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)] + list(RESEARCH_TOOL_DEFS) + list(PROJECT_MEMORY_TOOL_DEFS) + list(GIT_TOOL_DEFS)
-        elif self._mode == "worker":
-            tools = list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(WORKER_TODO_TOOL_DEF)] + [dict(TERMINAL_TOOL_DEF)] + list(GIT_TOOL_DEFS)
-        else:
-            tools = list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(TERMINAL_TOOL_DEF)] + list(GIT_TOOL_DEFS)
-
-        # Append dynamic tools (only when not read-only)
+        dynamic_schemas: list[dict[str, Any]] = []
         if not self._read_only:
             for file_path in self._scan_dynamic_tools().values():
                 try:
                     schema = parse_tool_schema(file_path)
-                    tools.append(schema)
+                    dynamic_schemas.append(schema)
                 except (ValueError, SyntaxError):
                     pass
 
-        # Append MCP tool schemas (available in all modes)
-        tools.extend(self._mcp_schemas)
-
-        return tools
+        return self._catalog.build_tool_defs(
+            mode=self._mode,
+            read_only=self._read_only,
+            dynamic_schemas=dynamic_schemas or None,
+            mcp_schemas=self._mcp_schemas or None,
+        )
 
     # ---- MCP server support ------------------------------------------------
 
