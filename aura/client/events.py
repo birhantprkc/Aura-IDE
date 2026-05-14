@@ -93,6 +93,25 @@ class TerminalOutput:
     text: str  # chunk of stdout/stderr output
 
 
+@dataclass
+class AgentProcessStarted:
+    process_id: str
+    label: str
+    command: str
+
+
+@dataclass
+class AgentProcessOutput:
+    process_id: str
+    text: str
+
+
+@dataclass
+class AgentProcessFinished:
+    process_id: str
+    exit_code: int
+
+
 Event = (
     ReasoningDelta
     | ContentDelta
@@ -105,4 +124,7 @@ Event = (
     | ToolResult
     | WorkerDispatchRequested
     | TerminalOutput
+    | AgentProcessStarted
+    | AgentProcessOutput
+    | AgentProcessFinished
 )

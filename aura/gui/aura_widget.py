@@ -814,8 +814,14 @@ class AuraPlayground(QWidget):
     def add_error(self, message: str) -> None:
         self._info_hub.add_error(message)
 
+    def start_terminal_process(self, process_id: str, command: str) -> None:
+        self._terminal_window.set_command(process_id, command)
+
     def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
         self._terminal_window.append_output(worker_tool_id, text)
+
+    def finish_terminal_process(self, process_id: str, exit_code: int) -> None:
+        self._terminal_window.set_result(process_id, exit_code)
 
     def worker_finished(self, ok: bool, summary: str):
         # self._code_editor.close_all_tabs()

@@ -16,7 +16,6 @@ from typing import Any
 from aura.backends.cli_base import CLIAgentBackend
 from aura.client.events import ApiError, ContentDelta, Done, Event
 from aura.config import ThinkingMode
-from aura.sandbox import SandboxExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -116,8 +115,12 @@ class CodexBackend(CLIAgentBackend):
         # Use exec for non-interactive output
         command = f"codex exec {shlex.quote(prompt_text)}"
         
-        sandbox = SandboxExecutor(mode="host", workspace_root=self._workspace_root)
-        result = sandbox.run_terminal_command(command=command, timeout=120, cancel_event=cancel_event)
+        result = yield from self._run_cli_agent_command(
+            command=command,
+            label="Codex",
+            timeout=120,
+            cancel_event=cancel_event,
+        )
 
         if cancel_event and cancel_event.is_set():
             yield ApiError(status_code=None, message="Cancelled.")

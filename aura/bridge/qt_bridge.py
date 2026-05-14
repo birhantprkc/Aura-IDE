@@ -37,6 +37,9 @@ from aura.backends import (
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.client import (
     ApiError,
+    AgentProcessFinished,
+    AgentProcessOutput,
+    AgentProcessStarted,
     ContentDelta,
     Done,
     Event,
@@ -89,6 +92,9 @@ class _Worker(QObject):
     toolResultEmitted = Signal(str, str, bool, str, dict)
     workerDispatchRequested = Signal(str, str, list, str, str, str)
     terminalOutput = Signal(str, str)  # (tool_call_id, text)
+    agentProcessStarted = Signal(str, str, str)  # process_id, label, command
+    agentProcessOutput = Signal(str, str)  # process_id, text
+    agentProcessFinished = Signal(str, int)  # process_id, exit_code
     finished = Signal()
 
     def __init__(
@@ -194,6 +200,12 @@ class _Worker(QObject):
             )
         elif isinstance(ev, TerminalOutput):
             self.terminalOutput.emit(ev.tool_call_id, ev.text)
+        elif isinstance(ev, AgentProcessStarted):
+            self.agentProcessStarted.emit(ev.process_id, ev.label, ev.command)
+        elif isinstance(ev, AgentProcessOutput):
+            self.agentProcessOutput.emit(ev.process_id, ev.text)
+        elif isinstance(ev, AgentProcessFinished):
+            self.agentProcessFinished.emit(ev.process_id, ev.exit_code)
 
 
 class _DispatchProxy(QObject):
@@ -222,6 +234,9 @@ class _DispatchProxy(QObject):
     workerUsage = Signal(str, str, int, int, int, int)  # tool_id, model, prompt, comp, hit, miss
     workerTodoListUpdated = Signal(str, list)  # tool_call_id, tasks
     workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
+    workerAgentProcessStarted = Signal(str, str, str, str)  # parent_tool_id, process_id, label, command
+    workerAgentProcessOutput = Signal(str, str, str)  # parent_tool_id, process_id, text
+    workerAgentProcessFinished = Signal(str, str, int)  # parent_tool_id, process_id, exit_code
 
     def __init__(
         self,
@@ -471,6 +486,17 @@ class _DispatchProxy(QObject):
                     )
             elif isinstance(ev, TerminalOutput):
                 self.workerTerminalOutput.emit(tool_call_id, ev.tool_call_id, ev.text)
+            elif isinstance(ev, AgentProcessStarted):
+                self.workerAgentProcessStarted.emit(
+                    tool_call_id,
+                    ev.process_id,
+                    ev.label,
+                    ev.command,
+                )
+            elif isinstance(ev, AgentProcessOutput):
+                self.workerAgentProcessOutput.emit(tool_call_id, ev.process_id, ev.text)
+            elif isinstance(ev, AgentProcessFinished):
+                self.workerAgentProcessFinished.emit(tool_call_id, ev.process_id, ev.exit_code)
 
         try:
             worker_manager.send(
@@ -799,9 +825,15 @@ class ConversationBridge(QObject):
     workerUsage = Signal(str, str, int, int, int, int)
     workerTodoListUpdated = Signal(str, list)
     workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
+    workerAgentProcessStarted = Signal(str, str, str, str)
+    workerAgentProcessOutput = Signal(str, str, str)
+    workerAgentProcessFinished = Signal(str, str, int)
 
     # Terminal output (single mode)
     terminalOutput = Signal(str, str)  # tool_call_id, text
+    agentProcessStarted = Signal(str, str, str)
+    agentProcessOutput = Signal(str, str)
+    agentProcessFinished = Signal(str, int)
 
     def __init__(
         self,
@@ -863,6 +895,9 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.workerUsage.connect(self.workerUsage)
         self._dispatch_proxy.workerTodoListUpdated.connect(self.workerTodoListUpdated)
         self._dispatch_proxy.workerTerminalOutput.connect(self.workerTerminalOutput)
+        self._dispatch_proxy.workerAgentProcessStarted.connect(self.workerAgentProcessStarted)
+        self._dispatch_proxy.workerAgentProcessOutput.connect(self.workerAgentProcessOutput)
+        self._dispatch_proxy.workerAgentProcessFinished.connect(self.workerAgentProcessFinished)
 
     # ---- config -----------------------------------------------------------
 
@@ -1005,6 +1040,9 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.workerUsage.connect(self.workerUsage)
         self._dispatch_proxy.workerTodoListUpdated.connect(self.workerTodoListUpdated)
         self._dispatch_proxy.workerTerminalOutput.connect(self.workerTerminalOutput)
+        self._dispatch_proxy.workerAgentProcessStarted.connect(self.workerAgentProcessStarted)
+        self._dispatch_proxy.workerAgentProcessOutput.connect(self.workerAgentProcessOutput)
+        self._dispatch_proxy.workerAgentProcessFinished.connect(self.workerAgentProcessFinished)
 
     def check_backend_auth(self, backend_name: str) -> bool:
         """Check if the named backend is authenticated.
@@ -1049,12 +1087,13 @@ class ConversationBridge(QObject):
             backend_name: 'default_api', 'gemini_cli', 'claude_code', or 'codex'
         """
         hooks.unregister('generate_planner_code')
+        root = self._registry.workspace_root
         if backend_name == 'gemini_cli':
-            hooks.register('generate_planner_code', GeminiCLIBackend().stream)
+            hooks.register('generate_planner_code', GeminiCLIBackend(workspace_root=root).stream)
         elif backend_name == 'claude_code':
-            hooks.register('generate_planner_code', ClaudeCodeBackend().stream)
+            hooks.register('generate_planner_code', ClaudeCodeBackend(workspace_root=root).stream)
         elif backend_name == 'codex':
-            hooks.register('generate_planner_code', CodexBackend().stream)
+            hooks.register('generate_planner_code', CodexBackend(workspace_root=root).stream)
         else:
             hooks.register('generate_planner_code', self._backend.stream)
 
@@ -1065,12 +1104,13 @@ class ConversationBridge(QObject):
             backend_name: 'default_api', 'gemini_cli', 'claude_code', or 'codex'
         """
         hooks.unregister('generate_worker_code')
+        root = self._registry.workspace_root
         if backend_name == 'gemini_cli':
-            hooks.register('generate_worker_code', GeminiCLIBackend().stream)
+            hooks.register('generate_worker_code', GeminiCLIBackend(workspace_root=root).stream)
         elif backend_name == 'claude_code':
-            hooks.register('generate_worker_code', ClaudeCodeBackend().stream)
+            hooks.register('generate_worker_code', ClaudeCodeBackend(workspace_root=root).stream)
         elif backend_name == 'codex':
-            hooks.register('generate_worker_code', CodexBackend().stream)
+            hooks.register('generate_worker_code', CodexBackend(workspace_root=root).stream)
         else:
             hooks.register('generate_worker_code', self._backend.stream)
 
@@ -1159,6 +1199,9 @@ class ConversationBridge(QObject):
         self._worker.usageEmitted.connect(self.usageEmitted)
         self._worker.usageEmitted.connect(self._forward_usage_with_model)
         self._worker.terminalOutput.connect(self.terminalOutput)
+        self._worker.agentProcessStarted.connect(self.agentProcessStarted)
+        self._worker.agentProcessOutput.connect(self.agentProcessOutput)
+        self._worker.agentProcessFinished.connect(self.agentProcessFinished)
         self._worker.finished.connect(self._on_finished)
 
         self._thread.started.connect(self._worker.run)

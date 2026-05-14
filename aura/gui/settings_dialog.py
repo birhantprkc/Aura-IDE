@@ -714,11 +714,20 @@ class SettingsDialog(QDialog):
 
     def closeEvent(self, event):  # type: ignore[override]
         """Clean up any running auth/polling threads when the dialog is closed."""
-        for thread_attr in ("_auth_thread", "_auth_polling_thread", "_auth_status_thread"):
-            thread = getattr(self, thread_attr, None)
-            if thread is not None and thread.isRunning():
-                thread.quit()
-                thread.wait(1000)
+        for thread_attr in (
+            "_auth_thread",
+            "_auth_polling_thread",
+            "_auth_status_thread",
+            "_discovery_thread",
+        ):
+            try:
+                thread = getattr(self, thread_attr, None)
+                if thread is not None and thread.isRunning():
+                    thread.quit()
+                    thread.wait(1000)
+            except RuntimeError:
+                # C++ object already deleted
+                pass
         super().closeEvent(event)
 
     # --- Provider / Model helpers ---
@@ -865,6 +874,10 @@ class SettingsDialog(QDialog):
         self._populate_model_combos(provider_id)  # type: ignore[arg-type]
         QMessageBox.information(self, APP_NAME, "Model list refreshed.")
 
+        # Clean up thread reference
+        self._discovery_thread = None
+        self._discovery_worker = None
+
     def _on_change_root_clicked(self) -> None:
         self._on_change_root()
         # Host updated the workspace root — refresh display from the host:
@@ -913,6 +926,10 @@ class SettingsDialog(QDialog):
             msg_label=self._codex_auth_msg,
             device_auth_btn=self._codex_device_auth_btn,
         )
+
+        # Clean up thread reference
+        self._auth_status_thread = None
+        self._auth_status_worker = None
 
     def _update_auth_ui(
         self,

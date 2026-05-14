@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 import logging
+import queue
+import threading
+import uuid
 from pathlib import Path
 from abc import abstractmethod
+from collections.abc import Generator
 from typing import Any
 
 from aura.backends.base import AgentBackend
-from aura.sandbox import SandboxExecutor
+from aura.client.events import (
+    AgentProcessFinished,
+    AgentProcessOutput,
+    AgentProcessStarted,
+    Event,
+)
+from aura.sandbox import SandboxExecutor, SandboxResult
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +109,71 @@ class CLIAgentBackend(AgentBackend):
             self.auth_command,
         )
         return False
+
+    def _run_cli_agent_command(
+        self,
+        *,
+        command: str,
+        label: str,
+        timeout: int = 120,
+        cancel_event: threading.Event | None = None,
+        input_data: str | None = None,
+    ) -> Generator[Event, None, SandboxResult]:
+        """Run a CLI agent command while yielding live process output events."""
+        process_id = f"cli-{uuid.uuid4().hex}"
+        events: queue.Queue[tuple[str, str | SandboxResult]] = queue.Queue()
+
+        yield AgentProcessStarted(
+            process_id=process_id,
+            label=label,
+            command=command,
+        )
+
+        def on_output(text: str) -> None:
+            events.put(("output", text))
+
+        def run_command() -> None:
+            try:
+                sandbox = SandboxExecutor(mode="host", workspace_root=self._workspace_root)
+                result = sandbox.run_terminal_command(
+                    command=command,
+                    timeout=timeout,
+                    cancel_event=cancel_event,
+                    on_output=on_output,
+                    input_data=input_data,
+                )
+            except Exception as exc:
+                result = SandboxResult(
+                    ok=False,
+                    stdout="",
+                    stderr=f"{type(exc).__name__}: {exc}",
+                    exit_code=-1,
+                )
+            events.put(("result", result))
+
+        thread = threading.Thread(
+            target=run_command,
+            name=f"Aura {label} CLI process",
+            daemon=True,
+        )
+        thread.start()
+
+        result: SandboxResult | None = None
+        while result is None:
+            kind, payload = events.get()
+            if kind == "output":
+                yield AgentProcessOutput(process_id=process_id, text=str(payload))
+            else:
+                result = payload if isinstance(payload, SandboxResult) else SandboxResult(
+                    ok=False,
+                    stdout="",
+                    stderr="CLI process did not return a SandboxResult.",
+                    exit_code=-1,
+                )
+
+        thread.join(timeout=0)
+        yield AgentProcessFinished(process_id=process_id, exit_code=result.exit_code)
+        return result
 
     @abstractmethod
     def stream(

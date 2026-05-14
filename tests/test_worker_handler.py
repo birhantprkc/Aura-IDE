@@ -48,6 +48,9 @@ def bridge() -> Mock:
         "workerUsage",
         "workerTodoListUpdated",
         "workerTerminalOutput",
+        "workerAgentProcessStarted",
+        "workerAgentProcessOutput",
+        "workerAgentProcessFinished",
         "terminalOutput",
     ):
         setattr(b, sig_name, Mock())
@@ -349,6 +352,9 @@ class TestBridgeWiring:
             "workerUsage",
             "workerTodoListUpdated",
             "workerTerminalOutput",
+            "workerAgentProcessStarted",
+            "workerAgentProcessOutput",
+            "workerAgentProcessFinished",
             "terminalOutput",
         ]
         for sig_name in expected_signals:
@@ -375,6 +381,17 @@ class TestTerminalOutput:
     ) -> None:
         handler._on_worker_terminal_output("ptc", "wtc", "worker output")
         playground.append_terminal_output.assert_called_once_with("wtc", "worker output")
+
+    def test_worker_agent_process_routes_to_playground_terminal(
+        self, handler: WorkerEventHandler, playground: Mock,
+    ) -> None:
+        handler._on_worker_agent_process_started("ptc", "proc1", "Codex", "codex exec hi")
+        handler._on_worker_agent_process_output("ptc", "proc1", "stream chunk")
+        handler._on_worker_agent_process_finished("ptc", "proc1", 0)
+
+        playground.start_terminal_process.assert_called_once_with("proc1", "codex exec hi")
+        playground.append_terminal_output.assert_called_once_with("proc1", "stream chunk")
+        playground.finish_terminal_process.assert_called_once_with("proc1", 0)
 
 
 # ---------------------------------------------------------------------------

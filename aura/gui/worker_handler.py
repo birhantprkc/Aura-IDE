@@ -83,6 +83,9 @@ class WorkerEventHandler(QObject):
         self._bridge.workerUsage.connect(self._on_worker_usage)
         self._bridge.workerTodoListUpdated.connect(self._on_worker_todo_list_updated)
         self._bridge.workerTerminalOutput.connect(self._on_worker_terminal_output)
+        self._bridge.workerAgentProcessStarted.connect(self._on_worker_agent_process_started)
+        self._bridge.workerAgentProcessOutput.connect(self._on_worker_agent_process_output)
+        self._bridge.workerAgentProcessFinished.connect(self._on_worker_agent_process_finished)
         self._bridge.terminalOutput.connect(self._on_terminal_output)
 
     # ---- dispatch slots --------------------------------------------------------
@@ -242,6 +245,24 @@ class WorkerEventHandler(QObject):
     ) -> None:
         """Route terminal output (worker mode) to the playground."""
         self._playground.append_terminal_output(worker_tool_id, text)
+
+    def _on_worker_agent_process_started(
+        self, parent_tool_id: str, process_id: str, label: str, command: str
+    ) -> None:
+        """Route CLI backend process start to the playground terminal."""
+        self._playground.start_terminal_process(process_id, command)
+
+    def _on_worker_agent_process_output(
+        self, parent_tool_id: str, process_id: str, text: str
+    ) -> None:
+        """Route CLI backend process output to the playground terminal."""
+        self._playground.append_terminal_output(process_id, text)
+
+    def _on_worker_agent_process_finished(
+        self, parent_tool_id: str, process_id: str, exit_code: int
+    ) -> None:
+        """Route CLI backend process completion to the playground terminal."""
+        self._playground.finish_terminal_process(process_id, exit_code)
 
     def _on_terminal_output(self, tool_call_id: str, text: str) -> None:
         """Route terminal output (single mode) to the chat view."""

@@ -2,6 +2,9 @@
 from aura.client.deepseek import DeepSeekClient
 from aura.client.events import (
     ApiError,
+    AgentProcessFinished,
+    AgentProcessOutput,
+    AgentProcessStarted,
     ContentDelta,
     Done,
     Event,
@@ -29,4 +32,7 @@ __all__ = [
     "ToolResult",
     "WorkerDispatchRequested",
     "TerminalOutput",
+    "AgentProcessStarted",
+    "AgentProcessOutput",
+    "AgentProcessFinished",
 ]

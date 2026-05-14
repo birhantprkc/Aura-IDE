@@ -15,7 +15,6 @@ from typing import Any
 from aura.backends.cli_base import CLIAgentBackend
 from aura.client.events import ApiError, ContentDelta, Done, Event
 from aura.config import ThinkingMode
-from aura.sandbox import SandboxExecutor
 
 
 class GeminiCLIBackend(CLIAgentBackend):
@@ -72,9 +71,9 @@ class GeminiCLIBackend(CLIAgentBackend):
         # --skip-trust to avoid interactive prompts in headless mode.
         command = "gemini --skip-trust"
         
-        sandbox = SandboxExecutor(mode="host", workspace_root=self._workspace_root)
-        result = sandbox.run_terminal_command(
+        result = yield from self._run_cli_agent_command(
             command=command,
+            label="Gemini",
             timeout=120,
             cancel_event=cancel_event,
             input_data=prompt_text,

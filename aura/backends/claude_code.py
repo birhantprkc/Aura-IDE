@@ -15,7 +15,6 @@ from typing import Any
 from aura.backends.cli_base import CLIAgentBackend
 from aura.client.events import ApiError, ContentDelta, Done, Event
 from aura.config import ThinkingMode
-from aura.sandbox import SandboxExecutor
 
 
 class ClaudeCodeBackend(CLIAgentBackend):
@@ -73,8 +72,12 @@ class ClaudeCodeBackend(CLIAgentBackend):
         # Use --bare to skip hooks/CLAUDE.md for speed and predictability
         command = f"claude -p {shlex.quote(prompt_text)} --bare"
         
-        sandbox = SandboxExecutor(mode="host", workspace_root=self._workspace_root)
-        result = sandbox.run_terminal_command(command=command, timeout=120, cancel_event=cancel_event)
+        result = yield from self._run_cli_agent_command(
+            command=command,
+            label="Claude",
+            timeout=120,
+            cancel_event=cancel_event,
+        )
 
         if cancel_event and cancel_event.is_set():
             yield ApiError(status_code=None, message="Cancelled.")
