@@ -4,8 +4,45 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import aura.updater as updater
-from aura.updater import GitCommandResult, get_app_repo_root, get_update_status, pull_latest
+from aura.updater import (
+    GitCommandResult,
+    find_extracted_app_root,
+    get_app_repo_root,
+    get_update_status,
+    pull_latest,
+)
+
+
+def test_find_extracted_app_root_uses_flattened_zip_root(tmp_path: Path) -> None:
+    (tmp_path / "Aura.exe").write_text("exe", encoding="utf-8")
+    (tmp_path / "media").mkdir()
+
+    assert find_extracted_app_root(tmp_path) == tmp_path
+
+
+def test_find_extracted_app_root_uses_legacy_dist_root(tmp_path: Path) -> None:
+    legacy_root = tmp_path / "Aura.dist"
+    legacy_root.mkdir()
+    (legacy_root / "Aura.exe").write_text("exe", encoding="utf-8")
+    (legacy_root / "media").mkdir()
+
+    assert find_extracted_app_root(tmp_path) == legacy_root
+
+
+def test_find_extracted_app_root_reports_unsupported_layout(tmp_path: Path) -> None:
+    (tmp_path / "README.txt").write_text("not an app", encoding="utf-8")
+    (tmp_path / "payload").mkdir()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        find_extracted_app_root(tmp_path)
+
+    message = str(exc_info.value)
+    assert "Aura.exe at archive root or Aura.dist/Aura.exe" in message
+    assert "README.txt" in message
+    assert "payload" in message
 
 
 def test_get_app_repo_root_walks_up_from_package(monkeypatch, tmp_path: Path) -> None:
@@ -188,7 +225,7 @@ def test_pull_latest_refuses_local_changes(monkeypatch, tmp_path: Path) -> None:
         behind=1,
         has_local_changes=True,
     )
-    monkeypatch.setattr(updater, "get_update_status", lambda *a, **k: status)
+    monkeypatch.setattr(updater, "_get_git_update_status", lambda *a, **k: status)
 
     result = pull_latest(tmp_path)
 
@@ -217,7 +254,7 @@ def test_pull_latest_runs_ff_only_when_safe(monkeypatch, tmp_path: Path) -> None
             return GitCommandResult(["git", *args], 0, "Fast-forward\n", "")
         raise AssertionError(f"unexpected git args: {args}")
 
-    monkeypatch.setattr(updater, "get_update_status", lambda *a, **k: status)
+    monkeypatch.setattr(updater, "_get_git_update_status", lambda *a, **k: status)
     monkeypatch.setattr(updater, "run_git_command", fake_git)
 
     result = pull_latest(tmp_path)

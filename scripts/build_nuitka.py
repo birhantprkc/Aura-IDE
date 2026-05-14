@@ -206,14 +206,18 @@ def validate_built_distribution(final_dist_dir: Path) -> None:
 
 
 def zip_distribution(root: Path, final_dist_dir: Path) -> None:
-    """Package the Aura.dist folder into Aura-Windows-x64.zip."""
+    """Package the contents of Aura.dist into Aura-Windows-x64.zip."""
     zip_name = "Aura-Windows-x64"
     zip_path = root / OUTPUT_DIR / zip_name
 
     print(f"Creating release archive: {zip_path}.zip")
-    # We want the ZIP to contain the Aura.dist folder.
-    # The updater script will locate Aura.dist inside the zip.
-    shutil.make_archive(str(zip_path), "zip", root_dir=str(root / OUTPUT_DIR), base_dir=FINAL_DIST_NAME)
+    # Put Aura.exe at the ZIP root while keeping its required runtime files beside it.
+    shutil.make_archive(
+        str(zip_path),
+        "zip",
+        root_dir=str(final_dist_dir),
+        base_dir=".",
+    )
     print(f"Release archive created: {zip_path}.zip")
 
 

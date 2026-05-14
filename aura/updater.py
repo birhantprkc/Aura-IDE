@@ -235,6 +235,25 @@ def _get_packaged_update_status(
     )
 
 
+def find_extracted_app_root(staging_dir: Path) -> Path:
+    """Return the directory containing Aura.exe from a flattened or legacy release ZIP."""
+    flat_exe = staging_dir / "Aura.exe"
+    if flat_exe.exists():
+        return staging_dir
+
+    legacy_root = staging_dir / "Aura.dist"
+    legacy_exe = legacy_root / "Aura.exe"
+    if legacy_exe.exists():
+        return legacy_root
+
+    entries = sorted(path.name for path in staging_dir.iterdir())
+    raise RuntimeError(
+        "Downloaded update archive does not contain Aura.exe in a supported layout. "
+        "Expected Aura.exe at archive root or Aura.dist/Aura.exe. "
+        f"Found top-level entries: {entries}"
+    )
+
+
 def install_packaged_update(
     release: GitHubRelease,
     output_callback: Callable[[str], None] | None = None,
@@ -281,27 +300,10 @@ def install_packaged_update(
                     
                 zip_ref.extract(member, extract_dir)
 
-        # Locate the new app folder/executable
-        new_app_dir: Path | None = None
-        if (extract_dir / "Aura.dist" / "Aura.exe").exists():
-            new_app_dir = extract_dir / "Aura.dist"
-        elif (extract_dir / "Aura.exe").exists():
-            new_app_dir = extract_dir
-        
-        if not new_app_dir:
-            # Check for subdirectories (nested ZIP)
-            for item in extract_dir.iterdir():
-                if item.is_dir():
-                    if (item / "Aura.dist" / "Aura.exe").exists():
-                        new_app_dir = item / "Aura.dist"
-                        break
-                    if (item / "Aura.exe").exists():
-                        new_app_dir = item
-                        break
-
-        if not new_app_dir:
-            msg = "Could not find Aura.exe in the extracted update."
-            return PullResult(False, None, message=msg, error=msg)
+        try:
+            new_app_dir = find_extracted_app_root(extract_dir)
+        except RuntimeError as exc:
+            return PullResult(False, None, message=str(exc), error=str(exc))
 
         current_app_dir = get_current_app_dir()
         
