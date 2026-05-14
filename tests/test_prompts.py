@@ -68,8 +68,9 @@ def test_snappy_planner_worker_rules():
     """Ensure snappy workflow and execution rules are present."""
     # Planner
     assert "Snappy workflow" in PLANNER_SYSTEM_PROMPT
-    assert "Planner tempo" in PLANNER_SYSTEM_PROMPT
-    assert "inspect only the minimum files needed" in PLANNER_SYSTEM_PROMPT
+    assert "fast dispatch compiler" in PLANNER_SYSTEM_PROMPT
+    assert "Inspect only the minimum repo context needed" in PLANNER_SYSTEM_PROMPT
+    assert "Do not narrate reasoning" in PLANNER_SYSTEM_PROMPT
     
     # Worker
     assert "Snappy execution" in WORKER_SYSTEM_PROMPT
@@ -79,3 +80,14 @@ def test_snappy_planner_worker_rules():
     
     # Continuation report still exists
     assert "continuation_report" in WORKER_SYSTEM_PROMPT
+
+
+def test_planner_prompt_does_not_carry_worker_quality_blocks():
+    """Planner should stay lightweight; Worker owns implementation quality."""
+    assert "Code quality contract" not in PLANNER_SYSTEM_PROMPT
+    assert "Architecture guardrails" not in PLANNER_SYSTEM_PROMPT
+    assert "App/tool style contract" not in PLANNER_SYSTEM_PROMPT
+
+    assert "Code quality contract" in WORKER_SYSTEM_PROMPT
+    assert "Architecture guardrails" in WORKER_SYSTEM_PROMPT
+    assert "App/tool style contract" in WORKER_SYSTEM_PROMPT

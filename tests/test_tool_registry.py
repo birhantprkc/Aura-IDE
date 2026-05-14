@@ -989,3 +989,34 @@ class TestHandlerRegistration:
             assert name in TestHandlerRegistration.EXPECTED_TOOLS, (
                 f"Unexpected tool '{name}' has no test class"
             )
+
+
+class TestPlannerToolSurface:
+    """Verify planner mode exposes only dispatch-oriented tools."""
+
+    def test_planner_tool_defs_are_small_and_non_mutating(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="planner")
+
+        tool_names = {
+            tool_def["function"]["name"]
+            for tool_def in registry.tool_defs()
+        }
+
+        assert tool_names == {
+            "read_file",
+            "read_files",
+            "list_directory",
+            "glob",
+            "grep_search",
+            "find_usages",
+            "search_codebase",
+            "dispatch_to_worker",
+            "run_research",
+        }
+        assert "write_file" not in tool_names
+        assert "edit_file" not in tool_names
+        assert "edit_symbol" not in tool_names
+        assert "run_terminal_command" not in tool_names
+        assert "git_status" not in tool_names

@@ -8,7 +8,6 @@ from aura.conversation.tools._types import RegistryMode
 from aura.conversation.tools._schemas import (
     DISPATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
-    PROJECT_MEMORY_TOOL_DEFS,
     READ_TOOL_DEFS,
     RESEARCH_TOOL_DEFS,
     TERMINAL_TOOL_DEF,
@@ -16,6 +15,21 @@ from aura.conversation.tools._schemas import (
     WORKER_TODO_TOOL_DEF,
     WRITE_TOOL_DEFS,
 )
+
+PLANNER_TOOL_NAMES = {
+    "read_file",
+    "read_files",
+    "list_directory",
+    "glob",
+    "grep_search",
+    "find_usages",
+    "search_codebase",
+}
+
+
+def _tool_name(tool_def: dict[str, Any]) -> str:
+    fn = tool_def.get("function")
+    return str(fn.get("name", "")) if isinstance(fn, dict) else ""
 
 
 class ToolCatalog:
@@ -51,12 +65,13 @@ class ToolCatalog:
         elif mode == "researcher":
             tools = list(WEB_TOOL_DEFS)
         elif mode == "planner":
+            planner_read_tools = [
+                tool for tool in READ_TOOL_DEFS if _tool_name(tool) in PLANNER_TOOL_NAMES
+            ]
             tools = (
-                list(READ_TOOL_DEFS)
+                planner_read_tools
                 + [dict(DISPATCH_TOOL_DEF)]
                 + list(RESEARCH_TOOL_DEFS)
-                + list(PROJECT_MEMORY_TOOL_DEFS)
-                + list(GIT_TOOL_DEFS)
             )
         elif mode == "worker":
             tools = (
@@ -75,11 +90,12 @@ class ToolCatalog:
             )
 
         # Append dynamic tools (only when not read-only)
-        if not read_only and dynamic_schemas:
+        if not read_only and mode != "planner" and dynamic_schemas:
             tools.extend(dynamic_schemas)
 
-        # Append MCP tool schemas (available in all modes)
-        if mcp_schemas:
+        # Append MCP tool schemas outside planner mode. Planner keeps a small,
+        # non-mutating dispatch surface; workers/single mode retain extensions.
+        if mode != "planner" and mcp_schemas:
             tools.extend(mcp_schemas)
 
         return tools

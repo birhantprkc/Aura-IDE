@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from aura.conversation.tool_limits import (
+    MAX_CONTEXT_CALLS_PER_PLANNER_TURN,
     MAX_DISPATCH_CALLS_PER_PLANNER_TURN,
     MAX_TERMINAL_CALLS_PER_WORKER_PASS,
     MAX_TOOL_CALLS_BY_MODE,
@@ -80,6 +81,23 @@ def test_planner_dispatch_cap_is_per_model_round():
     assert info["reason"] == "planner_dispatch_call_limit_reached"
 
     state.begin_model_round()
+    allowed, info = state.check("dispatch_to_worker")
+    assert allowed is True
+    assert info == {}
+
+
+def test_planner_context_cap_keeps_dispatch_available():
+    state = ToolLimitState(mode="planner")
+    for _ in range(MAX_CONTEXT_CALLS_PER_PLANNER_TURN):
+        allowed, _info = state.check("grep_search")
+        assert allowed is True
+        state.record("grep_search")
+
+    allowed, info = state.check("read_file")
+    assert allowed is False
+    assert info["reason"] == "planner_context_call_limit_reached"
+    assert "Dispatch with the files already known" in info["message"]
+
     allowed, info = state.check("dispatch_to_worker")
     assert allowed is True
     assert info == {}

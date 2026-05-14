@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 
 from aura.config import (
     PROVIDERS,
-    DEFAULT_THINKING,
+    DEFAULT_PLANNER_THINKING,
     DEFAULT_WORKER_THINKING,
     ProviderId,
     ThinkingMode,
@@ -91,7 +91,7 @@ class LeftPane(QFrame):
         self._planner_thinking_combo.addItem("Off", "off")
         self._planner_thinking_combo.addItem("High", "high")
         self._planner_thinking_combo.addItem("Max", "max")
-        self._planner_thinking_combo.setCurrentIndex(["off", "high", "max"].index(DEFAULT_THINKING))
+        self._planner_thinking_combo.setCurrentIndex(["off", "high", "max"].index(DEFAULT_PLANNER_THINKING))
         self._planner_thinking_combo.currentIndexChanged.connect(
             lambda: self.planner_thinking_changed.emit(self.current_planner_thinking())
         )

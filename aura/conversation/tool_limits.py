@@ -11,15 +11,25 @@ WRITE_TOOLS = {"write_file", "edit_file", "edit_symbol"}
 TERMINAL_TOOLS = {"run_terminal_command"}
 DISPATCH_TOOLS = {"dispatch_to_worker"}
 RESEARCH_TOOLS = {"run_research"}
+PLANNER_CONTEXT_TOOLS = {
+    "read_file",
+    "read_files",
+    "list_directory",
+    "glob",
+    "grep_search",
+    "find_usages",
+    "search_codebase",
+}
 
 MAX_TOOL_CALLS_BY_MODE: dict[RegistryMode, int] = {
-    "planner": 40,
+    "planner": 8,
     "worker": 100,
     "single": 80,
     "researcher": 20,
 }
 
 MAX_WORKER_REDISPATCHES_PER_USER_TURN = 2
+MAX_CONTEXT_CALLS_PER_PLANNER_TURN = 3
 MAX_TERMINAL_CALLS_PER_WORKER_PASS = 10
 MAX_WRITE_CALLS_PER_WORKER_PASS = 30
 MAX_DISPATCH_CALLS_PER_PLANNER_TURN = 1
@@ -36,6 +46,7 @@ class ToolLimitState:
     write_calls: int = 0
     dispatch_calls: int = 0
     research_calls: int = 0
+    planner_context_calls: int = 0
     round_dispatch_calls: int = 0
     round_research_calls: int = 0
 
@@ -88,6 +99,16 @@ class ToolLimitState:
                     current=self.round_dispatch_calls,
                 )
 
+        if self.mode == "planner" and tool_name in PLANNER_CONTEXT_TOOLS:
+            if self.planner_context_calls + 1 > MAX_CONTEXT_CALLS_PER_PLANNER_TURN:
+                return False, self._payload(
+                    tool_name=tool_name,
+                    reason="planner_context_call_limit_reached",
+                    limit_name="planner_context_calls",
+                    limit=MAX_CONTEXT_CALLS_PER_PLANNER_TURN,
+                    current=self.planner_context_calls,
+                )
+
         if self.mode == "planner" and tool_name in RESEARCH_TOOLS:
             if self.round_research_calls + 1 > MAX_RESEARCH_CALLS_PER_PLANNER_TURN:
                 return False, self._payload(
@@ -113,6 +134,8 @@ class ToolLimitState:
         if tool_name in RESEARCH_TOOLS:
             self.research_calls += 1
             self.round_research_calls += 1
+        if self.mode == "planner" and tool_name in PLANNER_CONTEXT_TOOLS:
+            self.planner_context_calls += 1
 
     def _payload(
         self,
@@ -130,7 +153,12 @@ class ToolLimitState:
             "Summarize completed work, modified files, validation status, blockers, "
             "and remaining work."
             if phase_boundary
-            else f"Tool limit reached: {limit_name} is capped at {limit}."
+            else (
+                "Planner context-call budget reached. Dispatch with the files already known, "
+                "or ask one concise clarifying question if dispatch would likely be wrong."
+                if reason == "planner_context_call_limit_reached"
+                else f"Tool limit reached: {limit_name} is capped at {limit}."
+            )
         )
         return {
             "ok": False,
@@ -154,6 +182,7 @@ class ToolLimitState:
             "write_calls": self.write_calls,
             "dispatch_calls": self.dispatch_calls,
             "research_calls": self.research_calls,
+            "planner_context_calls": self.planner_context_calls,
             "round_dispatch_calls": self.round_dispatch_calls,
             "round_research_calls": self.round_research_calls,
         }
@@ -166,6 +195,7 @@ def limit_reached_payload(info: dict[str, Any]) -> str:
 
 __all__ = [
     "DISPATCH_TOOLS",
+    "MAX_CONTEXT_CALLS_PER_PLANNER_TURN",
     "MAX_DISPATCH_CALLS_PER_PLANNER_TURN",
     "MAX_RESEARCH_CALLS_PER_PLANNER_TURN",
     "MAX_TERMINAL_CALLS_PER_WORKER_PASS",
@@ -173,6 +203,7 @@ __all__ = [
     "MAX_WORKER_REDISPATCHES_PER_USER_TURN",
     "MAX_WRITE_CALLS_PER_WORKER_PASS",
     "RESEARCH_TOOLS",
+    "PLANNER_CONTEXT_TOOLS",
     "RegistryMode",
     "TERMINAL_TOOLS",
     "ToolLimitState",
