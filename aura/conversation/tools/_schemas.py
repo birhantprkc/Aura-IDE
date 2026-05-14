@@ -424,9 +424,10 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
             "Dispatch a coding task to a worker model with file write access. Use this when "
             "the user has agreed to a code change and you have enough information to specify "
             "the change precisely. The worker has tools to read and edit files in the "
-            "workspace. Provide a complete, self-contained spec — the worker does not see "
-            "this conversation. Include: goal, files involved (use exact paths from your "
-            "earlier read_file calls), the specific change to make, any constraints. The "
+            "workspace. Provide a complete, self-contained implementation handoff — the "
+            "worker does not see this conversation. Include: goal, files involved (use "
+            "exact paths from your earlier read_file calls), a concise Builder Note with "
+            "the specific change and important constraints, and acceptance checks. The "
             "worker will return a summary of what it did."
         ),
         "parameters": {
@@ -444,13 +445,17 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                 "spec": {
                     "type": "string",
                     "description": (
-                        "Full self-contained Markdown implementation contract. It must "
-                        "include these exact sections as headings: Core Behavior, Failure "
-                        "Behavior, Code Shape, File-by-File Implementation Plan, Acceptance Checks, "
-                        "and Non-Goals. Be specific about function names, line behavior, "
-                        "error cases, smallest complete implementation scope, and "
-                        "no-ceremony/docstring constraints. The worker has not seen the "
-                        "conversation, so include necessary context."
+                        "Self-contained Builder Note / implementation handoff. Write concise "
+                        "plain English, like a senior engineer handing work to a capable "
+                        "builder. Include the important behavior, constraints, and known "
+                        "pitfalls. Do not require or default to formal sections such as Core "
+                        "Behavior, Failure Behavior, Code Shape, File-by-File Implementation "
+                        "Plan, Acceptance Checks, or Non-Goals. A fuller structured spec is "
+                        "optional only for broad, risky, or ambiguous work such as cross-file "
+                        "refactors, auth/security, subprocess/threading/async behavior, "
+                        "persistence/data model changes, destructive file operations, public "
+                        "API/signature changes, or build/release/update system work. The "
+                        "worker has not seen the conversation, so include necessary context."
                     ),
                 },
                 "acceptance": {
