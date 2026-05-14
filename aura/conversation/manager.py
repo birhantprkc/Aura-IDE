@@ -34,7 +34,14 @@ from aura.client import (
     WorkerDispatchRequested,
 )
 from aura.hooks import hooks
-from aura.config import MAX_TOOL_ROUNDS, ModelId, ThinkingMode
+from aura.config import ModelId, ThinkingMode
+from aura.conversation.tool_budget import (
+    ToolBudgetManager,
+    ToolBudgetConfig,
+    ToolBudgetExceeded,
+    budget_exceeded_payload,
+    ROLE_BUDGETS,
+)
 from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
@@ -96,9 +103,39 @@ class ConversationManager:
         The planner uses `generate_planner_code`; workers use `generate_worker_code`.
         """
         reject_all_for_turn = False
-        limit = max_tool_rounds or MAX_TOOL_ROUNDS
 
-        for _round in range(limit):
+        # Determine budget config — honour explicit max_tool_rounds override
+        base_config = ROLE_BUDGETS.get(
+            self._tools.mode, ROLE_BUDGETS["single"]
+        )
+        if max_tool_rounds is not None:
+            budget_config = ToolBudgetConfig(
+                max_rounds=max_tool_rounds,
+                max_total_cost=base_config.max_total_cost,
+                max_tool_calls=base_config.max_tool_calls,
+                max_reads=base_config.max_reads,
+                max_searches=base_config.max_searches,
+                max_writes=base_config.max_writes,
+                max_terminal=base_config.max_terminal,
+                max_git=base_config.max_git,
+                max_web=base_config.max_web,
+                max_research=base_config.max_research,
+                max_dispatches=base_config.max_dispatches,
+                max_memory=base_config.max_memory,
+                max_todo=base_config.max_todo,
+                warn_at_ratio=base_config.warn_at_ratio,
+            )
+        else:
+            budget_config = base_config
+
+        budget = ToolBudgetManager(budget_config)
+
+        while True:
+            try:
+                budget.record_round()
+            except ToolBudgetExceeded as exc:
+                on_event(ApiError(status_code=None, message=exc.reason))
+                return
             if cancel_event.is_set():
                 self._cleanup_cancelled(on_event)
                 return
@@ -180,6 +217,20 @@ class ConversationManager:
                     continue
 
                 if name == "dispatch_to_worker":
+                    try:
+                        budget.reserve_tool(name)
+                    except ToolBudgetExceeded as exc:
+                        payload = budget_exceeded_payload(exc)
+                        self._history.append_tool_result(tool_call_id, payload)
+                        on_event(
+                            ToolResult(
+                                tool_call_id=tool_call_id,
+                                name=name,
+                                ok=False,
+                                result=payload,
+                            )
+                        )
+                        continue
                     result = self._handle_dispatch(
                         tool_call_id=tool_call_id,
                         args=args,
@@ -191,6 +242,20 @@ class ConversationManager:
                     continue
 
                 if name == "run_research":
+                    try:
+                        budget.reserve_tool(name)
+                    except ToolBudgetExceeded as exc:
+                        payload = budget_exceeded_payload(exc)
+                        self._history.append_tool_result(tool_call_id, payload)
+                        on_event(
+                            ToolResult(
+                                tool_call_id=tool_call_id,
+                                name=name,
+                                ok=False,
+                                result=payload,
+                            )
+                        )
+                        continue
                     ok = self._handle_research(
                         tool_call_id=tool_call_id,
                         args=args,
@@ -204,6 +269,20 @@ class ConversationManager:
                     continue
 
                 if name == "run_terminal_command":
+                    try:
+                        budget.reserve_tool(name)
+                    except ToolBudgetExceeded as exc:
+                        payload = budget_exceeded_payload(exc)
+                        self._history.append_tool_result(tool_call_id, payload)
+                        on_event(
+                            ToolResult(
+                                tool_call_id=tool_call_id,
+                                name=name,
+                                ok=False,
+                                result=payload,
+                            )
+                        )
+                        continue
                     self._handle_terminal_command(
                         tool_call_id=tool_call_id,
                         args=args,
@@ -213,9 +292,24 @@ class ConversationManager:
                     continue
 
                 if reject_all_for_turn and name in ("write_file", "edit_file"):
+                    try:
+                        budget.reserve_tool(name)
+                    except ToolBudgetExceeded as exc:
+                        payload = budget_exceeded_payload(exc)
+                        self._history.append_tool_result(tool_call_id, payload)
+                        on_event(
+                            ToolResult(
+                                tool_call_id=tool_call_id,
+                                name=name,
+                                ok=False,
+                                result=payload,
+                            )
+                        )
+                        continue
                     payload = json.dumps(
                         {"ok": False, "error": "User rejected all writes in this turn."}
                     )
+                    payload = budget.check_warning(payload)
                     self._history.append_tool_result(tool_call_id, payload)
                     on_event(
                         ToolResult(
@@ -224,6 +318,21 @@ class ConversationManager:
                             ok=False,
                             result=payload,
                             extras={"approval": "reject_all"},
+                        )
+                    )
+                    continue
+
+                try:
+                    budget.reserve_tool(name)
+                except ToolBudgetExceeded as exc:
+                    payload = budget_exceeded_payload(exc)
+                    self._history.append_tool_result(tool_call_id, payload)
+                    on_event(
+                        ToolResult(
+                            tool_call_id=tool_call_id,
+                            name=name,
+                            ok=False,
+                            result=payload,
                         )
                     )
                     continue
@@ -242,6 +351,9 @@ class ConversationManager:
                 # Apply circuit breaker
                 tool_msg_content = self._apply_circuit_breaker(name, args, exec_result.ok, tool_msg_content)
 
+                # Apply budget warning
+                tool_msg_content = budget.check_warning(tool_msg_content)
+
                 self._history.append_tool_result(tool_call_id, tool_msg_content)
                 on_event(
                     ToolResult(
@@ -257,13 +369,6 @@ class ConversationManager:
             # The Worker Completed card is the final user-facing result.
             if _terminal_dispatch:
                 return
-
-        on_event(
-            ApiError(
-                status_code=None,
-                message=f"Reached max tool rounds ({limit}) without natural stop.",
-            )
-        )
 
     # ---- dispatch_to_worker ------------------------------------------------
 
@@ -360,7 +465,8 @@ class ConversationManager:
         thinking: ThinkingMode = "off" # Keep researcher fast
         
         try:
-            for _round in range(5): # Max 5 research steps
+            # TODO: could adopt ToolBudgetManager for researcher sub-agent.
+            for _round in range(5):  # Max 5 research steps
                 if cancel_event.is_set():
                     break
                 

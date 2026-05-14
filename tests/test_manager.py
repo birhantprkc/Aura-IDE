@@ -129,6 +129,7 @@ def mock_tools(tmp_path):
     tools.tool_defs.return_value = []
     tools.execute.return_value = ToolExecResult(ok=True, payload={"ok": True})
     type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    type(tools).mode = PropertyMock(return_value="single")
     return tools
 
 
@@ -244,7 +245,6 @@ class TestSingleToolCall:
 class TestMaxToolRounds:
     """When every round produces a tool call, we hit the limit."""
 
-    @patch("aura.conversation.manager.MAX_TOOL_ROUNDS", 2)
     def test_max_rounds_reached(self, manager, mock_client, mock_tools,
                                 on_event, captured_events, cancel_event,
                                 history):
@@ -272,6 +272,7 @@ class TestMaxToolRounds:
             cancel_event=cancel_event,
             model="deepseek-chat",
             thinking="off",
+            max_tool_rounds=2,
         )
 
         # After max rounds, an ApiError should be fired
@@ -409,12 +410,12 @@ class TestCancelWithToolCalls:
 # ===================================================================
 
 class TestDispatchToWorker:
-    """Planner dispatches a task to a worker via dispatch_cb."""
+    """dispatch_to_worker tool integration tests."""
 
     def test_dispatch_ok(self, manager, mock_client, mock_tools, on_event,
                          captured_events, cancel_event, history):
-        tc = _tool_call("dispatch1", "dispatch_to_worker", {
-            "goal": "Fix bug",
+        type(mock_tools).mode = PropertyMock(return_value="planner")
+        tc = _tool_call("dispatch1", "dispatch_to_worker", {            "goal": "Fix bug",
             "files": ["test.py"],
             "spec": "Change X to Y",
             "acceptance": "Tests pass",
@@ -463,10 +464,10 @@ class TestDispatchToWorker:
         payload = json.loads(tool_msgs[0]["content"])
         assert payload["ok"] is True
 
-    def test_dispatch_no_callback(self, manager, mock_client, on_event,
+def test_dispatch_no_callback(self, manager, mock_client, mock_tools, on_event,
                                   captured_events, cancel_event, history):
-        tc = _tool_call("dispatch1", "dispatch_to_worker", {
-            "goal": "Fix bug",
+        type(mock_tools).mode = PropertyMock(return_value="planner")
+        tc = _tool_call("dispatch1", "dispatch_to_worker", {            "goal": "Fix bug",
             "files": ["test.py"],
             "spec": "Change X to Y",
             "acceptance": "Tests pass",
@@ -494,10 +495,10 @@ class TestDispatchToWorker:
         assert dispatch_results[0].ok is False
         assert "not enabled" in dispatch_results[0].result.lower()
 
-    def test_dispatch_cb_raises(self, manager, mock_client, on_event,
+def test_dispatch_cb_raises(self, manager, mock_client, mock_tools, on_event,
                                 captured_events, cancel_event, history):
-        tc = _tool_call("dispatch1", "dispatch_to_worker", {
-            "goal": "Fix bug",
+        type(mock_tools).mode = PropertyMock(return_value="planner")
+        tc = _tool_call("dispatch1", "dispatch_to_worker", {            "goal": "Fix bug",
             "files": ["test.py"],
             "spec": "Change X to Y",
             "acceptance": "Tests pass",
@@ -630,6 +631,7 @@ class TestRunResearch:
                          mock_tools, on_event, captured_events, cancel_event,
                          history, tmp_path):
         type(mock_tools).workspace_root = PropertyMock(return_value=tmp_path)
+        type(mock_tools).mode = PropertyMock(return_value="planner")
 
         # Mock the ToolRegistry created inside _handle_research
         mock_res_tools = MagicMock(spec=ToolRegistry)
@@ -1341,3 +1343,64 @@ class TestEdgeCases:
         assert len(tool_msgs) == 2
         # The second should be "rejected all"
         assert "rejected all" in tool_msgs[1]["content"].lower()
+
+
+# ===================================================================
+# Budget integration tests
+# ===================================================================
+
+
+class TestBudgetIntegration:
+    """Test that tool budget rejects tools and creates proper tool results."""
+
+    def test_budget_rejects_write_for_planner(self, manager, mock_client, mock_tools,
+                                               on_event, captured_events, cancel_event,
+                                               history):
+        """Planner budget (max_writes=0) rejects write_file with proper tool result."""
+        type(mock_tools).mode = PropertyMock(return_value="planner")
+        tc = _tool_call("w1", "write_file", {"path": "a.py", "content": "x"})
+        mock_client.side_effect = [
+            iter([_make_done(content="", tool_calls=[tc])]),
+            iter([ContentDelta(text="Done"), _make_done(content="Done")]),
+        ]
+        manager.send(
+            on_event=on_event,
+            approval_cb=_make_approval_cb(),
+            cancel_event=cancel_event,
+            model="deepseek-chat",
+            thinking="off",
+        )
+        # Should have a tool result with ok=False and budget_exceeded
+        tool_results = [e for e in captured_events if isinstance(e, ToolResult)]
+        write_results = [tr for tr in tool_results if tr.name == "write_file"]
+        assert len(write_results) >= 1
+        assert write_results[0].ok is False
+        assert "budget" in write_results[0].result.lower() or "exceeded" in write_results[0].result.lower()
+        # Tool result must be in history
+        tool_msgs = [m for m in history.messages if m["role"] == "tool"]
+        assert len(tool_msgs) >= 1
+
+    def test_budget_allows_many_reads(self, manager, mock_client, mock_tools,
+                                       on_event, captured_events, cancel_event,
+                                       history):
+        """Worker budget allows many read_file calls."""
+        type(mock_tools).mode = PropertyMock(return_value="worker")
+        # Build 30 tool calls (all read_file) in one round
+        tcs = [_tool_call(f"r{i}", "read_file", {"path": f"file{i}.py"}) for i in range(30)]
+        mock_client.side_effect = [
+            iter([_make_done(content="", tool_calls=tcs)]),
+            iter([ContentDelta(text="Done"), _make_done(content="Done")]),
+        ]
+        mock_tools.execute.return_value = ToolExecResult(ok=True, payload={"ok": True, "content": "data"})
+        manager.send(
+            on_event=on_event,
+            approval_cb=_make_approval_cb(),
+            cancel_event=cancel_event,
+            model="deepseek-chat",
+            thinking="off",
+        )
+        # All 30 read calls should succeed
+        assert mock_tools.execute.call_count == 30
+        tool_results = [e for e in captured_events if isinstance(e, ToolResult)]
+        assert len(tool_results) == 30
+        assert all(tr.ok for tr in tool_results)

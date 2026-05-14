@@ -22,6 +22,18 @@ _SHARED_WORKSPACE_RULES = """Common rules for all modes:
 - Do not access paths outside the workspace root.
 - Prefer simple, maintainable solutions over clever abstractions."""
 
+_TOOL_EFFICIENCY_RULES = """Tool efficiency:
+- Prefer `read_files` over repeated `read_file` calls when reading more than one known file.
+- Prefer `grep_search`, `find_usages`, and `search_codebase` before broad directory walking.
+- Stop exploration once target files and symbols are known.
+- Do not rerun the same validation command repeatedly unless the output changed.
+- If a tool budget warning appears, finish the current focused path and summarize rather than continuing broad exploration."""
+
+_WORKER_BUDGET_RULES = """Budget-aware validation:
+- Validation is required when appropriate, but do not repeat it endlessly.
+- If validation fails twice with the same output, stop and report the blocker or change strategy.
+- You have a per-turn tool budget. Reads and searches are cheap; terminal commands, writes, web requests are expensive."""
+
 _ARCHITECTURE_GUARDRAILS = """Architecture guardrails:
 - Avoid god files and monolithic classes.
 - Every file and module should have a single, clear responsibility.
@@ -170,6 +182,7 @@ PLANNER_SYSTEM_PROMPT = (
     TIER1_CONTEXT_PLACEHOLDER + "\n"
     + _SHARED_WORKSPACE_RULES + "\n\n"
     + _ARCHITECTURE_GUARDRAILS + "\n\n"
+    + _TOOL_EFFICIENCY_RULES + "\n\n"
     + _PLANNER_BLOCK
 )
 
@@ -177,6 +190,8 @@ WORKER_SYSTEM_PROMPT = (
     TIER1_CONTEXT_PLACEHOLDER + "\n"
     + _SHARED_WORKSPACE_RULES + "\n\n"
     + _ARCHITECTURE_GUARDRAILS + "\n\n"
+    + _TOOL_EFFICIENCY_RULES + "\n\n"
+    + _WORKER_BUDGET_RULES + "\n\n"
     + _WORKER_ENGINEERING_RULES + "\n\n"
     + _WORKER_BLOCK
 )
@@ -184,6 +199,7 @@ WORKER_SYSTEM_PROMPT = (
 SINGLE_SYSTEM_PROMPT = (
     TIER1_CONTEXT_PLACEHOLDER + "\n"
     + _SHARED_WORKSPACE_RULES + "\n\n"
+    + _TOOL_EFFICIENCY_RULES + "\n\n"
     + _SINGLE_BLOCK
 )
 
