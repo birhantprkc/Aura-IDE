@@ -233,7 +233,6 @@ def resolve_build_version(
     requested_version: str | None,
     *,
     skip_version_update: bool = False,
-    interactive_version: bool = False,
 ) -> str:
     """Resolve the build version, updating files only when explicitly requested."""
     if requested_version is not None and skip_version_update:
@@ -244,22 +243,23 @@ def resolve_build_version(
         update_files(root, version)
         return version
 
-    if interactive_version:
-        current = read_current_version(root)
-        raw = input(
-            f"Enter release version X.Y.Z or leave blank to keep {current}: "
-        ).strip()
-        if raw:
-            version = normalize_version(raw)
-            update_files(root, version)
-            return version
-        print(f"Using current version: {current}")
-        return current
-
-    if skip_version_update or requested_version is None:
+    if skip_version_update:
         version = read_current_version(root)
         print(f"Using current version: {version}")
         return version
+
+    # Default to interactive if not skipping and no version provided
+    current = read_current_version(root)
+    raw = input(
+        f"Enter release version X.Y.Z or leave blank to keep {current}: "
+    ).strip()
+    if raw:
+        version = normalize_version(raw)
+        update_files(root, version)
+        return version
+    
+    print(f"Using current version: {current}")
+    return current
 
 
 def build(
@@ -267,7 +267,6 @@ def build(
     *,
     skip_version_update: bool = False,
     copy_desktop: bool = True,
-    interactive_version: bool = False,
 ) -> None:
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
@@ -277,7 +276,6 @@ def build(
         root,
         version,
         skip_version_update=skip_version_update,
-        interactive_version=interactive_version,
     )
 
     # 2. Validation & Cleanup
@@ -319,19 +317,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--version",
         help=(
-            "Set project version before building. When omitted, the current "
-            "version in aura/version.py is used without prompting."
+            "Set project version before building. When omitted, the user "
+            "is prompted to enter a version (default)."
         ),
     )
     parser.add_argument(
         "--skip-version-update",
         action="store_true",
         help="Use the current project version without prompting or editing files.",
-    )
-    parser.add_argument(
-        "--interactive-version",
-        action="store_true",
-        help="Prompt for a version before building.",
     )
     parser.add_argument(
         "--no-copy-desktop",
@@ -348,5 +341,5 @@ if __name__ == "__main__":
         args.version,
         skip_version_update=args.skip_version_update,
         copy_desktop=not args.no_copy_desktop,
-        interactive_version=args.interactive_version,
     )
+

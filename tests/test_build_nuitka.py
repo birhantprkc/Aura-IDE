@@ -46,7 +46,6 @@ def test_parse_args_supports_noninteractive_flags() -> None:
 
     assert args.skip_version_update is True
     assert args.no_copy_desktop is True
-    assert args.interactive_version is False
 
 
 def test_validate_project_paths_requires_all_media_files(tmp_path: Path) -> None:
