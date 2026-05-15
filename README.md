@@ -815,12 +815,12 @@ python scripts/smoke_client.py
 
 ```bash
 python scripts/build_exe.py     # Build a standalone executable (PyInstaller)
-python scripts/build_nuitka.py  # Build with Nuitka (faster, smaller)
+python scripts/build_nuitka.py  # Build with Nuitka using the current version
 ```
 
 ### Release Process
 
-To publish a Windows release, bump `aura/version.py`, create a GitHub Release tagged `vX.Y.Z`, and the release workflow will attach `Aura-Windows-x64.zip` automatically.
+To publish a Windows release, bump `aura/version.py`, `pyproject.toml`, and the README version badge, then run `python scripts/build_nuitka.py`. Create a GitHub Release tagged `vX.Y.Z` and manually upload `build/Aura-Windows-x64.zip`.
 
 ### Requirements
 

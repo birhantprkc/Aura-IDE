@@ -119,9 +119,17 @@ def ensure_gh_ready(root: Path) -> None:
         ) from exc
 
 
-def build_app(root: Path) -> None:
+def build_app(root: Path, version: str) -> None:
     """Build the Windows app using the existing Nuitka build helper."""
-    run([sys.executable, str(root / "scripts" / "build_nuitka.py")], cwd=root)
+    run(
+        [
+            sys.executable,
+            str(root / "scripts" / "build_nuitka.py"),
+            "--version",
+            version,
+        ],
+        cwd=root,
+    )
 
 
 def verify_artifacts(root: Path) -> Path:
@@ -243,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ensure_clean_git(root, allow_dirty=args.allow_dirty)
     ensure_gh_ready(root)
-    build_app(root)
+    build_app(root, version)
     zip_path = verify_artifacts(root)
 
     if release_exists(root, tag):

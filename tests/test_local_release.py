@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import local_release
 from scripts.local_release import read_version, validate_tag, verify_zip_layout
 
 
@@ -37,6 +38,29 @@ def test_read_version_extracts_string_literal(tmp_path: Path) -> None:
     )
 
     assert read_version(version_file) == "1.3.1"
+
+
+def test_build_app_passes_version_to_nuitka_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *, cwd: Path, **_: object) -> None:
+        calls.append(cmd)
+        assert cwd == tmp_path
+
+    monkeypatch.setattr(local_release, "run", fake_run)
+
+    local_release.build_app(tmp_path, "1.3.4")
+
+    assert calls == [
+        [
+            local_release.sys.executable,
+            str(tmp_path / "scripts" / "build_nuitka.py"),
+            "--version",
+            "1.3.4",
+        ]
+    ]
 
 
 def test_verify_zip_layout_accepts_flattened_release_zip(tmp_path: Path) -> None:
