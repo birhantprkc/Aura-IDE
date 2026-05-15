@@ -311,10 +311,45 @@ def _to_anthropic_messages(
             continue
 
         content_blocks: list[dict[str, Any]] = []
-        content = msg.get("content")
-        if isinstance(content, str) and content:
-            content_blocks.append({"type": "text", "text": content})
+        
+        # 1. Handle Thinking (Reasoning)
+        rc = msg.get("reasoning_content")
+        if rc and isinstance(rc, str):
+            content_blocks.append({"type": "thinking", "thinking": rc})
 
+        # 2. Handle Content (Text/Images)
+        content = msg.get("content")
+        if isinstance(content, str):
+            if content:
+                content_blocks.append({"type": "text", "text": content})
+        elif isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                ptype = part.get("type")
+                if ptype == "text":
+                    text = part.get("text")
+                    if text:
+                        content_blocks.append({"type": "text", "text": text})
+                elif ptype == "image_url":
+                    url = part.get("image_url", {}).get("url", "")
+                    if url.startswith("data:"):
+                        # data:image/png;base64,iVBOR...
+                        try:
+                            header, data = url.split(",", 1)
+                            media_type = header.split(":", 1)[1].split(";", 1)[0]
+                            content_blocks.append({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": data,
+                                }
+                            })
+                        except Exception:
+                            continue
+
+        # 3. Handle Tool Calls
         if role == "assistant":
             tool_calls = msg.get("tool_calls") or []
             if isinstance(tool_calls, list):
