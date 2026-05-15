@@ -25,6 +25,7 @@ from aura.git_ops import (
     working_tree_status,
 )
 from aura.gui.theme import BG, BORDER, FG, FG_DIM, FG_MUTED
+from aura.gui.syntax import DiffHighlighter
 
 
 class CommitDiffDialog(QDialog):
@@ -54,6 +55,9 @@ class CommitDiffDialog(QDialog):
             f"border: 1px solid {BORDER}; border-radius: 6px; padding: 8px; }}"
         )
         layout.addWidget(self._diff_view, 1)
+
+        # Attach syntax highlighter for the diff view
+        self._highlighter = DiffHighlighter(self._diff_view.document())
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
