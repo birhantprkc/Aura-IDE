@@ -1,21 +1,57 @@
 """Entry point: `python -m aura`."""
 from __future__ import annotations
 
+import logging
+import platform
 import sys
+from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, Qt
-from PySide6.QtGui import QGuiApplication, QIcon
-from PySide6.QtWidgets import QApplication, QMessageBox
+from aura.startup_logging import configure_startup_logging
 
-from aura.config import APP_NAME, PROVIDERS, get_api_key, icon_path, load_settings
-from aura.gui.main_window import MainWindow
-from aura.gui.theme import apply_theme
+logger = logging.getLogger(__name__)
 
 
 def main() -> int:
+    log_path = configure_startup_logging()
+
+    try:
+        return _run_app(log_path)
+    except Exception as exc:
+        logger.critical("Aura failed to start", exc_info=True)
+        if _qapplication_exists():
+            try:
+                _show_crash_dialog(log_path, exc)
+            except Exception:
+                logger.exception("failed to show startup crash dialog")
+                _print_startup_failure(log_path, exc)
+        else:
+            _print_startup_failure(log_path, exc)
+        return 1
+
+
+def _run_app(log_path: Path) -> int:
     # Force UTF-8 stdout for any console output.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+    logger.info("app start")
+    logger.info("argv: %r", sys.argv)
+    logger.info("Python: %s", sys.version.replace("\n", " "))
+    logger.info("platform: %s", platform.platform())
+
+    from aura.paths import config_dir, data_dir
+
+    logger.info("config path: %s", config_dir())
+    logger.info("data path: %s", data_dir())
+    logger.info("startup log path: %s", log_path)
+
+    from PySide6.QtCore import QCoreApplication, Qt
+    from PySide6.QtGui import QGuiApplication, QIcon
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from aura.config import APP_NAME, PROVIDERS, get_api_key, icon_path, load_settings
+    from aura.gui.main_window import MainWindow
+    from aura.gui.theme import apply_theme
 
     QCoreApplication.setApplicationName(APP_NAME)
     QCoreApplication.setOrganizationName(APP_NAME)
@@ -26,18 +62,28 @@ def main() -> int:
     # Force software OpenGL to suppress startup window flicker on Windows.
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
 
+    logger.info("QApplication creation start")
     app = QApplication(sys.argv)
+    logger.info("QApplication creation end")
+
     app.setWindowIcon(QIcon(str(icon_path())))
+
+    logger.info("theme apply start")
     apply_theme(app)
+    logger.info("theme apply end")
 
     # Check if any provider has an API key configured (env var or stored).
+    logger.info("settings load start")
     settings = load_settings()
+    logger.info("settings load end")
+
     selected_provider = settings.provider
     has_any_key = any(get_api_key(pid) is not None for pid in PROVIDERS)
     has_selected_key = get_api_key(selected_provider) is not None
 
     if not has_any_key:
         # No provider at all has a key — show a warning but don't block.
+        logger.info("API key warning start")
         QMessageBox.warning(
             None,
             APP_NAME,
@@ -47,9 +93,11 @@ def main() -> int:
             + "\n".join(f"  • {cfg.env_key}  ({cfg.label})" for cfg in PROVIDERS.values())
             + "\n\nThe app will open, but chat will fail until a key is configured.",
         )
+        logger.info("API key warning end")
     elif not has_selected_key:
         # Selected provider doesn't have a key, but another one does.
         cfg = PROVIDERS[selected_provider]
+        logger.info("API key warning start")
         QMessageBox.warning(
             None,
             APP_NAME,
@@ -59,10 +107,48 @@ def main() -> int:
             f"The app will open, but chat with this provider will fail "
             f"until a key is configured.",
         )
+        logger.info("API key warning end")
 
+    logger.info("MainWindow construction start")
     win = MainWindow()
+    logger.info("MainWindow construction end")
+
+    logger.info("win.show start")
     win.show()
-    return app.exec()
+    logger.info("win.show end")
+
+    logger.info("app.exec start")
+    exit_code = app.exec()
+    logger.info("app.exec end: %s", exit_code)
+    return exit_code
+
+
+def _show_crash_dialog(log_path: Path, exc: Exception) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    QMessageBox.critical(
+        None,
+        "Aura failed to start",
+        f"{type(exc).__name__}: {exc}\n\nStartup log:\n{log_path}",
+    )
+
+
+def _print_startup_failure(log_path: Path, exc: Exception) -> None:
+    message = (
+        f"Aura failed to start: {type(exc).__name__}: {exc}\n"
+        f"Startup log: {log_path}"
+    )
+    stream = sys.stderr or sys.stdout
+    if stream is not None:
+        print(message, file=stream)
+
+
+def _qapplication_exists() -> bool:
+    try:
+        from PySide6.QtWidgets import QApplication
+    except Exception:
+        return False
+    return QApplication.instance() is not None
 
 
 if __name__ == "__main__":
