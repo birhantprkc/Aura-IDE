@@ -782,6 +782,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             worker_model=self.current_worker_model(),
             worker_thinking=self.current_worker_thinking(),
             provider=self._settings.provider,
+            planner_provider=self._settings.planner_provider,
+            worker_provider=self._settings.worker_provider,
         )
 
     def _on_tool_result(self, tool_id: str, name: str, ok: bool, result: str, extras: dict) -> None:
