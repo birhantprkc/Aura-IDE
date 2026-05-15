@@ -86,6 +86,8 @@ class ConversationPersistence(QObject):
         worker_model,
         worker_thinking,
         provider,
+        planner_provider,
+        worker_provider,
     ) -> None:
         """Save the current conversation in a background thread (fire-and-forget).
 
@@ -118,6 +120,8 @@ class ConversationPersistence(QObject):
                     worker_thinking=worker_thinking,
                     worker_dispatches=dispatch_records_copy,
                     provider=provider,
+                    planner_provider=planner_provider,
+                    worker_provider=worker_provider,
                 )
                 self.save_succeeded.emit(path)
             except OSError as exc:
@@ -213,11 +217,15 @@ class ConversationPersistence(QObject):
         self._bridge.set_temperature(self._settings.temperature)
         self._bridge.set_worker_temperature(self._settings.worker_temperature)
 
-        # If the loaded conversation has a different provider, update the bridge.
-        if loaded.provider != self._settings.provider:
-            self._settings.provider = loaded.provider
-            self._bridge.set_provider(loaded.provider)
-            self._left_pane.populate_models(loaded.provider)
+        # Update settings to match loaded conversation
+        self._settings.provider = loaded.provider
+        self._settings.planner_provider = loaded.planner_provider
+        self._settings.worker_provider = loaded.worker_provider
+
+        # Restore providers to bridge and sidebar
+        self._bridge.set_planner_provider(loaded.planner_provider)
+        self._bridge.set_worker_provider(loaded.worker_provider)
+        self._left_pane.populate_models(loaded.planner_provider, loaded.worker_provider)
 
         # Sync mode (without overwriting the system prompt we just set).
         self._bridge.set_planner_worker_mode(pwm)

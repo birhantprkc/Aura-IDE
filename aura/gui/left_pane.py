@@ -183,15 +183,23 @@ class LeftPane(QFrame):
             return
         self._workspace_label.setText(str(root))
 
-    def populate_models(self, provider_id: ProviderId) -> None:
-        cfg = PROVIDERS[provider_id]
+    def populate_models(self, planner_provider: ProviderId, worker_provider: ProviderId) -> None:
+        p_cfg = PROVIDERS[planner_provider]
+        w_cfg = PROVIDERS[worker_provider]
         
-        for combo in [self._planner_model_combo, self._worker_model_combo]:
-            combo.blockSignals(True)
-            combo.clear()
-            for mid, info in cfg.models.items():
-                combo.addItem(info.label, mid)
-            combo.blockSignals(False)
+        # Planner
+        self._planner_model_combo.blockSignals(True)
+        self._planner_model_combo.clear()
+        for mid, info in p_cfg.models.items():
+            self._planner_model_combo.addItem(info.label, mid)
+        self._planner_model_combo.blockSignals(False)
+
+        # Worker
+        self._worker_model_combo.blockSignals(True)
+        self._worker_model_combo.clear()
+        for mid, info in w_cfg.models.items():
+            self._worker_model_combo.addItem(info.label, mid)
+        self._worker_model_combo.blockSignals(False)
 
     def current_planner_model(self) -> str:
         return self._planner_model_combo.currentData()

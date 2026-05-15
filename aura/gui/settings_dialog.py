@@ -193,6 +193,8 @@ class SettingsDialog(QDialog):
 
         self._settings = AppSettings(
             provider=settings.provider,
+            planner_provider=settings.planner_provider,
+            worker_provider=settings.worker_provider,
             default_model=settings.default_model,
             default_thinking=settings.default_thinking,
             restore_last_conversation=settings.restore_last_conversation,
@@ -343,6 +345,17 @@ class SettingsDialog(QDialog):
         self._pw_mode_chk.toggled.connect(self._on_pw_toggled)
         form.addRow("", self._pw_mode_chk)
 
+        # Planner Provider
+        self._planner_provider_combo = QComboBox()
+        for pid in PROVIDERS:
+            cfg = PROVIDERS[pid]  # type: ignore[literal-required]
+            self._planner_provider_combo.addItem(cfg.label, pid)
+        self._planner_provider_combo.setCurrentIndex(
+            list(PROVIDERS.keys()).index(self._settings.planner_provider)
+        )
+        self._planner_provider_combo.currentIndexChanged.connect(self._on_planner_provider_changed)
+        form.addRow("Planner provider:", self._planner_provider_combo)
+
         self._planner_model_combo = QComboBox()
         form.addRow("Planner model:", self._planner_model_combo)
 
@@ -350,6 +363,17 @@ class SettingsDialog(QDialog):
         for label, val in _THINKING_ITEMS:
             self._planner_thinking_combo.addItem(label, val)
         form.addRow("Planner thinking:", self._planner_thinking_combo)
+
+        # Worker Provider
+        self._worker_provider_combo = QComboBox()
+        for pid in PROVIDERS:
+            cfg = PROVIDERS[pid]  # type: ignore[literal-required]
+            self._worker_provider_combo.addItem(cfg.label, pid)
+        self._worker_provider_combo.setCurrentIndex(
+            list(PROVIDERS.keys()).index(self._settings.worker_provider)
+        )
+        self._worker_provider_combo.currentIndexChanged.connect(self._on_worker_provider_changed)
+        form.addRow("Worker provider:", self._worker_provider_combo)
 
         self._worker_model_combo = QComboBox()
         form.addRow("Worker model:", self._worker_model_combo)
@@ -738,35 +762,18 @@ class SettingsDialog(QDialog):
         self._populate_model_combos(provider_id)
         self._refresh_api_key_status(provider_id)
 
+    def _on_planner_provider_changed(self) -> None:
+        provider_id: ProviderId = self._planner_provider_combo.currentData()
+        self._populate_role_models(self._planner_model_combo, provider_id, self._settings.default_planner_model)
+
+    def _on_worker_provider_changed(self) -> None:
+        provider_id: ProviderId = self._worker_provider_combo.currentData()
+        self._populate_role_models(self._worker_model_combo, provider_id, self._settings.default_worker_model)
+
     def _populate_model_combos(self, provider_id: ProviderId) -> None:
-        cfg = get_provider(provider_id)
-        same_provider = provider_id == self._settings.provider
-
-        default_model = (
-            self._settings.default_model if same_provider else cfg.default_model
-        )
-        planner_model = (
-            self._settings.default_planner_model if same_provider else cfg.default_model
-        )
-        worker_model = (
-            self._settings.default_worker_model if same_provider else cfg.default_model
-        )
-
-        for combo, current in (
-            (self._model_combo, default_model),
-            (self._planner_model_combo, planner_model),
-            (self._worker_model_combo, worker_model),
-        ):
-            combo.blockSignals(True)
-            combo.clear()
-            for info in cfg.models.values():
-                combo.addItem(info.label, info.id)
-            if current and combo.findData(current) < 0:
-                combo.addItem(current, current)
-            idx = combo.findData(current)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
-            combo.blockSignals(False)
+        self._populate_role_models(self._model_combo, self._provider_combo.currentData(), self._settings.default_model)
+        self._populate_role_models(self._planner_model_combo, self._planner_provider_combo.currentData(), self._settings.default_planner_model)
+        self._populate_role_models(self._worker_model_combo, self._worker_provider_combo.currentData(), self._settings.default_worker_model)
 
         self._set_combo_to_data(self._thinking_combo, self._settings.default_thinking)
         self._set_combo_to_data(
@@ -775,6 +782,23 @@ class SettingsDialog(QDialog):
         self._set_combo_to_data(
             self._worker_thinking_combo, self._settings.default_worker_thinking
         )
+
+    def _populate_role_models(self, combo: QComboBox, provider_id: ProviderId, current_selection: str) -> None:
+        cfg = get_provider(provider_id)
+        combo.blockSignals(True)
+        combo.clear()
+        for info in cfg.models.values():
+            combo.addItem(info.label, info.id)
+        if current_selection and combo.findData(current_selection) < 0:
+            combo.addItem(current_selection, current_selection)
+        idx = combo.findData(current_selection)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        else:
+            default_idx = combo.findData(cfg.default_model)
+            if default_idx >= 0:
+                combo.setCurrentIndex(default_idx)
+        combo.blockSignals(False)
 
     def _set_combo_to_data(self, combo: QComboBox, value: str) -> None:
         idx = combo.findData(value)
@@ -1291,6 +1315,8 @@ class SettingsDialog(QDialog):
 
         return AppSettings(
             provider=provider_id,
+            planner_provider=self._planner_provider_combo.currentData(),
+            worker_provider=self._worker_provider_combo.currentData(),
             default_model=self._model_combo.currentData(),
             default_thinking=self._thinking_combo.currentData(),
             restore_last_conversation=self._restore_chk.isChecked(),

@@ -844,11 +844,16 @@ class ConversationBridge(QObject):
     ) -> None:
         super().__init__()
         self._provider = provider
-        self._backend = APIAgentBackend(provider=provider)
-        self._client = self._backend.client  # kept for backward compat / dispatch proxy if needed
-        # Register the default API backend for both planner and worker
-        hooks.register('generate_planner_code', self._backend.stream)
-        hooks.register('generate_worker_code', self._backend.stream)
+        self._planner_provider = provider
+        self._worker_provider = provider
+        
+        self._planner_backend = APIAgentBackend(provider=provider)
+        self._worker_backend = APIAgentBackend(provider=provider)
+        
+        # Register the backends for planner and worker
+        hooks.register('generate_planner_code', self._planner_backend.stream)
+        hooks.register('generate_worker_code', self._worker_backend.stream)
+        
         self._history = History()
         self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="single")
         self._manager = ConversationManager(self._history, self._registry)
@@ -1005,50 +1010,24 @@ class ConversationBridge(QObject):
         self._approval_proxy.set_approve_all_session(enabled)
         self._dispatch_proxy.set_auto_approve(enabled)
 
-    def set_provider(self, provider: ProviderId) -> None:
-        """Recreate the internal client for a new provider."""
-        # Capture current dispatch proxy settings before recreating.
-        old_worker_temp = self._dispatch_proxy._worker_temperature
-        old_worker_prompt = self._dispatch_proxy._worker_system_prompt
-        old_auto_commit = self._dispatch_proxy._auto_commit_enabled
-        self._provider = provider
-        self._backend = APIAgentBackend(provider=provider)
-        self._client = self._backend.client
-        hooks.unregister('generate_worker_code')
+    def set_planner_provider(self, provider: ProviderId) -> None:
+        """Update the planner provider and its backend hook."""
+        self._planner_provider = provider
+        self._planner_backend = APIAgentBackend(provider=provider)
         hooks.unregister('generate_planner_code')
-        hooks.register('generate_worker_code', self._backend.stream)
-        hooks.register('generate_planner_code', self._backend.stream)
-        self._manager = ConversationManager(self._history, self._registry)
-        self._dispatch_proxy = _DispatchProxy(
-            parent_widget=self._parent_widget,
-            registry_factory=self._make_worker_registry,
-            approval_proxy=self._approval_proxy,
-            workspace_root=self._registry.workspace_root,
-            provider=provider,
-        )
-        # Propagate saved settings to the new dispatch proxy.
-        self._dispatch_proxy.set_worker_temperature(old_worker_temp)
-        self._dispatch_proxy.set_worker_system_prompt(old_worker_prompt)
-        self._dispatch_proxy.set_auto_commit_enabled(old_auto_commit)
-        # Re-wire dispatch proxy signals.
-        self._dispatch_proxy.showSpecCard.connect(self.workerDispatchRequested)
-        self._dispatch_proxy.workerStarted.connect(self.workerStarted)
-        self._dispatch_proxy.workerFinished.connect(self.workerFinished)
-        self._dispatch_proxy.workerCancelled.connect(self.workerCancelled)
-        self._dispatch_proxy.workerReasoningDelta.connect(self.workerReasoningDelta)
-        self._dispatch_proxy.workerContentDelta.connect(self.workerContentDelta)
-        self._dispatch_proxy.workerToolCallStart.connect(self.workerToolCallStart)
-        self._dispatch_proxy.workerToolCallArgs.connect(self.workerToolCallArgs)
-        self._dispatch_proxy.workerToolCallEnd.connect(self.workerToolCallEnd)
-        self._dispatch_proxy.workerToolResult.connect(self.workerToolResult)
-        self._dispatch_proxy.workerDiffDecided.connect(self.workerDiffDecided)
-        self._dispatch_proxy.workerApiError.connect(self.workerApiError)
-        self._dispatch_proxy.workerUsage.connect(self.workerUsage)
-        self._dispatch_proxy.workerTodoListUpdated.connect(self.workerTodoListUpdated)
-        self._dispatch_proxy.workerTerminalOutput.connect(self.workerTerminalOutput)
-        self._dispatch_proxy.workerAgentProcessStarted.connect(self.workerAgentProcessStarted)
-        self._dispatch_proxy.workerAgentProcessOutput.connect(self.workerAgentProcessOutput)
-        self._dispatch_proxy.workerAgentProcessFinished.connect(self.workerAgentProcessFinished)
+        hooks.register('generate_planner_code', self._planner_backend.stream)
+
+    def set_worker_provider(self, provider: ProviderId) -> None:
+        """Update the worker provider and its backend hook."""
+        self._worker_provider = provider
+        self._worker_backend = APIAgentBackend(provider=provider)
+        hooks.unregister('generate_worker_code')
+        hooks.register('generate_worker_code', self._worker_backend.stream)
+
+    def set_provider(self, provider: ProviderId) -> None:
+        """Update both planner and worker to the same provider."""
+        self.set_planner_provider(provider)
+        self.set_worker_provider(provider)
 
     def check_backend_auth(self, backend_name: str) -> bool:
         """Check if the named backend is authenticated.
@@ -1101,7 +1080,7 @@ class ConversationBridge(QObject):
         elif backend_name == 'codex':
             hooks.register('generate_planner_code', CodexBackend(workspace_root=root).stream)
         else:
-            hooks.register('generate_planner_code', self._backend.stream)
+            hooks.register('generate_planner_code', self._planner_backend.stream)
 
     def set_worker_backend(self, backend_name: str) -> None:
         """Swap the worker backend hook handler.
@@ -1118,7 +1097,7 @@ class ConversationBridge(QObject):
         elif backend_name == 'codex':
             hooks.register('generate_worker_code', CodexBackend(workspace_root=root).stream)
         else:
-            hooks.register('generate_worker_code', self._backend.stream)
+            hooks.register('generate_worker_code', self._worker_backend.stream)
 
     def reset_history(self) -> None:
         self._history.messages.clear()

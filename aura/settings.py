@@ -27,6 +27,8 @@ DEFAULT_VISION_ENDPOINT = "http://localhost:11434/v1"
 @dataclass
 class AppSettings:
     provider: ProviderId = DEFAULT_PROVIDER
+    planner_provider: ProviderId = DEFAULT_PROVIDER
+    worker_provider: ProviderId = DEFAULT_PROVIDER
     default_model: str = DEFAULT_MODEL
     default_thinking: ThinkingMode = DEFAULT_THINKING
     restore_last_conversation: bool = True
@@ -70,6 +72,10 @@ class AppSettings:
         # Provider
         if isinstance(data.get("provider"), str):
             s.provider = data["provider"]  # type: ignore[assignment]
+        if isinstance(data.get("planner_provider"), str):
+            s.planner_provider = data["planner_provider"]  # type: ignore[assignment]
+        if isinstance(data.get("worker_provider"), str):
+            s.worker_provider = data["worker_provider"]  # type: ignore[assignment]
         # Models — accept any string now
         if isinstance(data.get("default_model"), str):
             s.default_model = data["default_model"]

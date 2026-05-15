@@ -121,6 +121,8 @@ def save_conversation(
     worker_thinking: ThinkingMode | None = None,
     worker_dispatches: list[WorkerDispatchRecord] | None = None,
     provider: ProviderId | None = None,
+    planner_provider: ProviderId | None = None,
+    worker_provider: ProviderId | None = None,
 ) -> Path:
     """Write the conversation to disk and return the file path."""
     target_dir = conversations_dir(workspace_root)
@@ -152,6 +154,8 @@ def save_conversation(
             d.to_dict() for d in (worker_dispatches or [])
         ],
         "provider": provider or "deepseek",
+        "planner_provider": planner_provider or provider or "deepseek",
+        "worker_provider": worker_provider or provider or "deepseek",
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
@@ -181,6 +185,8 @@ class LoadedConversation:
     thinking: ThinkingMode
     path: Path
     provider: ProviderId = "deepseek"
+    planner_provider: ProviderId = "deepseek"
+    worker_provider: ProviderId = "deepseek"
     planner_worker_mode: bool = False
     planner_model: str = DEFAULT_PLANNER_MODEL
     worker_model: str = DEFAULT_WORKER_MODEL
@@ -211,8 +217,18 @@ def load_conversation(path: Path) -> LoadedConversation:
     # Provider: default to "deepseek" for backward compat with v1/v2 files.
     provider_raw = data.get("provider")
     provider: ProviderId = "deepseek"
-    if isinstance(provider_raw, str) and provider_raw in ("deepseek", "openai", "google"):
+    if isinstance(provider_raw, str) and provider_raw in ("deepseek", "openai", "google", "anthropic", "openrouter"):
         provider = provider_raw  # type: ignore[assignment]
+
+    planner_provider_raw = data.get("planner_provider")
+    planner_provider: ProviderId = provider
+    if isinstance(planner_provider_raw, str) and planner_provider_raw in ("deepseek", "openai", "google", "anthropic", "openrouter"):
+        planner_provider = planner_provider_raw  # type: ignore[assignment]
+
+    worker_provider_raw = data.get("worker_provider")
+    worker_provider: ProviderId = provider
+    if isinstance(worker_provider_raw, str) and worker_provider_raw in ("deepseek", "openai", "google", "anthropic", "openrouter"):
+        worker_provider = worker_provider_raw  # type: ignore[assignment]
 
     version = data.get("version")
     if version == 2:

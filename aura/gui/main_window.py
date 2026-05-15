@@ -84,6 +84,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             parent_widget=self,
             provider=self._settings.provider,
         )
+        self._bridge.set_planner_provider(self._settings.planner_provider)
+        self._bridge.set_worker_provider(self._settings.worker_provider)
         self._bridge.set_workspace_root(self._workspace_root)
         self._apply_planner_worker_mode_to_bridge(self._settings.planner_worker_mode)
         self._bridge.set_show_planner_reasoning(self._settings.show_planner_reasoning)
@@ -124,7 +126,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Left pane: workspace label + change root + tree + model config.
         self._left_pane = LeftPane(self._workspace_root, parent=self)
-        self._left_pane.populate_models(self._settings.provider)
+        self._left_pane.populate_models(self._settings.planner_provider, self._settings.worker_provider)
         self._left_pane.change_root_requested.connect(self._on_change_root)
         self._left_pane.planner_model_changed.connect(lambda: self._refresh_status_bar())
         self._left_pane.planner_thinking_changed.connect(lambda: self._refresh_status_bar())

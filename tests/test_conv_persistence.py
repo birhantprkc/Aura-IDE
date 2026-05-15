@@ -126,6 +126,8 @@ def test_auto_save_spawns_thread(mock_thread, persistence):
         worker_model="wm1",
         worker_thinking="max",
         provider="deepseek",
+        planner_provider="deepseek",
+        worker_provider="deepseek",
     )
 
     mock_thread.assert_called_once()
@@ -153,6 +155,8 @@ def test_auto_save_skipped_when_no_messages(mock_thread, persistence,
         worker_model="wm1",
         worker_thinking="max",
         provider="deepseek",
+        planner_provider="deepseek",
+        worker_provider="deepseek",
     )
 
     mock_thread.assert_not_called()
@@ -209,11 +213,14 @@ def test_apply_loaded_switches_provider_if_different(persistence, mock_bridge,
     """If loaded.provider differs from settings, bridge and pane are updated."""
     mock_settings.provider = "deepseek"
     mock_loaded.provider = "openai"
+    mock_loaded.planner_provider = "openai"
+    mock_loaded.worker_provider = "openai"
 
     persistence.apply_loaded(mock_loaded)
 
-    mock_bridge.set_provider.assert_called_once_with("openai")
-    mock_left_pane.populate_models.assert_called_once_with("openai")
+    mock_bridge.set_planner_provider.assert_called_once_with("openai")
+    mock_bridge.set_worker_provider.assert_called_once_with("openai")
+    mock_left_pane.populate_models.assert_called_once_with("openai", "openai")
     assert mock_settings.provider == "openai"
 
 
