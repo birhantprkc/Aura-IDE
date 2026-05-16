@@ -235,6 +235,8 @@ result = result
         assert r.text == "b"
         assert r.changed is False
         assert r.elapsed_ms == 0.0
+        assert r.feature_report is None
+        assert r.structural_smell_count == 0
 
 
 class TestHumanizerWriteIntegration:

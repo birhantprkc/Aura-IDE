@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
 
@@ -39,6 +40,18 @@ def _log_humanizer_observe(rel_path: str, result) -> None:
         _log.info("[humanizer:observe] %s: would %s", rel_path, ", ".join(parts))
     else:
         _log.info("[humanizer:observe] %s: no changes", rel_path)
+
+    feature_log = os.environ.get("AURA_HUMANIZER_FEATURE_LOG", "") == "1"
+    if feature_log and result.feature_report and result.feature_report.has_structural_smells:
+        report = result.feature_report
+        _log.info(
+            "[humanizer:features] %s: %d tuple returns, %d generic names, %d narration comments, %d thin helpers",
+            rel_path,
+            len(report.tuple_returns),
+            len(report.generic_names),
+            len(report.narration_comments),
+            len(report.thin_helpers),
+        )
 
 
 def _maybe_observe_humanizer(proposal: dict) -> None:
@@ -77,8 +90,9 @@ def _maybe_humanize_proposal(proposal: dict) -> None:
     try:
         from aura.humanizer import HumanizerPipeline
 
+        pipeline_path = Path(rel_path) if rel_path else None
         result = HumanizerPipeline().humanize_code(
-            proposal["new_content"], language="python"
+            proposal["new_content"], language="python", path=pipeline_path
         )
         humanizer_observe = os.environ.get("AURA_HUMANIZER_OBSERVE", "") == "1"
         if humanizer_observe:
@@ -86,6 +100,38 @@ def _maybe_humanize_proposal(proposal: dict) -> None:
         else:
             if not result.syntax_fallback and result.error is None:
                 proposal["new_content"] = result.text
+
+        feature_log = os.environ.get("AURA_HUMANIZER_FEATURE_LOG", "") == "1"
+        if feature_log and result.feature_report and result.feature_report.has_structural_smells:
+            report = result.feature_report
+            _log.info(
+                "[humanizer:features] %s: %d tuple returns, %d generic names, %d narration comments, %d thin helpers",
+                rel_path,
+                len(report.tuple_returns),
+                len(report.generic_names),
+                len(report.narration_comments),
+                len(report.thin_helpers),
+            )
+            for tr in report.tuple_returns:
+                _log.info(
+                    "[humanizer:features] %s: %s returns %d values on line %d",
+                    rel_path, tr.function_name, tr.size, tr.line,
+                )
+            for gn in report.generic_names:
+                _log.info(
+                    "[humanizer:features] %s: generic name '%s' on line %d",
+                    rel_path, gn.name, gn.line,
+                )
+            for nc in report.narration_comments:
+                _log.info(
+                    "[humanizer:features] %s: narration comment on line %d: %s",
+                    rel_path, nc.line, nc.text[:60],
+                )
+            for th in report.thin_helpers:
+                _log.info(
+                    "[humanizer:features] %s: thin helper '%s' (%d lines) on line %d",
+                    rel_path, th.function_name, th.body_lines, th.line,
+                )
     except Exception:
         _log.exception(
             "HumanizerPipeline failed for %s, using original content", rel_path
