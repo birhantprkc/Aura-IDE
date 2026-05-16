@@ -93,7 +93,12 @@ _CODE_TASTE_BLOCK = """Code taste — avoid the "AI generated" look:
 - No fake architecture or unnecessary abstractions.
 - No "AI generated" surface polish: overly tidy, over-commented, over-structured code.
 - Comment only when explaining non-obvious behavior, constraints, or intent.
-- Keep public API/Protocol/ABC docs when they carry real contract information."""
+- Keep public API/Protocol/ABC docs when they carry real contract information.
+- Do not merely translate the user's bullet list into the thinnest possible code.
+- Choose the smallest useful domain shape that makes the code easier to work with — prefer a small named dataclass or NamedTuple over a large anonymous tuple when a function returns multiple related values.
+- Put facts where they are discovered; do not reconstruct counts/totals/statistics in a later layer if the lower layer already knows them.
+- Avoid 'coding exercise' structure: generic names, generic pipelines, mechanically neat but contextless logic.
+- For standalone modules, make the code feel like practical app/tool code with clear ownership of scan facts, stable ordering where useful, and honest error paths."""
 
 _CODE_STYLE_EXAMPLES = """Examples of small app/tool code style:
 
@@ -165,7 +170,9 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Broader tests are only for shared infrastructure, public APIs, packaging/build, database models, threading/async, or explicit Planner acceptance.
 - If validation fails, fix the issue or report the blocker honestly.
 - If the same fix fails more than 3 times, stop and report the error wrapped in <error> tags.
-- Keep the final response concise: list changed files, validation results, and any blockers."""
+- Keep the final response concise: list changed files, validation results, and any blockers.
+- Do not return large anonymous tuples from functions that could return a small named result type.
+- Track facts (counts, totals, discovered items) at the point of discovery; do not recompute them later from side effects."""
 
 _PLANNER_BLOCK = """You are Aura's planning agent. Act as a fast dispatch compiler.
 
