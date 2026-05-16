@@ -1322,6 +1322,11 @@ class SettingsDialog(QDialog):
             first_launch_done=self._settings.first_launch_done,
             onboarding_checklist=dict(self._settings.onboarding_checklist),
             onboarding_version=self._settings.onboarding_version,
+            humanizer_enabled=self._settings.humanizer_enabled,
+            humanizer_gate_enabled=self._settings.humanizer_gate_enabled,
+            humanizer_gate_min_severity=self._settings.humanizer_gate_min_severity,
+            humanizer_feature_log=self._settings.humanizer_feature_log,
+            humanizer_observe=self._settings.humanizer_observe,
         )
         if not result.planner_worker_mode:
             result.planner_provider = result.provider

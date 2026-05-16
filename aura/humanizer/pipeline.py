@@ -77,6 +77,7 @@ class HumanizerPipeline:
             result.comments_removed = comments_removed
 
             # Step 4: Remove internal docstrings (cheap pre-check)
+            docstrings_removed = 0
             if '"""' in current or "'''" in current:
                 cleaned_ds, docstrings_removed = remove_internal_docstrings(current)
                 current = cleaned_ds

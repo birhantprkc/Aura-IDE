@@ -60,7 +60,7 @@ class AppSettings:
     onboarding_checklist: dict = field(default_factory=dict)
     onboarding_version: int = 1
     humanizer_enabled: bool = True
-    humanizer_gate_enabled: bool = True
+    humanizer_gate_enabled: bool = False
     humanizer_gate_min_severity: str = "high"
     humanizer_feature_log: bool = False
     humanizer_observe: bool = False

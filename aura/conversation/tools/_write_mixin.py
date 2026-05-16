@@ -75,13 +75,16 @@ def _humanizer_feature_log_enabled() -> bool:
 
 
 def _humanizer_gate_enabled() -> bool:
+    # Tool-result based rejection is developer-only because normal tool results
+    # enter model-visible history and UI event flow. Product behavior is
+    # cleanup/scan before approval, not visible rejection.
     if not _humanizer_enabled():
         return False
     if _humanizer_observe_enabled():
         return False
 
     settings = _humanizer_settings()
-    enabled = True if settings is None else bool(getattr(settings, "humanizer_gate_enabled", True))
+    enabled = False if settings is None else bool(getattr(settings, "humanizer_gate_enabled", False))
 
     env = os.environ.get("AURA_HUMANIZER_GATE")
     if env == "0":
