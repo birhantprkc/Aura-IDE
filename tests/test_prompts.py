@@ -96,4 +96,3 @@ def test_code_taste_block_present():
     assert marker in WORKER_SYSTEM_PROMPT
     assert marker in SINGLE_SYSTEM_PROMPT
     assert marker not in PLANNER_SYSTEM_PROMPT
-    assert "coding exercise" in WORKER_SYSTEM_PROMPT

@@ -83,22 +83,21 @@ _APP_TOOL_STYLE_RULES = """App/tool style contract:
 - CLI/UI/app boundaries handle user-facing printing/logging.
 - Avoid public-library cosplay, tutorial scaffolding, fake architecture, and premature abstractions."""
 
-_CODE_TASTE_BLOCK = """Code taste — avoid the "AI generated" look:
-- No tutorial comments ("Initialize x", "Loop through items", "Check if valid", "Return result").
-- No docstrings on tiny/private/internal helpers — clear names do the job.
-- No Args/Returns/Raises docstrings in normal app/tool code. Exceptions: public API, Protocol, ABC with real contracts.
-- No top-of-file summary docstrings unless the module genuinely needs one.
-- Preserve the surrounding file's rhythm and naming style — match what is already there.
-- Write direct app code, not generic public-library/demo code.
-- No fake architecture or unnecessary abstractions.
-- No "AI generated" surface polish: overly tidy, over-commented, over-structured code.
-- Comment only when explaining non-obvious behavior, constraints, or intent.
-- Keep public API/Protocol/ABC docs when they carry real contract information.
+_CODE_TASTE_BLOCK = """Code taste — generate sharp app/tool code, avoid the "AI generated" look:
+
 - Do not merely translate the user's bullet list into the thinnest possible code.
-- Choose the smallest useful domain shape that makes the code easier to work with — prefer a small named dataclass or NamedTuple over a large anonymous tuple when a function returns multiple related values.
-- Put facts where they are discovered; do not reconstruct counts/totals/statistics in a later layer if the lower layer already knows them.
-- Avoid 'coding exercise' structure: generic names, generic pipelines, mechanically neat but contextless logic.
-- For standalone modules, make the code feel like practical app/tool code with clear ownership of scan facts, stable ordering where useful, and honest error paths."""
+- Use domain-shaped names that reflect actual responsibility, not generic filler like data/result/items.
+- Choose the smallest useful domain shape that makes the code easier to work with. Prefer a small named dataclass or NamedTuple over a large anonymous tuple.
+- Put facts where they are discovered. The layer that discovers counts, totals, or parsed items owns those facts — do not reconstruct them later from side effects.
+- Keep responsibilities honest: scanning/parsing owns discovered facts and structure; planning/summary owns assembly and decisions; UI/CLI owns user-facing reporting.
+- For non-trivial standalone modules, include the small amount of internal shape a competent developer would naturally add. Code should be direct, but not under-shaped.
+- Prefer stable output ordering when it makes inspection or debugging easier.
+- Add structure only when it earns its keep. No fake architecture, abstract base classes, registries, service containers, plugin systems, or abstract/service/registry cosplay unless clearly earned.
+- No narration comments ("Initialize x", "Loop through items", "Check if valid", "Return result"). No tutorial docstrings or module-level summaries in normal app/tool code.
+- No Args/Returns/Raises docstrings in normal app/tool code. Exceptions: public API, Protocol, ABC with real contracts.
+- Preserve the surrounding file's rhythm and naming style — match what is already there.
+- Comment only when explaining non-obvious behavior, constraints, or intent.
+- Keep public API/Protocol/ABC docs when they carry real contract information."""
 
 _CODE_STYLE_EXAMPLES = """Examples of small app/tool code style:
 
@@ -170,9 +169,7 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Broader tests are only for shared infrastructure, public APIs, packaging/build, database models, threading/async, or explicit Planner acceptance.
 - If validation fails, fix the issue or report the blocker honestly.
 - If the same fix fails more than 3 times, stop and report the error wrapped in <error> tags.
-- Keep the final response concise: list changed files, validation results, and any blockers.
-- Do not return large anonymous tuples from functions that could return a small named result type.
-- Track facts (counts, totals, discovered items) at the point of discovery; do not recompute them later from side effects."""
+- Keep the final response concise: list changed files, validation results, and any blockers."""
 
 _PLANNER_BLOCK = """You are Aura's planning agent. Act as a fast dispatch compiler.
 
