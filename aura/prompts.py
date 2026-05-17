@@ -231,6 +231,8 @@ Default dispatch style:
 
 Use a fuller structured spec only when the task is broad, risky, or ambiguous: cross-file refactors, auth/security, subprocess/threading/async behavior, persistence/data model changes, destructive file operations, public API/signature changes, or build/release/update system work. Even then, keep it concise.
 
+For large new-app/bootstrap/repo-generation tasks, first dispatch a blueprint-only Worker pass when the project shape is not already established. The blueprint pass should write .aura/project_blueprint.md capturing purpose, primary workflow, module boundaries, entry points, persistence, UI/API/CLI boundaries, non-goals, validation strategy, and naming/style expectations. Then use follow-up Worker dispatches to implement from that blueprint. Do not force tiny tasks to create blueprints.
+
 For broad, multi-file, bootstrap, architecture-sensitive, or risky work, populate the optional structured dispatch fields when useful. Keep normal small dispatches concise.
 
 Optional structured fields (all list[str]):
@@ -258,6 +260,7 @@ Handoff Adherence Protocol:
 1. **Pre-flight Check:** Before modifying anything, ensure you have called `read_file` or `read_files` (for batch reading) on every file listed in the Planner's `files` list to synchronize state.
 2. **Checklist Execution:** Implement the requested change from the Planner's goal, Builder Note/spec field, listed files, and acceptance criteria. Own the exact implementation details, TODOs, validation, and code-quality decisions. If the Planner provides concrete class/method names, signatures, or a fuller structured spec for risky work, honor those requirements. If a step is ambiguous, inspect the code and make the smallest sound decision; report a blocker only when you cannot proceed safely.
 3. **Acceptance Verification:** Your `Resolution Report` must explicitly confirm that each item in the Planner's `acceptance` list has been verified (e.g., "Verified that ruff check passes").
+4. **Blueprint-Only Passes:** If the Planner dispatch is explicitly a blueprint pass, write or update `.aura/project_blueprint.md` as the artifact. Do not implement application code during a blueprint-only pass unless the Planner explicitly asks for both.
 
 Execution Protocol:
 0. Planning: First Worker action should be `update_todo_list`.
@@ -396,8 +399,9 @@ def build_tier1_context(workspace_root: Path) -> str:
     """Compose the Tier 1 (Core Context) string for a given workspace.
 
     Returns:
-        A string containing the project rules (from ``project_rules.md``) and
-        the AST-based repo map, or an empty string if neither is available.
+        A string containing the project rules (from ``project_rules.md``),
+        the project blueprint (from ``.aura/project_blueprint.md``),
+        and the AST-based repo map, or an empty string if none are available.
     """
     parts: list[str] = []
 
@@ -411,7 +415,17 @@ def build_tier1_context(workspace_root: Path) -> str:
         except (OSError, PermissionError):
             pass
 
-    # 2. AST-based repo map
+    # 2. Project blueprint from .aura/project_blueprint.md
+    blueprint_path = workspace_root / ".aura" / "project_blueprint.md"
+    if blueprint_path.is_file():
+        try:
+            blueprint_content = blueprint_path.read_text(encoding="utf-8").strip()
+            if blueprint_content:
+                parts.append("### Project Blueprint\n" + blueprint_content)
+        except (OSError, PermissionError):
+            pass
+
+    # 3. AST-based repo map
     try:
         repo_map = generate_repo_map(workspace_root)
         if repo_map and "No Python/TypeScript files found." not in repo_map:

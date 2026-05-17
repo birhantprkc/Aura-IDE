@@ -53,6 +53,7 @@ from aura.conversation import (
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.prompts import (
     WORKER_SYSTEM_PROMPT,
+    build_tier1_context,
     inject_private_worker_style,
     inject_tier1_context,
 )
@@ -246,7 +247,15 @@ class _DispatchProxy(QObject):
     ) -> WorkerDispatchResult:
         worker_history = History()
         base_prompt = self._worker_system_prompt if self._worker_system_prompt else WORKER_SYSTEM_PROMPT
-        full_prompt = inject_tier1_context(base_prompt, self._tier1_context)
+        # Refresh Tier 1 context so a prior Worker pass's blueprint is visible.
+        if self._workspace_root is not None:
+            try:
+                tier1_context = build_tier1_context(self._workspace_root)
+            except Exception:
+                tier1_context = self._tier1_context
+        else:
+            tier1_context = self._tier1_context
+        full_prompt = inject_tier1_context(base_prompt, tier1_context)
         full_prompt = inject_private_worker_style(full_prompt)
         worker_history.set_system(full_prompt)
         task_spec = normalize_worker_task(req)
