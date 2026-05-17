@@ -197,8 +197,13 @@ class SettingsDialog(QDialog):
 
         # Thread tracking for safe cleanup
         self._auth_thread: QThread | None = None
+        self._auth_worker: AuthWorker | None = None
         self._auth_polling_thread: QThread | None = None
         self._auth_polling_worker: AuthPollingWorker | None = None
+        self._auth_status_thread: QThread | None = None
+        self._auth_status_worker: AuthStatusWorker | None = None
+        self._discovery_thread: QThread | None = None
+        self._discovery_worker: DiscoveryWorker | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 18, 20, 14)
@@ -711,26 +716,45 @@ class SettingsDialog(QDialog):
         self._auth_status_worker.finished.connect(self._auth_status_thread.quit)
         self._auth_status_worker.finished.connect(self._auth_status_worker.deleteLater)
         self._auth_status_thread.finished.connect(self._auth_status_thread.deleteLater)
+        self._auth_status_thread.finished.connect(self._clear_auth_status_thread)
         self._auth_status_thread.start()
 
-    # --- closeEvent override for safe thread cleanup ---
+    def _clear_auth_status_thread(self) -> None:
+        self._auth_status_thread = None
+        self._auth_status_worker = None
+
+    def _cleanup_thread(self, thread_attr: str, worker_attr: str, wait_ms: int = 15000) -> None:
+        """Stop a dialog-owned QThread before Qt can destroy it."""
+        thread = getattr(self, thread_attr, None)
+        if thread is None:
+            return
+        try:
+            if thread.isRunning():
+                thread.quit()
+                if not thread.wait(wait_ms):
+                    logger.warning("Settings dialog thread did not stop cleanly: %s", thread_attr)
+                    thread.wait()
+        except RuntimeError:
+            pass
+        setattr(self, thread_attr, None)
+        setattr(self, worker_attr, None)
+
+    def _cleanup_threads(self) -> None:
+        for thread_attr, worker_attr in (
+            ("_auth_thread", "_auth_worker"),
+            ("_auth_polling_thread", "_auth_polling_worker"),
+            ("_auth_status_thread", "_auth_status_worker"),
+            ("_discovery_thread", "_discovery_worker"),
+        ):
+            self._cleanup_thread(thread_attr, worker_attr)
+
+    def done(self, result: int) -> None:  # type: ignore[override]
+        self._cleanup_threads()
+        super().done(result)
 
     def closeEvent(self, event):  # type: ignore[override]
         """Clean up any running auth/polling threads when the dialog is closed."""
-        for thread_attr in (
-            "_auth_thread",
-            "_auth_polling_thread",
-            "_auth_status_thread",
-            "_discovery_thread",
-        ):
-            try:
-                thread = getattr(self, thread_attr, None)
-                if thread is not None and thread.isRunning():
-                    thread.quit()
-                    thread.wait(1000)
-            except RuntimeError:
-                # C++ object already deleted
-                pass
+        self._cleanup_threads()
         super().closeEvent(event)
 
     # --- Provider / Model helpers ---

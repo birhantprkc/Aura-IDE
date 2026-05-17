@@ -33,3 +33,16 @@ def test_settings_dialog_preserves_max_tool_rounds(
     assert dlg._max_rounds_spin.value() == 123
     assert dlg.result_settings().max_tool_rounds == 123
     dlg.close()
+
+
+def test_settings_dialog_closes_with_auth_status_thread(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    dlg = SettingsDialog(
+        settings=AppSettings(),
+        workspace_root=tmp_path,
+        on_change_root=lambda: None,
+    )
+
+    dlg.close()
+    qapp.processEvents()
