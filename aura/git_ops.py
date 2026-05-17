@@ -33,6 +33,55 @@ def is_git_repo(workspace_root: Path) -> bool:
         return False
 
 
+def build_commit_message(goal: str, files: list[str], summary: str) -> str:
+    """Build a clean commit message from goal, file list, and summary.
+
+    Subject is derived from the first line of *goal*, truncated at 72 chars
+    on a word boundary.  Internal terms (AI, Worker, Planner, etc.) are
+    stripped from the subject.
+    """
+    import re
+
+    subject = goal.splitlines()[0].strip().rstrip(".")
+
+    # Strip internal implementation terms from the subject
+    subject = re.sub(
+        r"\b(AI|Worker|Planner|Aura|agent|tool)\b",
+        "",
+        subject,
+        flags=re.IGNORECASE,
+    )
+    subject = re.sub(r"\s+", " ", subject).strip()
+
+    # Truncate at word boundary near 72 chars
+    if len(subject) > 72:
+        last_space = subject[:72].rfind(" ")
+        if last_space >= 40:
+            subject = subject[:last_space] + "..."
+        else:
+            subject = subject[:72] + "..."
+
+    parts = [subject]
+
+    if summary.strip():
+        parts.append("")
+        parts.append(summary.strip())
+
+    if files:
+        parts.append("")
+        parts.append("Files:")
+        for path in files:
+            parts.append(f"- {path}")
+
+    message = "\n".join(parts)
+
+    max_len = 2000
+    if len(message) > max_len:
+        message = message[:max_len] + "\n... (truncated)"
+
+    return message
+
+
 def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str) -> tuple[bool, str]:
     """Stage the listed files and create a commit. Returns (success, message)."""
     if not is_git_repo(workspace_root):
@@ -83,12 +132,7 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
     except subprocess.CalledProcessError:
         pass
 
-    # Build commit message
-    message = f"{goal}\n\n{summary}"
-    # Truncate to a reasonable size
-    max_len = 2000
-    if len(message) > max_len:
-        message = message[:max_len] + "\n... (truncated)"
+    message = build_commit_message(goal, files, summary)
 
     try:
         subprocess.run(
