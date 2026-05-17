@@ -20,6 +20,7 @@ from aura.version import __version__
 logger = logging.getLogger(__name__)
 
 GITHUB_RELEASES_URL = "https://api.github.com/repos/CarpseDeam/Aura-IDE/releases/latest"
+WINDOWS_UPDATER_HELPER_NAME = "AuraUpdater.cmd"
 
 
 def is_packaged() -> bool:
@@ -347,22 +348,38 @@ def install_packaged_update(
             return PullResult(False, None, message="Extracted update is outside the temporary directory.")
         # -----------------------------------------
 
-        if output_callback:
-            output_callback(f"Found new version in {new_app_dir}")
-            output_callback("Launching external updater...")
-
-        # Create the updater script
-        script_path = _create_windows_updater(new_app_dir, current_app_dir, temp_dir, os.getpid())
-        
-        # Launch detached
         if sys.platform == "win32":
-            subprocess.Popen(
-                ["cmd.exe", "/c", str(script_path)],
-                creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS,
+            current_exe = Path(sys.executable).resolve()
+            updater_exe = get_windows_updater_helper(current_app_dir)
+            cmd = _build_windows_updater_command(
+                updater_exe,
+                new_app_dir,
+                current_app_dir,
+                current_exe,
+                os.getpid(),
             )
+
+            if output_callback:
+                output_callback(f"Found new version in {new_app_dir}")
+                output_callback("Launching external updater...")
+
+            try:
+                _launch_windows_updater(
+                    updater_exe=updater_exe,
+                    argv=cmd,
+                    extracted_dir=new_app_dir,
+                    install_dir=current_app_dir,
+                    output_callback=output_callback,
+                )
+            except Exception as exc:
+                attempted = _format_update_launch_details(updater_exe, cmd)
+                msg = f"Failed to launch updater: {exc}\n{attempted}"
+                logger.exception("Packaged updater launch failed\n%s", attempted)
+                return PullResult(False, None, message=msg, error=str(exc))
+
             if output_callback:
                 output_callback("Aura will now exit to complete the update.")
-            return PullResult(True, None, message="Update script launched. Quitting Aura...")
+            return PullResult(True, None, message="Update helper launched. Quitting Aura...")
         else:
             msg = "Packaged updates are currently only supported on Windows."
             return PullResult(False, None, message=msg, error=msg)
@@ -372,42 +389,124 @@ def install_packaged_update(
         return PullResult(False, None, message=f"Update failed: {exc}", error=str(exc))
 
 
-def _create_windows_updater(new_app_dir: Path, current_app_dir: Path, temp_update_dir: Path, pid: int) -> Path:
-    """Generate a .cmd script to replace the app files and relaunch Aura."""
-    if not temp_update_dir.exists() or temp_update_dir.resolve() == Path(tempfile.gettempdir()).resolve():
-        raise RuntimeError("Invalid temp update dir for cleanup")
+def get_windows_updater_helper(install_dir: Path | None = None) -> Path:
+    """Return the bundled Windows updater helper path, preferring existing files."""
+    candidates: list[Path] = []
+    if install_dir is not None:
+        candidates.append(install_dir / WINDOWS_UPDATER_HELPER_NAME)
+    candidates.append(get_current_app_dir() / WINDOWS_UPDATER_HELPER_NAME)
+    candidates.append(Path(__file__).resolve().parent / "windows_updater.cmd")
 
-    script_content = f"""@echo off
-setlocal
-echo Waiting for Aura to exit...
-:wait
-tasklist /FI "PID eq {pid}" 2>NUL | find /I "{pid}">NUL
-if "%ERRORLEVEL%"=="0" (
-    timeout /t 1 /nobreak >nul
-    goto wait
-)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
 
-echo Updating Aura files...
-robocopy "{new_app_dir}" "{current_app_dir}" /MIR /R:3 /W:5
+    return candidates[0].resolve()
 
-if %ERRORLEVEL% GEQ 8 (
-    echo Update failed with error %ERRORLEVEL%
-    pause
-    exit /b %ERRORLEVEL%
-)
 
-echo Update successful!
-echo Cleaning up...
-rmdir /s /q "{temp_update_dir}"
+def _build_windows_updater_command(
+    updater_exe: Path,
+    extracted_dir: Path,
+    install_dir: Path,
+    current_exe: Path,
+    pid: int,
+) -> list[str]:
+    """Build the exact argv list used to start the Windows updater helper."""
+    return [
+        str(updater_exe),
+        "--source",
+        str(extracted_dir),
+        "--target",
+        str(install_dir),
+        "--pid",
+        str(pid),
+        "--restart",
+        str(current_exe),
+    ]
 
-echo Relaunching Aura...
-start "" "{current_app_dir}\\Aura.exe"
-del "%~f0"
-exit
-"""
-    temp_script = Path(tempfile.gettempdir()) / f"aura_finish_update_{os.getpid()}.cmd"
-    temp_script.write_text(script_content, encoding="cp1252")
-    return temp_script
+
+def _format_update_launch_details(updater_exe: Path, argv: list[str]) -> str:
+    return f"Updater executable: {updater_exe}\nUpdater argv: {argv!r}"
+
+
+def _target_requires_elevation(install_dir: Path) -> bool:
+    """Return True when the install directory cannot be written by this process."""
+    probe = install_dir / f".aura-update-write-test-{os.getpid()}"
+    try:
+        with open(probe, "w", encoding="utf-8") as handle:
+            handle.write("test")
+        probe.unlink(missing_ok=True)
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
+def _shellexecute_windows_updater(updater_exe: Path, argv: list[str]) -> None:
+    """Launch the updater through ShellExecuteW with elevation."""
+    import ctypes
+
+    parameters = subprocess.list2cmdline(argv[1:])
+    result = ctypes.windll.shell32.ShellExecuteW(
+        None,
+        "runas",
+        str(updater_exe),
+        parameters,
+        str(updater_exe.parent),
+        0,
+    )
+    if result <= 32:
+        raise OSError(f"ShellExecuteW failed with code {result}")
+
+
+def _launch_windows_updater(
+    *,
+    updater_exe: Path,
+    argv: list[str],
+    extracted_dir: Path,
+    install_dir: Path,
+    output_callback: Callable[[str], None] | None = None,
+) -> None:
+    """Validate paths, log the launch attempt, and start the updater helper."""
+    if not updater_exe.exists():
+        raise FileNotFoundError(f"Updater helper does not exist: {updater_exe}")
+    if not updater_exe.is_file():
+        raise FileNotFoundError(f"Updater helper is not a file: {updater_exe}")
+    if not extracted_dir.exists() or not extracted_dir.is_dir():
+        raise FileNotFoundError(f"Extracted update directory does not exist: {extracted_dir}")
+    if not install_dir.exists() or not install_dir.is_dir():
+        raise FileNotFoundError(f"Target install directory does not exist: {install_dir}")
+    if not argv or Path(argv[0]) != updater_exe:
+        raise ValueError("Updater argv must start with the updater executable path.")
+
+    details = _format_update_launch_details(updater_exe, argv)
+    logger.info("Launching packaged updater\n%s", details)
+    if output_callback:
+        output_callback(f"Updater executable: {updater_exe}")
+        output_callback(f"Updater argv: {argv!r}")
+
+    if _target_requires_elevation(install_dir):
+        logger.info("Target install directory requires elevation; using ShellExecuteW.")
+        _shellexecute_windows_updater(updater_exe, argv)
+        return
+
+    try:
+        subprocess.Popen(
+            argv,
+            cwd=str(updater_exe.parent),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+    except PermissionError:
+        logger.info("Updater launch requires elevation; retrying with ShellExecuteW.")
+        _shellexecute_windows_updater(updater_exe, argv)
 
 
 def get_app_repo_root() -> Path | None:

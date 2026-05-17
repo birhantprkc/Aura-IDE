@@ -11,6 +11,8 @@ from scripts.build_nuitka import (
     FINAL_DIST_NAME,
     OUTPUT_DIR,
     REQUIRED_MEDIA_FILES,
+    UPDATER_HELPER_DIST_NAME,
+    UPDATER_HELPER_SOURCE,
     normalize_version,
     parse_args,
     read_current_version,
@@ -51,6 +53,7 @@ def test_parse_args_supports_noninteractive_flags() -> None:
 def test_validate_project_paths_requires_all_media_files(tmp_path: Path) -> None:
     (tmp_path / "aura").mkdir()
     (tmp_path / "aura" / "__main__.py").write_text("", encoding="utf-8")
+    (tmp_path / UPDATER_HELPER_SOURCE).write_text("helper", encoding="utf-8")
     media_dir = tmp_path / "media"
     media_dir.mkdir()
     for filename in REQUIRED_MEDIA_FILES:
@@ -61,9 +64,22 @@ def test_validate_project_paths_requires_all_media_files(tmp_path: Path) -> None
         validate_project_paths(tmp_path)
 
 
+def test_validate_project_paths_requires_updater_helper(tmp_path: Path) -> None:
+    (tmp_path / "aura").mkdir()
+    (tmp_path / "aura" / "__main__.py").write_text("", encoding="utf-8")
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    for filename in REQUIRED_MEDIA_FILES:
+        (media_dir / filename).write_text("media", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="windows_updater.cmd"):
+        validate_project_paths(tmp_path)
+
+
 def test_validate_project_paths_accepts_complete_media_set(tmp_path: Path) -> None:
     (tmp_path / "aura").mkdir()
     (tmp_path / "aura" / "__main__.py").write_text("", encoding="utf-8")
+    (tmp_path / UPDATER_HELPER_SOURCE).write_text("helper", encoding="utf-8")
     media_dir = tmp_path / "media"
     media_dir.mkdir()
     for filename in REQUIRED_MEDIA_FILES:
@@ -77,6 +93,7 @@ def test_zip_distribution_flattens_dist_contents(tmp_path: Path) -> None:
     media_dir = final_dist_dir / "media"
     media_dir.mkdir(parents=True)
     (final_dist_dir / "Aura.exe").write_text("exe", encoding="utf-8")
+    (final_dist_dir / UPDATER_HELPER_DIST_NAME).write_text("helper", encoding="utf-8")
     (media_dir / "test.txt").write_text("media", encoding="utf-8")
     (final_dist_dir / "runtime.dll").write_text("dll", encoding="utf-8")
 
@@ -87,6 +104,7 @@ def test_zip_distribution_flattens_dist_contents(tmp_path: Path) -> None:
         names = set(archive.namelist())
 
     assert "Aura.exe" in names
+    assert UPDATER_HELPER_DIST_NAME in names
     assert "media/test.txt" in names
     assert "runtime.dll" in names
     assert "Aura.dist/Aura.exe" not in names

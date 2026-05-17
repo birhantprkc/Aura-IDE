@@ -69,6 +69,106 @@ def test_get_app_repo_root_returns_none_without_git(monkeypatch, tmp_path: Path)
     assert get_app_repo_root() is None
 
 
+def test_build_windows_updater_command_uses_argv_list(tmp_path: Path) -> None:
+    updater_exe = tmp_path / "AuraUpdater.cmd"
+    extracted_dir = tmp_path / "extracted"
+    install_dir = tmp_path / "Aura.dist"
+    current_exe = install_dir / "Aura.exe"
+
+    cmd = updater._build_windows_updater_command(
+        updater_exe,
+        extracted_dir,
+        install_dir,
+        current_exe,
+        1234,
+    )
+
+    assert cmd == [
+        str(updater_exe),
+        "--source",
+        str(extracted_dir),
+        "--target",
+        str(install_dir),
+        "--pid",
+        "1234",
+        "--restart",
+        str(current_exe),
+    ]
+
+
+def test_launch_windows_updater_validates_and_logs_argv(monkeypatch, tmp_path: Path) -> None:
+    updater_exe = tmp_path / "AuraUpdater.cmd"
+    extracted_dir = tmp_path / "extracted"
+    install_dir = tmp_path / "Aura.dist"
+    updater_exe.write_text("@echo off\n", encoding="utf-8")
+    extracted_dir.mkdir()
+    install_dir.mkdir()
+    argv = updater._build_windows_updater_command(
+        updater_exe,
+        extracted_dir,
+        install_dir,
+        install_dir / "Aura.exe",
+        1234,
+    )
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    output: list[str] = []
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(cmd: list[str], **kwargs: object) -> FakeProcess:
+        calls.append((cmd, kwargs))
+        return FakeProcess()
+
+    monkeypatch.setattr(updater.subprocess, "Popen", fake_popen)
+
+    updater._launch_windows_updater(
+        updater_exe=updater_exe,
+        argv=argv,
+        extracted_dir=extracted_dir,
+        install_dir=install_dir,
+        output_callback=output.append,
+    )
+
+    assert calls == [
+        (
+            argv,
+            {
+                "cwd": str(updater_exe.parent),
+                "stdin": updater.subprocess.DEVNULL,
+                "stdout": updater.subprocess.DEVNULL,
+                "stderr": updater.subprocess.DEVNULL,
+                "close_fds": True,
+            },
+        )
+    ]
+    assert f"Updater executable: {updater_exe}" in output
+    assert f"Updater argv: {argv!r}" in output
+
+
+def test_launch_windows_updater_rejects_missing_extracted_dir(tmp_path: Path) -> None:
+    updater_exe = tmp_path / "AuraUpdater.cmd"
+    install_dir = tmp_path / "Aura.dist"
+    updater_exe.write_text("@echo off\n", encoding="utf-8")
+    install_dir.mkdir()
+    extracted_dir = tmp_path / "missing"
+    argv = updater._build_windows_updater_command(
+        updater_exe,
+        extracted_dir,
+        install_dir,
+        install_dir / "Aura.exe",
+        1234,
+    )
+
+    with pytest.raises(FileNotFoundError, match="Extracted update directory"):
+        updater._launch_windows_updater(
+            updater_exe=updater_exe,
+            argv=argv,
+            extracted_dir=extracted_dir,
+            install_dir=install_dir,
+        )
+
+
 def test_get_update_status_reports_not_git(monkeypatch) -> None:
     monkeypatch.setattr(updater, "get_app_repo_root", lambda: None)
 

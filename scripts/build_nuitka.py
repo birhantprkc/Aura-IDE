@@ -25,6 +25,8 @@ OUTPUT_DIR = "build"
 FINAL_DIST_NAME = f"{APP_NAME}.dist"
 FINAL_EXE_NAME = f"{APP_NAME}.exe"
 ZIP_NAME = "Aura-Windows-x64.zip"
+UPDATER_HELPER_SOURCE = Path(PACKAGE_NAME) / "windows_updater.cmd"
+UPDATER_HELPER_DIST_NAME = "AuraUpdater.cmd"
 
 REQUIRED_MEDIA_FILES = [
     "account_tree_.svg",
@@ -148,6 +150,7 @@ def validate_project_paths(root: Path) -> None:
     required_paths = [
         root / PACKAGE_NAME,
         root / PACKAGE_NAME / "__main__.py",
+        root / UPDATER_HELPER_SOURCE,
         root / ICON_PATH,
         root / MEDIA_DIR,
     ]
@@ -287,6 +290,7 @@ def build(
         sys.executable, "-m", "nuitka", "--standalone", "--enable-plugin=pyside6",
         "--windows-console-mode=disable", f"--windows-icon-from-ico={ICON_PATH}",
         f"--include-data-dir={MEDIA_DIR}={MEDIA_DIR}", "--include-package=aura",
+        f"--include-data-file={UPDATER_HELPER_SOURCE}={UPDATER_HELPER_DIST_NAME}",
         f"--output-dir={OUTPUT_DIR}", f"--output-filename={APP_NAME}",
         "--clean-cache=all", "--assume-yes-for-downloads", "--python-flag=-m", PACKAGE_NAME,
     ]
