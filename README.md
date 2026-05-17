@@ -427,7 +427,7 @@ Aura supports five AI providers. You choose one per session via the toolbar drop
 |----------|----------|---------|
 | **DeepSeek** | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
 | **OpenAI** | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
-| **Google Gemini** | `https://generativelanguage.googleapis.com/v1beta/openai/` | `GEMINI_API_KEY` |
+| **Google Gemini** | `https://generativelanguage.googleapis.com/v1beta` | `GEMINI_API_KEY` |
 | **Anthropic** | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
 
@@ -436,7 +436,7 @@ Aura supports five AI providers. You choose one per session via the toolbar drop
 Aura can **dynamically fetch models** from provider APIs:
 
 - **OpenRouter** - Returns the full model catalogue with real-time pricing per model. Models are automatically added to the selection dropdown with up-to-date pricing.
-- **DeepSeek, OpenAI, Google** - Uses the OpenAI-compatible `/models` endpoint. Pricing for recognised models is drawn from the embedded pricing tables; unknown models default to $0.
+- **DeepSeek and OpenAI** - Use OpenAI-compatible `/models` endpoints. **Google Gemini** uses the native Gemini `models.list` endpoint. Pricing for recognised models is drawn from the embedded pricing tables; unknown models default to $0.
 
 Fetched models are **cached to disk** (`~/.config/Aura/models_cache.json`) and reloaded on startup, so you don't need to fetch every launch.
 

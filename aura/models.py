@@ -246,7 +246,7 @@ PROVIDERS: dict[ProviderId, ProviderConfig] = {
     "google": ProviderConfig(
         id="google",
         label="Google Gemini",
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
         env_key="GEMINI_API_KEY",
         default_model="gemini-2.0-flash",
         default_thinking="off",

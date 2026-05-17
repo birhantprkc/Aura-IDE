@@ -1,4 +1,4 @@
-"""APIAgentBackend — wraps DeepSeekClient as an AgentBackend."""
+"""APIAgentBackend for native and OpenAI-compatible API providers."""
 
 from __future__ import annotations
 
@@ -7,25 +7,29 @@ from collections.abc import Iterator
 from typing import Any
 
 from aura.backends.base import AgentBackend
-from aura.client.deepseek import DeepSeekClient
 from aura.client.events import Event
+from aura.client.deepseek import DeepSeekClient
+from aura.client.gemini import GeminiClient
 from aura.config import ProviderId, ThinkingMode
 
 
 class APIAgentBackend(AgentBackend):
-    """Agent backend that delegates to DeepSeekClient (OpenAI-compatible API).
+    """Agent backend for API providers.
 
-    This is the default backend, wrapping the existing API client logic.
-    It supports all providers (deepseek, openai, anthropic, google, openrouter)
-    via the `provider` parameter.
+    Google Gemini uses the native Gemini REST API. The other API providers use
+    the existing OpenAI-compatible DeepSeekClient wrapper.
     """
 
     def __init__(self, provider: ProviderId = "deepseek") -> None:
-        self._client = DeepSeekClient(provider=provider)
+        self._client = (
+            GeminiClient()
+            if provider == "google"
+            else DeepSeekClient(provider=provider)
+        )
 
     @property
-    def client(self) -> DeepSeekClient:
-        """Access the underlying DeepSeekClient (used by bridge internals)."""
+    def client(self) -> DeepSeekClient | GeminiClient:
+        """Access the underlying provider client."""
         return self._client
 
     def stream(

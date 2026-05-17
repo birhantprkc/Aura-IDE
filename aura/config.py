@@ -126,9 +126,10 @@ def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo]
     Returns (models_dict, pricing_dict, error_message).
     """
     from aura.client.deepseek import DeepSeekClient
+    from aura.client.gemini import GeminiClient
     
     try:
-        client = DeepSeekClient(provider=provider_id)
+        client = GeminiClient() if provider_id == "google" else DeepSeekClient(provider=provider_id)
         raw = client.fetch_raw_models()
         if not raw:
             return {}, {}, "Provider returned no models. Check your API key or connection."

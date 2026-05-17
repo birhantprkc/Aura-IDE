@@ -81,6 +81,15 @@ def test_openai_provider_config():
     assert oai.default_thinking == "off"
 
 
+def test_google_provider_config_uses_native_gemini_api():
+    """Verify Google provider uses the native Gemini REST endpoint."""
+    google = PROVIDERS["google"]
+    assert google.label == "Google Gemini"
+    assert google.base_url == "https://generativelanguage.googleapis.com/v1beta"
+    assert google.env_key == "GEMINI_API_KEY"
+    assert google.default_model == "gemini-2.0-flash"
+
+
 # ---------------------------------------------------------------------------
 # resolve_api_key
 # ---------------------------------------------------------------------------
