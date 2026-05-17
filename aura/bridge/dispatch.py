@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -203,8 +204,13 @@ class _DispatchProxy(QObject):
             pending = self._pending.get(tool_call_id)
         if pending is None:
             return
-        pending.edited_request = WorkerDispatchRequest(
-            goal=goal, files=list(files), spec=spec, acceptance=acceptance, summary=summary
+        pending.edited_request = replace(
+            pending.request,
+            goal=goal,
+            files=list(files),
+            spec=spec,
+            acceptance=acceptance,
+            summary=summary,
         )
         pending.cancelled = False
         pending.decision_event.set()

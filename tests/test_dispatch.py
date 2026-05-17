@@ -126,3 +126,136 @@ def test_dispatch_result_from_legacy_payload():
     assert restored.summary == "Done"
     assert restored.needs_followup is False
     assert restored.completed == []
+
+
+# ---------------------------------------------------------------------------
+# Structured fields roundtrips
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_request_structured_fields_roundtrip():
+    original = WorkerDispatchRequest(
+        goal="Refactor auth",
+        files=["auth.py"],
+        spec="Extract auth logic into its own module.",
+        acceptance="All tests pass.",
+        summary="Planner summary",
+        allowed_responsibilities=["refactoring"],
+        forbidden_responsibilities=["new features"],
+        required_outputs=["auth.py"],
+        validation_commands=["pytest tests/ -x"],
+        risk_notes=["auth is critical"],
+        non_goals=["rewrite from scratch"],
+    )
+    data = original.to_dict()
+    restored = WorkerDispatchRequest.from_dict(data)
+    assert restored.goal == original.goal
+    assert restored.files == original.files
+    assert restored.spec == original.spec
+    assert restored.acceptance == original.acceptance
+    assert restored.summary == original.summary
+    assert restored.allowed_responsibilities == original.allowed_responsibilities
+    assert restored.forbidden_responsibilities == original.forbidden_responsibilities
+    assert restored.required_outputs == original.required_outputs
+    assert restored.validation_commands == original.validation_commands
+    assert restored.risk_notes == original.risk_notes
+    assert restored.non_goals == original.non_goals
+
+
+def test_dispatch_request_structured_fields_default_to_empty():
+    """Missing structured fields should default to empty lists."""
+    req = WorkerDispatchRequest.from_dict(
+        {"goal": "x", "files": [], "spec": "", "acceptance": ""}
+    )
+    assert req.allowed_responsibilities == []
+    assert req.forbidden_responsibilities == []
+    assert req.required_outputs == []
+    assert req.validation_commands == []
+    assert req.risk_notes == []
+    assert req.non_goals == []
+
+
+def test_dispatch_request_structured_fields_not_list():
+    """Non-list structured fields should default to empty lists."""
+    req = WorkerDispatchRequest.from_dict(
+        {
+            "goal": "x",
+            "allowed_responsibilities": "not_a_list",
+            "forbidden_responsibilities": None,
+            "required_outputs": 123,
+            "validation_commands": "pytest",
+            "risk_notes": {},
+            "non_goals": 0,
+        }
+    )
+    assert req.allowed_responsibilities == []
+    assert req.forbidden_responsibilities == []
+    assert req.required_outputs == []
+    assert req.validation_commands == []
+    assert req.risk_notes == []
+    assert req.non_goals == []
+
+
+# ---------------------------------------------------------------------------
+# normalize_worker_task
+# ---------------------------------------------------------------------------
+
+from aura.conversation.dispatch import normalize_worker_task, WorkerTaskSpec
+
+
+def test_normalize_worker_task_validation_commands_explicit():
+    """Explicit validation_commands on the request should be forwarded directly."""
+    req = WorkerDispatchRequest(
+        goal="Do things",
+        files=["x.py"],
+        spec="Do it.",
+        acceptance="pytest tests/",
+        validation_commands=["ruff check .", "py_compile x.py"],
+    )
+    spec = normalize_worker_task(req)
+    assert spec.validation_commands == ["ruff check .", "py_compile x.py"]
+
+
+def test_normalize_worker_task_validation_commands_fallback():
+    """Empty validation_commands but acceptance has a backtick-quoted command."""
+    req = WorkerDispatchRequest(
+        goal="Do things",
+        files=["x.py"],
+        spec="Do it.",
+        acceptance="Run `pytest tests/test_x.py -v` to check.",
+        validation_commands=[],
+    )
+    spec = normalize_worker_task(req)
+    assert "pytest tests/test_x.py -v" in spec.validation_commands
+
+
+def test_normalize_worker_task_non_goals_explicit():
+    """Explicit non_goals should be forwarded, not parsed from spec."""
+    req = WorkerDispatchRequest(
+        goal="Do things",
+        files=["x.py"],
+        spec="## Non-Goals\n- Parse spec\n- Rewrite",
+        acceptance="",
+        non_goals=["explicit", "only"],
+    )
+    spec = normalize_worker_task(req)
+    assert spec.non_goals == ["explicit", "only"]
+
+
+def test_normalize_worker_task_structured_fields():
+    """allowed_responsibilities, forbidden_responsibilities, required_outputs, risk_notes forwarded."""
+    req = WorkerDispatchRequest(
+        goal="Do things",
+        files=["x.py"],
+        spec="Do it.",
+        acceptance="Check it.",
+        allowed_responsibilities=["editing"],
+        forbidden_responsibilities=["new files"],
+        required_outputs=["x.py"],
+        risk_notes=["breaks easily"],
+    )
+    spec = normalize_worker_task(req)
+    assert spec.allowed_responsibilities == ["editing"]
+    assert spec.forbidden_responsibilities == ["new files"]
+    assert spec.required_outputs == ["x.py"]
+    assert spec.risk_notes == ["breaks easily"]
