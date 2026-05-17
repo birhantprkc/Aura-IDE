@@ -75,9 +75,9 @@ PROVIDERS: dict[ProviderId, ProviderConfig] = {
     ),
     "google": ProviderConfig(
         id="google",
-        label="Google Gemini",
-        base_url="https://generativelanguage.googleapis.com/v1beta",
-        env_key="GEMINI_API_KEY",
+        label="Vertex AI (Gemini)",
+        base_url="https://us-central1-aiplatform.googleapis.com/v1",
+        env_key="GOOGLE_CLOUD_PROJECT",
         default_model="gemini-2.0-flash",
         default_thinking="off",
         models=GOOGLE_MODELS,

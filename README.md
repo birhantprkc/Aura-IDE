@@ -427,7 +427,7 @@ Aura supports five AI providers. You choose one per session via the toolbar drop
 |----------|----------|---------|
 | **DeepSeek** | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
 | **OpenAI** | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
-| **Google Gemini** | `https://generativelanguage.googleapis.com/v1beta` | `GEMINI_API_KEY` |
+| **Vertex AI (Gemini)** | `https://us-central1-aiplatform.googleapis.com/v1` | `GOOGLE_CLOUD_PROJECT` |
 | **Anthropic** | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
 
@@ -436,7 +436,7 @@ Aura supports five AI providers. You choose one per session via the toolbar drop
 Aura can **dynamically fetch models** from provider APIs:
 
 - **OpenRouter** - Returns the full model catalogue with real-time pricing per model. Models are automatically added to the selection dropdown with up-to-date pricing.
-- **DeepSeek and OpenAI** - Use OpenAI-compatible `/models` endpoints. **Google Gemini** uses the native Gemini `models.list` endpoint. Pricing for recognised models is drawn from the embedded pricing tables; unknown models default to $0.
+- **DeepSeek and OpenAI** - Use OpenAI-compatible `/models` endpoints. **Vertex AI (Gemini)** uses Google publisher model discovery and the Gemini `streamGenerateContent` REST API. Pricing for recognised models is drawn from the embedded pricing tables; unknown models default to $0.
 
 Fetched models are **cached to disk** (`~/.config/Aura/models_cache.json`) and reloaded on startup, so you don't need to fetch every launch.
 
@@ -520,12 +520,15 @@ Aura never stores API keys in its config file. Keys are read from **environment 
 export DEEPSEEK_API_KEY="sk-..."
 export OPENAI_API_KEY="sk-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
-export GEMINI_API_KEY="..."
+export GOOGLE_CLOUD_PROJECT="my-gcp-project"
+export GOOGLE_CLOUD_LOCATION="us-central1"
 export OPENROUTER_API_KEY="sk-or-..."
 export TAVILY_API_KEY="..."  # Required for web_search and run_research
 ```
 
 On Windows, set these via **System Properties -> Environment Variables**.
+
+For Vertex AI (Gemini), authenticate with Application Default Credentials, for example `gcloud auth application-default login`. Aura also supports Vertex AI express mode API keys via `GOOGLE_API_KEY` or the legacy `GEMINI_API_KEY` environment variable.
 
 Alternatively, open the **Settings** dialog (gear icon) and enter your keys there - they will be encrypted to disk using a hardware-derived key.
 

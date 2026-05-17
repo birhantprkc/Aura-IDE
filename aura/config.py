@@ -64,6 +64,16 @@ def get_provider(provider_id: ProviderId) -> ProviderConfig:
 def get_api_key(provider_id: ProviderId) -> str | None:
     """Check env var first, then hardware-encrypted stored key."""
     cfg = PROVIDERS[provider_id]
+    if provider_id == "google":
+        for env_name in (
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_CLOUD_PROJECT",
+            "GCP_PROJECT",
+        ):
+            env_val = os.environ.get(env_name)
+            if env_val:
+                return env_val
     # 1. Environment variable takes precedence
     env_val = os.environ.get(cfg.env_key)
     if env_val:
@@ -129,7 +139,10 @@ def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo]
     from aura.client.gemini import GeminiClient
     
     try:
-        client = GeminiClient() if provider_id == "google" else DeepSeekClient(provider=provider_id)
+        if provider_id == "google":
+            client = GeminiClient(api_key=get_api_key("google"))
+        else:
+            client = DeepSeekClient(provider=provider_id)
         raw = client.fetch_raw_models()
         if not raw:
             return {}, {}, "Provider returned no models. Check your API key or connection."

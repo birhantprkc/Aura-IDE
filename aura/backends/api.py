@@ -21,11 +21,11 @@ class APIAgentBackend(AgentBackend):
     """
 
     def __init__(self, provider: ProviderId = "deepseek") -> None:
-        self._client = (
-            GeminiClient()
-            if provider == "google"
-            else DeepSeekClient(provider=provider)
-        )
+        if provider == "google":
+            from aura.config import get_api_key
+            self._client = GeminiClient(api_key=get_api_key("google"))
+        else:
+            self._client = DeepSeekClient(provider=provider)
 
     @property
     def client(self) -> DeepSeekClient | GeminiClient:

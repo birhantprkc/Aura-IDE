@@ -34,10 +34,10 @@ def test_provider_bases_are_urls():
 
 
 def test_provider_has_env_key():
-    """Every provider should have a non-empty env_key."""
+    """Every provider should have a non-empty primary env_key."""
     for cfg in PROVIDERS.values():
         assert cfg.env_key
-        assert "_API_KEY" in cfg.env_key
+        assert cfg.env_key.startswith(("GOOGLE_", "OPEN", "DEEPSEEK", "ANTHROPIC"))
 
 
 def test_provider_has_default_model():
@@ -76,12 +76,12 @@ def test_openai_provider_config():
     assert oai.default_thinking == "off"
 
 
-def test_google_provider_config_uses_native_gemini_api():
-    """Verify Google provider uses the native Gemini REST endpoint."""
+def test_google_provider_config_uses_vertex_ai_gemini_api():
+    """Verify Google provider uses Vertex AI's Gemini REST endpoint."""
     google = PROVIDERS["google"]
-    assert google.label == "Google Gemini"
-    assert google.base_url == "https://generativelanguage.googleapis.com/v1beta"
-    assert google.env_key == "GEMINI_API_KEY"
+    assert google.label == "Vertex AI (Gemini)"
+    assert google.base_url == "https://us-central1-aiplatform.googleapis.com/v1"
+    assert google.env_key == "GOOGLE_CLOUD_PROJECT"
     assert google.default_model == "gemini-2.0-flash"
 
 
@@ -102,6 +102,9 @@ def test_resolve_api_key_missing(monkeypatch):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GCP_PROJECT", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="No API key found"):
@@ -333,7 +336,7 @@ def test_redact_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     """redact_secrets should replace all known API keys with [REDACTED]."""
     from aura.config import redact_secrets
     monkeypatch.setenv("DEEPSEEK_API_KEY", "SECRET_DS_123")
-    monkeypatch.setenv("GEMINI_API_KEY", "SECRET_GEMINI_456")
+    monkeypatch.setenv("GOOGLE_API_KEY", "SECRET_GEMINI_456")
     monkeypatch.setenv("TAVILY_API_KEY", "SECRET_TAVILY_789")
 
     text = "Error with key SECRET_DS_123 and SECRET_GEMINI_456. Search key: SECRET_TAVILY_789"
