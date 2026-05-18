@@ -21,9 +21,11 @@ class APIAgentBackend(AgentBackend):
     """
 
     def __init__(self, provider: ProviderId = "deepseek") -> None:
-        if provider == "google":
+        if provider in ("google_ai", "vertex_ai"):
             from aura.config import get_api_key
-            self._client = GeminiClient(api_key=get_api_key("google"))
+            credential = get_api_key(provider)
+            is_vertex = (provider == "vertex_ai")
+            self._client = GeminiClient(credential=credential, vertexai=is_vertex)
         else:
             self._client = DeepSeekClient(provider=provider)
 

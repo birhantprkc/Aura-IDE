@@ -1,44 +1,134 @@
-"""Tests for the Vertex AI Gemini REST client."""
+"""Tests for the Google Gen AI Gemini client."""
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
 
+import aura.client.gemini as gemini_mod
+from google import genai as real_genai
 from aura.backends.api import APIAgentBackend
 from aura.client.events import ContentDelta, Done, ToolCallArgsDelta, ToolCallStart, Usage
 from aura.client.gemini import (
     GeminiClient,
-    _build_payload,
-    _to_vertex_contents,
-    _to_vertex_tools,
+    _generation_config,
+    _to_genai_contents,
+    _to_genai_tools,
 )
 
 
-def test_api_backend_uses_vertex_gemini_client(monkeypatch: pytest.MonkeyPatch) -> None:
+class _FakeModels:
+    def __init__(self, owner: "_FakeClient") -> None:
+        self._owner = owner
+
+    def list(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self._owner.captured["list_kwargs"] = kwargs
+        return [
+            {"name": "publishers/google/models/gemini-2.5-flash"},
+            {"name": "publishers/google/models/imagen-4.0-generate-preview"},
+        ]
+
+    def generate_content_stream(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self._owner.captured["stream_kwargs"] = kwargs
+        return self._owner.stream_chunks
+
+
+class _FakeClient:
+    instances: list["_FakeClient"] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.captured: dict[str, Any] = {}
+        self.stream_chunks: list[dict[str, Any]] = []
+        self.models = _FakeModels(self)
+        _FakeClient.instances.append(self)
+
+
+class _FakeGenAI:
+    Client = _FakeClient
+
+
+@pytest.fixture(autouse=True)
+def fake_genai(monkeypatch: pytest.MonkeyPatch) -> None:
+    _FakeClient.instances.clear()
+    monkeypatch.setattr(gemini_mod, "genai", _FakeGenAI)
+    monkeypatch.setattr(gemini_mod, "genai_types", None)
+    monkeypatch.setattr(gemini_mod, "HAS_GOOGLE_GENAI", True)
+
+
+def test_api_backend_uses_google_ai_client(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GOOGLE_API_KEY", "AIza-test-key")
-
-    backend = APIAgentBackend(provider="google")
-
+    backend = APIAgentBackend(provider="google_ai")
     assert isinstance(backend.client, GeminiClient)
+    assert backend.client.vertexai is False
+    assert backend.client.credential == "AIza-test-key"
 
 
-def test_google_api_key_env_does_not_depend_on_aiza_prefix(
+def test_api_backend_uses_vertex_ai_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    backend = APIAgentBackend(provider="vertex_ai")
+    assert isinstance(backend.client, GeminiClient)
+    assert backend.client.vertexai is True
+    assert backend.client.credential == "test-project"
+
+
+def test_google_ai_client_uses_api_key() -> None:
+    client = GeminiClient(credential="test-key", vertexai=False)
+    sdk_client = client._make_sdk_client()
+
+    assert sdk_client.kwargs["vertexai"] is False
+    assert sdk_client.kwargs["api_key"] == "test-key"
+    assert "project" not in sdk_client.kwargs
+
+
+def test_vertex_ai_client_supports_api_key() -> None:
+    client = GeminiClient(credential="AIza-vertex-key", vertexai=True)
+    sdk_client = client._make_sdk_client()
+
+    assert sdk_client.kwargs["vertexai"] is True
+    assert sdk_client.kwargs["api_key"] == "AIza-vertex-key"
+    assert "project" not in sdk_client.kwargs
+
+
+def test_vertex_discovery_falls_back_to_google_ai_on_401_with_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("GOOGLE_API_KEY", "AQ-test-key")
+    client = GeminiClient(credential="AIza-test-key", vertexai=True)
 
-    client = GeminiClient()
+    calls = []
 
-    assert client.is_express_mode
-    assert client._method_url("gemini-2.5-flash", "generateContent").endswith(
-        "/v1/publishers/google/models/gemini-2.5-flash:generateContent?key=AQ-test-key"
-    )
+    def fake_list(self, **kwargs):
+        is_vertex = self._owner.kwargs["vertexai"]
+        calls.append(is_vertex)
+        if is_vertex:
+            # Simulate Vertex 401
+            raise RuntimeError("401 UNAUTHENTICATED: Principal required")
+        return [{"name": "models/gemini-2.0-flash"}]
+
+    monkeypatch.setattr(_FakeModels, "list", fake_list)
+
+    models = client.fetch_raw_models()
+
+    # Should have called Vertex first (True), then Google AI (False)
+    assert calls == [True, False]
+    assert models[0]["id"] == "gemini-2.0-flash"
 
 
-def test_to_vertex_contents_translates_history_and_tool_results() -> None:
+def test_vertex_ai_client_uses_project_and_overrides_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ensure env is "polluted"
+    monkeypatch.setenv("GOOGLE_API_KEY", "STRAY_KEY_SHOULD_BE_IGNORED")
+
+    client = GeminiClient(credential="test-project", vertexai=True)
+    sdk_client = client._make_sdk_client()
+
+    assert sdk_client.kwargs["vertexai"] is True
+    assert sdk_client.kwargs["project"] == "test-project"
+    # Overridden to None to prevent SDK from picking up environment
+    assert sdk_client.kwargs["api_key"] is None
+
+
+def test_to_genai_contents_translates_history_and_tool_results() -> None:
     messages = [
         {"role": "system", "content": "You are concise."},
         {"role": "user", "content": "Use the tool."},
@@ -56,19 +146,20 @@ def test_to_vertex_contents_translates_history_and_tool_results() -> None:
         {"role": "tool", "tool_call_id": "call_1", "content": '{"ok":true}'},
     ]
 
-    system, contents = _to_vertex_contents(messages)
+    system, contents = _to_genai_contents(messages)
 
-    assert system == {"role": "system", "parts": [{"text": "You are concise."}]}
+    assert system == "You are concise."
     assert contents == [
         {"role": "user", "parts": [{"text": "Use the tool."}]},
         {
             "role": "model",
             "parts": [
                 {
-                    "functionCall": {
+                    "thought_signature": "skip_thought_signature_validator",
+                    "function_call": {
                         "name": "read_file",
                         "args": {"path": "a.py"},
-                    }
+                    },
                 }
             ],
         },
@@ -76,7 +167,7 @@ def test_to_vertex_contents_translates_history_and_tool_results() -> None:
             "role": "user",
             "parts": [
                 {
-                    "functionResponse": {
+                    "function_response": {
                         "name": "read_file",
                         "response": {"ok": True},
                     }
@@ -86,7 +177,7 @@ def test_to_vertex_contents_translates_history_and_tool_results() -> None:
     ]
 
 
-def test_to_vertex_tools_uses_rest_camel_case_schema() -> None:
+def test_to_genai_tools_uses_sdk_field_names() -> None:
     tools = [
         {
             "type": "function",
@@ -102,9 +193,9 @@ def test_to_vertex_tools_uses_rest_camel_case_schema() -> None:
         }
     ]
 
-    assert _to_vertex_tools(tools) == [
+    assert _to_genai_tools(tools) == [
         {
-            "functionDeclarations": [
+            "function_declarations": [
                 {
                     "name": "read_file",
                     "description": "Read a file",
@@ -119,108 +210,67 @@ def test_to_vertex_tools_uses_rest_camel_case_schema() -> None:
     ]
 
 
-def test_build_payload_uses_vertex_rest_field_names() -> None:
-    payload = _build_payload(
-        messages=[
-            {"role": "system", "content": "Be brief."},
-            {"role": "user", "content": "hello"},
-        ],
+def test_generation_config_uses_google_genai_field_names() -> None:
+    config = _generation_config(
+        thinking="high",
+        temperature=0.25,
         tools=[
             {
                 "type": "function",
                 "function": {"name": "read_file", "parameters": {"type": "object"}},
             }
         ],
-        thinking="high",
-        temperature=0.25,
+        system_instruction="Be brief.",
     )
 
-    assert payload["systemInstruction"] == {
-        "role": "system",
-        "parts": [{"text": "Be brief."}],
-    }
-    assert payload["generationConfig"] == {
-        "temperature": 0.25,
-        "candidateCount": 1,
-        "thinkingConfig": {"thinkingLevel": "HIGH"},
-    }
-    assert payload["toolConfig"] == {"functionCallingConfig": {"mode": "AUTO"}}
-    assert "system_instruction" not in payload
-    assert "tool_config" not in payload
+    assert config["system_instruction"] == "Be brief."
+    assert config["temperature"] == 0.25
+    assert config["candidate_count"] == 1
+    assert config["thinking_config"] == {"thinking_level": "HIGH"}
+    assert config["tool_config"] == {"function_calling_config": {"mode": "AUTO"}}
 
 
 def test_gemini_stream_yields_text_tool_calls_usage_and_done(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("GOOGLE_API_KEY", "AIza-test-key")
-    captured: dict[str, Any] = {}
+    client = GeminiClient(credential="test-key", vertexai=False)
 
-    class FakeResponse:
-        status_code = 200
-
-        def __enter__(self) -> "FakeResponse":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
-        def iter_lines(self) -> list[str]:
-            chunks = [
+    sdk_client = _FakeClient()
+    sdk_client.stream_chunks = [
+        {
+            "candidates": [
                 {
-                    "candidates": [
-                        {
-                            "content": {"parts": [{"text": "Hi"}]},
-                        }
-                    ]
-                },
-                {
-                    "candidates": [
-                        {
-                            "content": {
-                                "parts": [
-                                    {
-                                        "functionCall": {
-                                            "name": "read_file",
-                                            "args": {"path": "a.py"},
-                                        }
-                                    }
-                                ]
-                            },
-                            "finishReason": "STOP",
-                        }
-                    ],
-                    "usageMetadata": {
-                        "promptTokenCount": 10,
-                        "cachedContentTokenCount": 4,
-                        "candidatesTokenCount": 3,
-                    },
-                },
+                    "content": {"parts": [{"text": "Hi"}]},
+                }
             ]
-            lines: list[str] = []
-            for chunk in chunks:
-                lines.extend([f"data: {json.dumps(chunk)}", ""])
-            return lines
-
-    class FakeClient:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            return None
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
-        def stream(self, method: str, url: str, **kwargs: object) -> FakeResponse:
-            captured["method"] = method
-            captured["url"] = url
-            captured["kwargs"] = kwargs
-            return FakeResponse()
-
-    monkeypatch.setattr("aura.client.gemini.httpx.Client", FakeClient)
+        },
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "function_call": {
+                                    "name": "read_file",
+                                    "args": {"path": "a.py"},
+                                }
+                            }
+                        ]
+                    },
+                    "finish_reason": "STOP",
+                }
+            ],
+            "usage_metadata": {
+                "prompt_token_count": 10,
+                "cached_content_token_count": 4,
+                "candidates_token_count": 3,
+            },
+        },
+    ]
+    monkeypatch.setattr(client, "_make_sdk_client", lambda: sdk_client)
 
     events = list(
-        GeminiClient().stream(
+        client.stream(
             messages=[{"role": "user", "content": "hello"}],
             tools=[
                 {
@@ -228,22 +278,17 @@ def test_gemini_stream_yields_text_tool_calls_usage_and_done(
                     "function": {"name": "read_file", "parameters": {"type": "object"}},
                 }
             ],
-            model="gemini-2.0-flash",
+            model="models/gemini-2.0-flash",
             thinking="off",
             temperature=0.25,
         )
     )
 
-    assert captured["method"] == "POST"
-    assert captured["url"].endswith(
-        "/v1/publishers/google/models/gemini-2.0-flash:"
-        "streamGenerateContent?alt=sse&key=AIza-test-key"
-    )
-    assert "Authorization" not in captured["kwargs"]["headers"]
-    body = captured["kwargs"]["json"]
-    assert body["contents"] == [{"role": "user", "parts": [{"text": "hello"}]}]
-    assert body["generationConfig"] == {"temperature": 0.25, "candidateCount": 1}
-    assert body["toolConfig"] == {"functionCallingConfig": {"mode": "AUTO"}}
+    assert sdk_client.captured["stream_kwargs"]["model"] == "gemini-2.0-flash"
+    assert sdk_client.captured["stream_kwargs"]["contents"] == [
+        {"role": "user", "parts": [{"text": "hello"}]}
+    ]
+    assert sdk_client.captured["stream_kwargs"]["config"]["temperature"] == 0.25
 
     assert any(isinstance(ev, ContentDelta) and ev.text == "Hi" for ev in events)
     assert any(isinstance(ev, ToolCallStart) and ev.name == "read_file" for ev in events)
@@ -266,50 +311,3 @@ def test_gemini_stream_yields_text_tool_calls_usage_and_done(
         "name": "read_file",
         "arguments": '{"path": "a.py"}',
     }
-
-
-def test_standard_vertex_url_uses_project_location_and_bearer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client = GeminiClient(api_key="test-project")
-    client.location = "europe-west4"
-    monkeypatch.setattr(client, "_get_access_token", lambda: "token-123")
-
-    captured: dict[str, Any] = {}
-
-    class FakeResponse:
-        status_code = 200
-
-        def __enter__(self) -> "FakeResponse":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
-        def iter_lines(self) -> list[str]:
-            return []
-
-    class FakeClient:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            return None
-
-        def __enter__(self) -> "FakeClient":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
-        def stream(self, method: str, url: str, **kwargs: object) -> FakeResponse:
-            captured["url"] = url
-            captured["headers"] = kwargs["headers"]
-            return FakeResponse()
-
-    monkeypatch.setattr("aura.client.gemini.httpx.Client", FakeClient)
-
-    list(client.stream([], None, "models/gemini-2.5-flash", "off"))
-
-    assert captured["url"].endswith(
-        "/v1/projects/test-project/locations/europe-west4/"
-        "publishers/google/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
-    )
-    assert captured["headers"]["Authorization"] == "Bearer token-123"

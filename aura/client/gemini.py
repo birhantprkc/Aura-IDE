@@ -1,4 +1,4 @@
-"""Vertex AI Gemini REST client for Aura's API backend."""
+"""Google Gen AI SDK client for Aura's Gemini API backend."""
 
 from __future__ import annotations
 
@@ -9,15 +9,15 @@ import threading
 from collections.abc import Iterator
 from typing import Any
 
-import httpx
-
 try:
-    import google.auth
-    import google.auth.transport.requests
+    from google import genai
+    from google.genai import types as genai_types
 
-    HAS_GOOGLE_AUTH = True
+    HAS_GOOGLE_GENAI = True
 except ImportError:
-    HAS_GOOGLE_AUTH = False
+    genai = None
+    genai_types = None
+    HAS_GOOGLE_GENAI = False
 
 from aura.client.events import (
     ApiError,
@@ -34,100 +34,62 @@ from aura.config import ThinkingMode
 
 logger = logging.getLogger(__name__)
 
-_API_VERSION = "v1"
-_MODEL_LIST_API_VERSION = "v1beta1"
-_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 _DEFAULT_LOCATION = "us-central1"
 
 
 class GeminiClient:
-    """Client for Gemini models through the Vertex AI REST API.
+    """Gemini client backed by Google's unified ``google-genai`` SDK."""
 
-    The client supports both full Vertex AI authentication with Application
-    Default Credentials and Vertex AI express mode API keys.
-    """
-
-    def __init__(self, api_key: str | None = None) -> None:
-        env_name, env_credential = _first_env_with_name(
-            "GOOGLE_API_KEY",
-            "GEMINI_API_KEY",
-            "GOOGLE_CLOUD_PROJECT",
-            "GCP_PROJECT",
-        )
-        credential = api_key if api_key is not None else env_credential
-        if api_key is not None:
-            credential_kind = _classify_google_credential(credential)
-        elif env_name in {"GOOGLE_API_KEY", "GEMINI_API_KEY"}:
-            credential_kind = "api_key"
-        else:
-            credential_kind = _classify_google_credential(credential)
-
-        self._api_key = credential if credential_kind == "api_key" else None
-        self.project = credential if credential_kind == "project" else None
+    def __init__(self, credential: str | None = None, vertexai: bool = False) -> None:
+        self.credential = credential
+        self.vertexai = vertexai
         self.location = _first_env(
             "GOOGLE_CLOUD_LOCATION",
             "GCP_LOCATION",
             "GCP_REGION",
         ) or _DEFAULT_LOCATION
 
-        if self.project and ":" in self.project:
-            self.project, self.location = self.project.split(":", 1)
-
-    @property
-    def is_express_mode(self) -> bool:
-        return self._api_key is not None
-
     def list_models(self) -> list[str]:
-        """Fetch model IDs available from the publisher model catalogue."""
         return [m["id"] for m in self.fetch_raw_models() if m.get("id")]
 
     def fetch_raw_models(self) -> list[dict[str, Any]]:
-        """Fetch raw publisher model metadata from Vertex AI Model Garden."""
+        """Fetch the live model list through the Google Gen AI SDK.
+        
+        Note: Vertex AI does not support model listing via API keys (Express Mode).
+        If we are in Vertex mode with an API key and the fetch fails, we fall back 
+        to standard Google AI discovery to populate the list.
+        """
         try:
-            token = None if self.is_express_mode else self._get_access_token()
+            client = self._make_sdk_client()
+            raw_models = client.models.list(config={"page_size": 300})
         except Exception as exc:
-            logger.error("Vertex AI auth error during model discovery: %s", exc)
-            return []
+            # Discovery Bridge: If Vertex + API Key fails, try Google AI discovery
+            if self.vertexai and _classify_google_credential(self.credential) == "api_key":
+                logger.info("Vertex AI discovery failed (expected for API keys). Falling back to Google AI discovery.")
+                try:
+                    # Create a temporary non-vertex client just for discovery
+                    fallback_kwargs = {"api_key": self.credential, "vertexai": False}
+                    fallback_client = genai.Client(**fallback_kwargs)
+                    raw_models = fallback_client.models.list(config={"page_size": 300})
+                except Exception as fallback_exc:
+                    msg = self._clean_error_msg(fallback_exc)
+                    logger.error("Google AI discovery fallback also failed: %s", msg)
+                    raise RuntimeError(f"Google Gen AI model discovery failed: {msg}") from fallback_exc
+            else:
+                msg = self._clean_error_msg(exc)
+                logger.error("Google Gen AI model discovery failed: %s", msg)
+                raise RuntimeError(f"Google Gen AI model discovery failed: {msg}") from exc
 
-        params: dict[str, Any] = {
-            "pageSize": 1000,
-            "view": "PUBLISHER_MODEL_VIEW_BASIC",
-        }
-        if self._api_key:
-            params["key"] = self._api_key
-
-        headers = {"Content-Type": "application/json"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-
-        url = (
-            f"https://{self._service_endpoint()}/{_MODEL_LIST_API_VERSION}/"
-            "publishers/google/models"
-        )
-
-        try:
-            with httpx.Client(timeout=10.0) as client:
-                response = client.get(url, headers=headers, params=params)
-                response.raise_for_status()
-                data = response.json()
-        except Exception as exc:
-            logger.error("Vertex AI model discovery failed: %s", exc)
-            return []
-
-        models = data.get("publisherModels") or data.get("models") or []
-        results: list[dict[str, Any]] = []
-        for raw in models:
-            if not isinstance(raw, dict):
+        models: list[dict[str, Any]] = []
+        for raw in raw_models:
+            model = _model_to_dict(raw)
+            model_id = _model_id(model)
+            if not model_id or "gemini" not in model_id.lower():
                 continue
-            model_id = _model_id(raw)
-            if not model_id or not model_id.startswith("gemini-"):
-                continue
-            item = dict(raw)
-            item["id"] = model_id
-            item.setdefault("name", raw.get("name") or f"publishers/google/models/{model_id}")
-            results.append(item)
-        results.sort(key=lambda item: item["id"])
-        return results
+            model["id"] = model_id
+            models.append(model)
+        models.sort(key=lambda item: item["id"])
+        return models
 
     def stream(
         self,
@@ -144,102 +106,100 @@ class GeminiClient:
             return
 
         try:
-            token = None if self.is_express_mode else self._get_access_token()
-            url = self._method_url(model, "streamGenerateContent", alt_sse=True)
+            client = self._make_sdk_client()
+            system_instruction, contents = _to_genai_contents(messages)
+            config = _generation_config(thinking, temperature, tools or [], system_instruction)
+            stream = client.models.generate_content_stream(
+                model=_normalize_model_name(model),
+                contents=contents,
+                config=config,
+            )
         except Exception as exc:
-            yield ApiError(status_code=None, message=f"Vertex AI authentication error: {exc}")
+            yield ApiError(
+                status_code=None,
+                message=_redact_secret(f"{type(exc).__name__}: {self._clean_error_msg(exc)}", self.credential),
+            )
             return
-
-        headers = {"Content-Type": "application/json"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-
-        payload = _build_payload(messages, tools or [], thinking, temperature)
-        logger.info(
-            "Vertex AI Gemini request to %s using %s auth",
-            url.split("?", 1)[0],
-            "API key" if self.is_express_mode else "ADC",
-        )
 
         content_buf: list[str] = []
         reasoning_buf: list[str] = []
         tool_calls: dict[int, dict[str, Any]] = {}
         finish_reason: str | None = None
         usage: dict[str, int] | None = None
+        thought_signature: str | None = None
 
         try:
-            with httpx.Client(timeout=httpx.Timeout(120.0, connect=10.0, read=None)) as client:
-                with client.stream("POST", url, headers=headers, json=payload) as response:
-                    if response.status_code >= 400:
+            for chunk in stream:
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+
+                chunk_dict = _to_plain_dict(chunk)
+                if chunk_dict.get("usage_metadata") or chunk_dict.get("usageMetadata"):
+                    usage = _usage_from_metadata(
+                        chunk_dict.get("usage_metadata") or chunk_dict.get("usageMetadata") or {}
+                    )
+
+                candidates = chunk_dict.get("candidates") or []
+                if not candidates:
+                    prompt_feedback = chunk_dict.get("prompt_feedback") or chunk_dict.get("promptFeedback") or {}
+                    block_reason = prompt_feedback.get("block_reason") or prompt_feedback.get("blockReason")
+                    if block_reason:
                         yield ApiError(
-                            status_code=response.status_code,
-                            message=_redact_secret(response.read().decode("utf-8", "replace"), self._api_key),
+                            status_code=None,
+                            message=f"Gemini blocked the prompt: {block_reason}",
                         )
                         return
+                    text = chunk_dict.get("text")
+                    if isinstance(text, str) and text:
+                        content_buf.append(text)
+                        yield ContentDelta(text)
+                    continue
 
-                    for chunk in _iter_sse_json(response):
-                        if cancel_event is not None and cancel_event.is_set():
-                            break
+                candidate = candidates[0]
+                finish_reason = _map_finish_reason(
+                    candidate.get("finish_reason") or candidate.get("finishReason"),
+                    finish_reason,
+                )
+                content = candidate.get("content") or {}
+                for part in content.get("parts") or []:
+                    if not isinstance(part, dict):
+                        continue
 
-                        if chunk.get("usageMetadata"):
-                            usage = _usage_from_metadata(chunk["usageMetadata"])
+                    # Capture thought_signature for Thinking models
+                    sig = part.get("thought_signature") or part.get("thoughtSignature")
+                    if sig:
+                        thought_signature = sig
 
-                        candidates = chunk.get("candidates") or []
-                        if not candidates:
-                            block_reason = (chunk.get("promptFeedback") or {}).get("blockReason")
-                            if block_reason:
-                                yield ApiError(
-                                    status_code=None,
-                                    message=f"Gemini blocked the prompt: {block_reason}",
-                                )
-                                return
-                            continue
+                    text = part.get("text")
+                    if isinstance(text, str) and text:
+                        if part.get("thought"):
+                            reasoning_buf.append(text)
+                            yield ReasoningDelta(text)
+                        else:
+                            content_buf.append(text)
+                            yield ContentDelta(text)
 
-                        candidate = candidates[0]
-                        finish_reason = _map_finish_reason(
-                            candidate.get("finishReason"),
-                            finish_reason,
-                        )
-                        for part in (candidate.get("content") or {}).get("parts") or []:
-                            if not isinstance(part, dict):
-                                continue
-
-                            text = part.get("text")
-                            if isinstance(text, str) and text:
-                                if part.get("thought"):
-                                    reasoning_buf.append(text)
-                                    yield ReasoningDelta(text)
-                                else:
-                                    content_buf.append(text)
-                                    yield ContentDelta(text)
-
-                            function_call = part.get("functionCall")
-                            if isinstance(function_call, dict):
-                                idx = len(tool_calls)
-                                name = str(function_call.get("name") or "")
-                                args = function_call.get("args") or {}
-                                args_json = json.dumps(args, ensure_ascii=False)
-                                tool_call = {
-                                    "id": f"gemini_call_{idx}",
-                                    "type": "function",
-                                    "function": {
-                                        "name": name,
-                                        "arguments": args_json,
-                                    },
-                                }
-                                tool_calls[idx] = tool_call
-                                yield ToolCallStart(index=idx, id=tool_call["id"], name=name)
-                                yield ToolCallArgsDelta(index=idx, args_chunk=args_json)
-        except httpx.HTTPStatusError as exc:
-            yield ApiError(
-                status_code=exc.response.status_code,
-                message=_redact_secret(str(exc), self._api_key),
-            )
-            return
+                    function_call = part.get("function_call") or part.get("functionCall")
+                    if isinstance(function_call, dict):
+                        idx = len(tool_calls)
+                        name = str(function_call.get("name") or "")
+                        args = function_call.get("args") or {}
+                        args_json = json.dumps(args, ensure_ascii=False)
+                        tool_call = {
+                            "id": f"gemini_call_{idx}",
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": args_json,
+                            },
+                        }
+                        tool_calls[idx] = tool_call
+                        yield ToolCallStart(index=idx, id=tool_call["id"], name=name)
+                        yield ToolCallArgsDelta(index=idx, args_chunk=args_json)
         except Exception as exc:
             yield ApiError(
                 status_code=None,
-                message=_redact_secret(f"{type(exc).__name__}: {exc}", self._api_key),
+                message=_redact_secret(f"{type(exc).__name__}: {self._clean_error_msg(exc)}", self.credential),
             )
             return
 
@@ -255,88 +215,60 @@ class GeminiClient:
         }
         if reasoning_buf:
             full_message["reasoning_content"] = "".join(reasoning_buf)
+        if thought_signature:
+            full_message["thought_signature"] = thought_signature
         if tool_calls:
             full_message["tool_calls"] = [tool_calls[idx] for idx in sorted(tool_calls)]
             finish_reason = "tool_calls"
 
         yield Done(finish_reason=finish_reason, full_message=full_message)
 
-    def _get_access_token(self) -> str:
-        if not HAS_GOOGLE_AUTH:
-            raise RuntimeError("google-auth is required for Vertex AI ADC authentication.")
+    def _make_sdk_client(self) -> Any:
+        if not HAS_GOOGLE_GENAI or genai is None:
+            raise RuntimeError("google-genai is required for the Google Gemini provider.")
 
-        credentials, project = google.auth.default(scopes=[_CLOUD_PLATFORM_SCOPE])
-        if not self.project:
-            self.project = project
-        if not self.project:
-            raise RuntimeError(
-                "No Google Cloud project configured. Set GOOGLE_CLOUD_PROJECT "
-                "or store a project ID for the Google provider."
-            )
+        kwargs: dict[str, Any] = {"vertexai": self.vertexai}
+        if self.vertexai:
+            # For Vertex AI, the credential can be a Project ID or an API Key
+            kind = _classify_google_credential(self.credential)
+            if kind == "api_key":
+                kwargs["api_key"] = self.credential
+            else:
+                kwargs["project"] = self.credential
+                kwargs["location"] = self.location
+        else:
+            kwargs["api_key"] = self.credential
 
-        auth_req = google.auth.transport.requests.Request()
-        credentials.refresh(auth_req)
-        return credentials.token
+        # Critical: If we are in Vertex mode with a Project ID, we MUST ensure 
+        # the SDK doesn't pick up a stray GOOGLE_API_KEY from the environment.
+        if self.vertexai and "project" in kwargs and "GOOGLE_API_KEY" in os.environ:
+            kwargs["api_key"] = None
 
-    def _method_url(self, model: str, method: str, *, alt_sse: bool = False) -> str:
-        model_path = self._model_path(model)
-        url = f"https://{self._service_endpoint()}/{_API_VERSION}/{model_path}:{method}"
-        params: list[str] = []
-        if alt_sse:
-            params.append("alt=sse")
-        if self._api_key:
-            params.append(f"key={self._api_key}")
-        if params:
-            url = f"{url}?{'&'.join(params)}"
-        return url
+        return genai.Client(**kwargs)
 
-    def _model_path(self, model: str) -> str:
-        normalized = _normalize_model_name(model)
-        if normalized.startswith("projects/"):
-            return normalized
-
-        publisher_model = (
-            normalized
-            if normalized.startswith("publishers/")
-            else f"publishers/google/models/{normalized}"
-        )
-        if self.is_express_mode:
-            return publisher_model
-        if not self.project:
-            raise RuntimeError("No Google Cloud project configured for Vertex AI.")
-        return f"projects/{self.project}/locations/{self.location}/{publisher_model}"
-
-    def _service_endpoint(self) -> str:
-        if self.is_express_mode or self.location == "global":
-            return "aiplatform.googleapis.com"
-        return f"{self.location}-aiplatform.googleapis.com"
+    def _clean_error_msg(self, exc: Exception) -> str:
+        msg = str(exc)
+        if "PERMISSION_DENIED" in msg:
+            if "generativelanguage.googleapis.com" in msg:
+                return (
+                    "403 Forbidden: The Gemini API is disabled in your project. "
+                    "Enable it here: https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com"
+                )
+            if "aiplatform.googleapis.com" in msg:
+                return (
+                    "403 Forbidden: The Vertex AI or Agent Platform API is disabled, or your credentials lack permission. "
+                    "1. Enable APIs: https://console.cloud.google.com/apis/library/aiplatform.googleapis.com "
+                    "and https://console.cloud.google.com/apis/library/agentplatform.googleapis.com\n"
+                    "2. Ensure you are using the correct region (default: us-central1).\n"
+                    "3. If using a Project ID, ensure you have run 'gcloud auth application-default login' locally."
+                )
+        return msg
 
 
-def _build_payload(
+def _to_genai_contents(
     messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]],
-    thinking: ThinkingMode,
-    temperature: float,
-) -> dict[str, Any]:
-    system_instruction, contents = _to_vertex_contents(messages)
-    payload: dict[str, Any] = {
-        "contents": contents,
-        "generationConfig": _generation_config(thinking, temperature),
-    }
-    if system_instruction is not None:
-        payload["systemInstruction"] = system_instruction
-
-    vertex_tools = _to_vertex_tools(tools)
-    if vertex_tools:
-        payload["tools"] = vertex_tools
-        payload["toolConfig"] = {"functionCallingConfig": {"mode": "AUTO"}}
-    return payload
-
-
-def _to_vertex_contents(
-    messages: list[dict[str, Any]],
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    system_parts: list[dict[str, Any]] = []
+) -> tuple[str | None, list[dict[str, Any]]]:
+    system_parts: list[str] = []
     contents: list[dict[str, Any]] = []
     tool_names_by_id: dict[str, str] = {}
 
@@ -345,11 +277,20 @@ def _to_vertex_contents(
         parts = _content_parts(msg.get("content"))
 
         if role == "system":
-            system_parts.extend(part for part in parts if "text" in part)
+            system_parts.extend(str(part["text"]) for part in parts if "text" in part)
             continue
 
         if role == "assistant":
             model_parts = list(parts)
+            
+            # For Thinking models: if we have reasoning content or tool calls, 
+            # we must handle the thought_signature.
+            reasoning = msg.get("reasoning_content")
+            thought_sig = msg.get("thought_signature") or "skip_thought_signature_validator"
+            
+            if reasoning:
+                model_parts.insert(0, {"text": str(reasoning), "thought": True})
+
             for tc in msg.get("tool_calls") or []:
                 if not isinstance(tc, dict):
                     continue
@@ -360,9 +301,12 @@ def _to_vertex_contents(
                 call_id = str(tc.get("id") or "")
                 if call_id and name:
                     tool_names_by_id[call_id] = name
+                
+                # The thought_signature MUST accompany the first function_call part
                 model_parts.append(
                     {
-                        "functionCall": {
+                        "thought_signature": thought_sig,
+                        "function_call": {
                             "name": name,
                             "args": _json_object(fn.get("arguments")),
                         }
@@ -379,7 +323,7 @@ def _to_vertex_contents(
                     "role": "user",
                     "parts": [
                         {
-                            "functionResponse": {
+                            "function_response": {
                                 "name": name,
                                 "response": _tool_response(msg.get("content")),
                             }
@@ -392,10 +336,7 @@ def _to_vertex_contents(
         if role == "user":
             contents.append({"role": "user", "parts": parts or [{"text": ""}]})
 
-    system_instruction = (
-        {"role": "system", "parts": system_parts} if system_parts else None
-    )
-    return system_instruction, contents
+    return ("\n\n".join(system_parts) if system_parts else None), contents
 
 
 def _content_parts(content: Any) -> list[dict[str, Any]]:
@@ -427,13 +368,38 @@ def _image_url_part(url: str) -> dict[str, Any] | None:
     if url.startswith("data:") and "," in url:
         header, data = url.split(",", 1)
         mime_type = header.split(":", 1)[1].split(";", 1)[0]
-        return {"inlineData": {"mimeType": mime_type, "data": data}}
+        return {"inline_data": {"mime_type": mime_type, "data": data}}
     if url.startswith(("gs://", "http://", "https://")):
-        return {"fileData": {"mimeType": "image/jpeg", "fileUri": url}}
+        return {"file_data": {"mime_type": "image/jpeg", "file_uri": url}}
     return None
 
 
-def _to_vertex_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _generation_config(
+    thinking: ThinkingMode,
+    temperature: float,
+    tools: list[dict[str, Any]],
+    system_instruction: str | None,
+) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "temperature": temperature,
+        "candidate_count": 1,
+    }
+    if system_instruction:
+        config["system_instruction"] = system_instruction
+
+    genai_tools = _to_genai_tools(tools)
+    if genai_tools:
+        config["tools"] = genai_tools
+        config["tool_config"] = {"function_calling_config": {"mode": "AUTO"}}
+
+    if thinking == "high":
+        config["thinking_config"] = {"thinking_level": "HIGH"}
+    elif thinking == "max":
+        config["thinking_config"] = {"thinking_budget": 8192}
+    return config
+
+
+def _to_genai_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     declarations: list[dict[str, Any]] = []
     for tool in tools:
         if not isinstance(tool, dict):
@@ -441,59 +407,26 @@ def _to_vertex_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         fn = tool.get("function") or {}
         if not isinstance(fn, dict) or not fn.get("name"):
             continue
-        declaration = {
-            "name": str(fn["name"]),
-            "description": str(fn.get("description") or ""),
-            "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
-        }
-        declarations.append(declaration)
-    return [{"functionDeclarations": declarations}] if declarations else []
-
-
-def _generation_config(thinking: ThinkingMode, temperature: float) -> dict[str, Any]:
-    config: dict[str, Any] = {
-        "temperature": temperature,
-        "candidateCount": 1,
-    }
-    if thinking == "high":
-        config["thinkingConfig"] = {"thinkingLevel": "HIGH"}
-    elif thinking == "max":
-        config["thinkingConfig"] = {"thinkingBudget": 8192}
-    return config
-
-
-def _iter_sse_json(response: httpx.Response) -> Iterator[dict[str, Any]]:
-    data_lines: list[str] = []
-    for line in response.iter_lines():
-        if not line:
-            yield from _flush_sse_json(data_lines)
-            continue
-        if line.startswith("data:"):
-            data_lines.append(line.removeprefix("data:").strip())
-    yield from _flush_sse_json(data_lines)
-
-
-def _flush_sse_json(data_lines: list[str]) -> Iterator[dict[str, Any]]:
-    if not data_lines:
-        return
-    data = "\n".join(data_lines)
-    data_lines.clear()
-    if data == "[DONE]":
-        return
-    try:
-        parsed = json.loads(data)
-    except json.JSONDecodeError:
-        return
-    if isinstance(parsed, dict):
-        yield parsed
+        declarations.append(
+            {
+                "name": str(fn["name"]),
+                "description": str(fn.get("description") or ""),
+                "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
+            }
+        )
+    return [{"function_declarations": declarations}] if declarations else []
 
 
 def _usage_from_metadata(raw: dict[str, Any]) -> dict[str, int]:
-    prompt_tokens = int(raw.get("promptTokenCount") or 0)
-    cache_hit_tokens = int(raw.get("cachedContentTokenCount") or 0)
+    prompt_tokens = int(raw.get("prompt_token_count") or raw.get("promptTokenCount") or 0)
+    cache_hit_tokens = int(
+        raw.get("cached_content_token_count") or raw.get("cachedContentTokenCount") or 0
+    )
     return {
         "prompt_tokens": prompt_tokens,
-        "completion_tokens": int(raw.get("candidatesTokenCount") or 0),
+        "completion_tokens": int(
+            raw.get("candidates_token_count") or raw.get("candidatesTokenCount") or 0
+        ),
         "cache_hit_tokens": cache_hit_tokens,
         "cache_miss_tokens": max(0, prompt_tokens - cache_hit_tokens),
     }
@@ -502,6 +435,7 @@ def _usage_from_metadata(raw: dict[str, Any]) -> dict[str, int]:
 def _map_finish_reason(raw: Any, current: str | None) -> str | None:
     if not raw:
         return current
+    value = str(raw).split(".")[-1].upper()
     mapping = {
         "STOP": "stop",
         "MAX_TOKENS": "length",
@@ -512,16 +446,66 @@ def _map_finish_reason(raw: Any, current: str | None) -> str | None:
         "UNEXPECTED_TOOL_CALL": "tool_calls",
         "TOO_MANY_TOOL_CALLS": "tool_calls",
     }
-    return mapping.get(str(raw).upper(), str(raw).lower())
+    return mapping.get(value, value.lower())
+
+
+def _model_to_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if hasattr(raw, "model_dump"):
+        dumped = raw.model_dump(exclude_none=True)
+        return dumped if isinstance(dumped, dict) else {}
+    result: dict[str, Any] = {}
+    for key in ("name", "base_model_id", "baseModelId", "display_name", "displayName"):
+        value = getattr(raw, key, None)
+        if value is not None:
+            result[key] = value
+    return result
+
+
+def _to_plain_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if hasattr(raw, "model_dump"):
+        dumped = raw.model_dump(exclude_none=True)
+        return dumped if isinstance(dumped, dict) else {}
+    result: dict[str, Any] = {}
+    for key in ("candidates", "usage_metadata", "prompt_feedback", "text"):
+        value = getattr(raw, key, None)
+        if value is not None:
+            result[key] = value
+    return _convert_plain(result)
+
+
+def _convert_plain(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _convert_plain(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_convert_plain(v) for v in value]
+    if hasattr(value, "model_dump"):
+        return _convert_plain(value.model_dump(exclude_none=True))
+    if hasattr(value, "__dict__") and not isinstance(value, (str, bytes)):
+        return {
+            k: _convert_plain(v)
+            for k, v in vars(value).items()
+            if not k.startswith("_") and v is not None
+        }
+    return value
 
 
 def _normalize_model_name(model: str) -> str:
     name = model.strip()
-    return name.removeprefix("models/")
+    return name.rsplit("/models/", 1)[-1] if "/models/" in name else name.removeprefix("models/")
 
 
 def _model_id(raw: dict[str, Any]) -> str:
-    name = str(raw.get("name") or raw.get("baseModelId") or "")
+    name = str(
+        raw.get("name")
+        or raw.get("base_model_id")
+        or raw.get("baseModelId")
+        or raw.get("id")
+        or ""
+    )
     if "/models/" in name:
         return name.rsplit("/models/", 1)[1]
     return name.removeprefix("models/")
@@ -572,13 +556,28 @@ def _classify_google_credential(value: str | None) -> str | None:
         return None
     if value.startswith("AIza"):
         return "api_key"
-    project = value.split(":", 1)[0]
+
+    # Check for project:location format
+    parts = value.split(":", 1)
+    project = parts[0]
+
+    # If the first part is numeric (Project Number), it's a project
+    if project.isdigit():
+        return "project"
+
+    # If it looks like a Project ID (slug-like string)
     if _looks_like_google_project_id(project):
         return "project"
+
     return "api_key"
 
 
 def _looks_like_google_project_id(value: str) -> bool:
+    # Project Numbers are numeric
+    if value.isdigit():
+        return True
+
+    # Project IDs are 6-30 chars, start with lowercase letter
     if len(value) < 6 or len(value) > 30:
         return False
     if not value[0].islower():

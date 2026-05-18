@@ -839,6 +839,7 @@ To publish a Windows release, bump `aura/version.py`, `pyproject.toml`, and the 
 |---------|---------|
 | [PySide6](https://pypi.org/project/PySide6/) | Qt for Python GUI framework |
 | [openai](https://pypi.org/project/openai/) | AI provider client (OpenAI-compatible) |
+| [google-genai](https://pypi.org/project/google-genai/) | Official Google Gemini SDK for Vertex AI and express-mode API keys |
 | [beautifulsoup4](https://pypi.org/project/beautifulsoup4/) | HTML parsing for web research |
 | [cryptography](https://pypi.org/project/cryptography/) | Fernet encryption for hardware-tethered key storage |
 | [platformdirs](https://pypi.org/project/platformdirs/) | Cross-platform config/data directory resolution |

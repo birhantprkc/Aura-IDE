@@ -64,22 +64,50 @@ def get_provider(provider_id: ProviderId) -> ProviderConfig:
 def get_api_key(provider_id: ProviderId) -> str | None:
     """Check env var first, then hardware-encrypted stored key."""
     cfg = PROVIDERS[provider_id]
-    if provider_id == "google":
-        for env_name in (
+
+    # 1. Environment variable takes precedence.
+    # We use a specific search order based on the provider to avoid cross-contamination.
+    if provider_id == "vertex_ai":
+        search_names = (
+            "GOOGLE_CLOUD_PROJECT",
+            "GCP_PROJECT",
+            "VERTEX_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+        )
+    elif provider_id == "google_ai":
+        search_names = (
             "GOOGLE_API_KEY",
             "GEMINI_API_KEY",
             "GOOGLE_CLOUD_PROJECT",
             "GCP_PROJECT",
-        ):
-            env_val = os.environ.get(env_name)
-            if env_val:
-                return env_val
-    # 1. Environment variable takes precedence
-    env_val = os.environ.get(cfg.env_key)
-    if env_val:
-        return env_val
+        )
+    else:
+        search_names = (cfg.env_key,)
+
+    for name in search_names:
+        val = os.environ.get(name)
+        if val:
+            return val
+
     # 2. Stored key (hardware-tethered, auto-migrates legacy plaintext)
     return _stored_get_key(provider_id)
+
+
+def get_google_vertex_project_credential() -> str | None:
+    """Return a Google Cloud project credential for Vertex AI ADC flows."""
+    return get_api_key("vertex_ai")
+
+
+def _looks_like_google_project_credential(value: str) -> bool:
+    project = value.split(":", 1)[0]
+    if len(project) < 6 or len(project) > 30:
+        return False
+    if not project[0].islower():
+        return False
+    if project.endswith("-"):
+        return False
+    return all(ch.islower() or ch.isdigit() or ch == "-" for ch in project)
 
 
 def resolve_api_key(provider_id: ProviderId) -> str:
@@ -139,8 +167,19 @@ def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo]
     from aura.client.gemini import GeminiClient
     
     try:
-        if provider_id == "google":
-            client = GeminiClient(api_key=get_api_key("google"))
+        if provider_id in ("google_ai", "vertex_ai"):
+            credential = get_api_key(provider_id)
+            if not credential:
+                label = PROVIDERS[provider_id].label
+                env = PROVIDERS[provider_id].env_key
+                return (
+                    {},
+                    {},
+                    f"No credential found for {label}. Set the {env} environment variable.",
+                )
+            # Pass vertexai flag explicitly to the client
+            is_vertex = (provider_id == "vertex_ai")
+            client = GeminiClient(credential=credential, vertexai=is_vertex)
         else:
             client = DeepSeekClient(provider=provider_id)
         raw = client.fetch_raw_models()

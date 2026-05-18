@@ -15,6 +15,7 @@ from aura.config import (
     PROVIDERS,
     DEFAULT_PLANNER_THINKING,
     DEFAULT_WORKER_THINKING,
+    ModelInfo,
     ProviderId,
     ThinkingMode,
 )
@@ -190,14 +191,14 @@ class LeftPane(QFrame):
         # Planner
         self._planner_model_combo.blockSignals(True)
         self._planner_model_combo.clear()
-        for mid, info in p_cfg.models.items():
+        for mid, info in _models_with_default(planner_provider).items():
             self._planner_model_combo.addItem(info.label, mid)
         self._planner_model_combo.blockSignals(False)
 
         # Worker
         self._worker_model_combo.blockSignals(True)
         self._worker_model_combo.clear()
-        for mid, info in w_cfg.models.items():
+        for mid, info in _models_with_default(worker_provider).items():
             self._worker_model_combo.addItem(info.label, mid)
         self._worker_model_combo.blockSignals(False)
 
@@ -254,3 +255,17 @@ class LeftPane(QFrame):
         self._worker_model_combo.setVisible(enabled)
         self._worker_thinking_label.setVisible(enabled)
         self._worker_thinking_combo.setVisible(enabled)
+
+
+def _models_with_default(provider: ProviderId) -> dict[str, ModelInfo]:
+    cfg = PROVIDERS[provider]
+    models = dict(cfg.models)
+    if cfg.default_model not in models:
+        models[cfg.default_model] = ModelInfo(
+            id=cfg.default_model,
+            label=cfg.default_model.split("/")[-1].replace("-", " ").title(),
+            input_per_m_usd=0.0,
+            output_per_m_usd=0.0,
+            cache_hit_per_m_usd=0.0,
+        )
+    return models

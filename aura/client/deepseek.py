@@ -46,7 +46,7 @@ class DeepSeekClient:
         api_key: str | None = None,
         provider: ProviderId = "deepseek",
     ) -> None:
-        if provider == "google":
+        if provider in ("google_ai", "vertex_ai"):
             raise RuntimeError(
                 "DeepSeekClient should not be used for Google. "
                 "Use GeminiClient instead."
