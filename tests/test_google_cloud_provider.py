@@ -548,60 +548,30 @@ def test_message_mapping_handles_reasoning_content():
 # ---------------------------------------------------------------------------
 
 
-def test_provider_hidden_without_flag(monkeypatch):
-    """Without AURA_GOOGLE_CLOUD_PROVIDER, google_cloud is not in registry."""
-    monkeypatch.delenv("AURA_GOOGLE_CLOUD_PROVIDER", raising=False)
-    _unload_google_cloud_modules()
-    import aura.providers.catalog
-    import aura.providers.registry
-
-    importlib.reload(aura.providers.catalog)
-    importlib.reload(aura.providers.registry)
-    reg = aura.providers.registry.provider_registry
-    ids = reg.ids()
-    assert "google_cloud" not in ids
-    assert set(ids) == {"deepseek", "openai", "openrouter", "anthropic"}
-
-
-def test_provider_visible_with_flag(monkeypatch):
-    """With AURA_GOOGLE_CLOUD_PROVIDER=1, google_cloud is in registry."""
-    monkeypatch.setenv("AURA_GOOGLE_CLOUD_PROVIDER", "1")
-    _unload_google_cloud_modules()
-    import aura.providers.catalog
-    import aura.providers.registry
-
-    importlib.reload(aura.providers.catalog)
-    importlib.reload(aura.providers.registry)
-    reg = aura.providers.registry.provider_registry
+def test_google_cloud_always_in_registry():
+    """google_cloud is always in the registry without any env var."""
+    reg = _fresh_provider_registry()
     ids = reg.ids()
     assert "google_cloud" in ids
     assert len(ids) == 5
 
 
-def test_existing_providers_still_work_with_flag(monkeypatch):
-    """Existing 4 providers still present when flag is on."""
-    monkeypatch.setenv("AURA_GOOGLE_CLOUD_PROVIDER", "1")
-    _unload_google_cloud_modules()
-    import aura.providers.catalog
-    import aura.providers.registry
+def test_google_cloud_provider_label():
+    """google_cloud provider has the correct label."""
+    reg = _fresh_provider_registry()
+    assert reg.get("google_cloud").label == "Google Cloud Gemini"
 
-    importlib.reload(aura.providers.catalog)
-    importlib.reload(aura.providers.registry)
-    reg = aura.providers.registry.provider_registry
+
+def test_existing_providers_still_exist():
+    """Existing 4 providers are still present alongside google_cloud."""
+    reg = _fresh_provider_registry()
     ids = set(reg.ids())
     assert ids.issuperset({"deepseek", "openai", "openrouter", "anthropic"})
 
 
-def test_registry_create_client_returns_google_cloud_client(monkeypatch):
-    """With flag, create_client('google_cloud') returns GoogleCloudClient."""
-    monkeypatch.setenv("AURA_GOOGLE_CLOUD_PROVIDER", "1")
-    _unload_google_cloud_modules()
-    import aura.providers.catalog
-    import aura.providers.registry
-
-    importlib.reload(aura.providers.catalog)
-    importlib.reload(aura.providers.registry)
-    reg = aura.providers.registry.provider_registry
+def test_registry_create_client_returns_google_cloud_client():
+    """create_client('google_cloud') returns GoogleCloudClient."""
+    reg = _fresh_provider_registry()
 
     from aura.providers.google_cloud.client import GoogleCloudClient
 
@@ -686,16 +656,9 @@ def test_no_live_api_call_on_import():
 # ---------------------------------------------------------------------------
 
 
-def test_google_cloud_provider_spec(monkeypatch):
+def test_google_cloud_provider_spec():
     """Verify the ProviderSpec for google_cloud has correct shape."""
-    monkeypatch.setenv("AURA_GOOGLE_CLOUD_PROVIDER", "1")
-    _unload_google_cloud_modules()
-    import aura.providers.catalog
-    import aura.providers.registry
-
-    importlib.reload(aura.providers.catalog)
-    importlib.reload(aura.providers.registry)
-    reg = aura.providers.registry.provider_registry
+    reg = _fresh_provider_registry()
 
     spec = reg.get("google_cloud")
     assert spec.label == "Google Cloud Gemini"

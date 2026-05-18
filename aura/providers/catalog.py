@@ -66,6 +66,35 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
 OPENROUTER_PRICING: dict[str, dict[str, float]] = {}
 
 # ---------------------------------------------------------------------------
+# Google Cloud / Vertex AI
+# ---------------------------------------------------------------------------
+
+GOOGLE_CLOUD_MODELS: dict[str, ModelInfo] = {
+    "gemini-2.0-flash-001": ModelInfo(
+        id="gemini-2.0-flash-001",
+        label="Gemini 2.0 Flash",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "gemini-2.5-flash-001": ModelInfo(
+        id="gemini-2.5-flash-001",
+        label="Gemini 2.5 Flash",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "gemini-2.5-pro-001": ModelInfo(
+        id="gemini-2.5-pro-001",
+        label="Gemini 2.5 Pro",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+}
+GOOGLE_CLOUD_PRICING: dict[str, dict[str, float]] = {}
+
+# ---------------------------------------------------------------------------
 # Provider catalogue — raw dict form consumed by ProviderRegistry
 # ---------------------------------------------------------------------------
 
@@ -106,6 +135,15 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "models": ANTHROPIC_MODELS,
         "pricing": ANTHROPIC_PRICING,
     },
+    "google_cloud": {
+        "label": "Google Cloud Gemini",
+        "base_url": "",
+        "env_key": "GOOGLE_CLOUD_PROJECT",
+        "default_model": "gemini-2.0-flash-001",
+        "default_thinking": "off",
+        "models": GOOGLE_CLOUD_MODELS,
+        "pricing": GOOGLE_CLOUD_PRICING,
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -118,46 +156,3 @@ DEFAULT_PLANNER_MODEL: str = "deepseek-v4-flash"
 DEFAULT_WORKER_MODEL: str = "deepseek-v4-pro"
 DEFAULT_PLANNER_THINKING: ThinkingMode = "off"
 DEFAULT_WORKER_THINKING: ThinkingMode = "high"
-
-# ---------------------------------------------------------------------------
-# Google Cloud / Vertex AI — conditional registration
-# ---------------------------------------------------------------------------
-
-import os as _os
-
-_AURA_GOOGLE_CLOUD_FLAG = _os.environ.get("AURA_GOOGLE_CLOUD_PROVIDER") == "1"
-if _AURA_GOOGLE_CLOUD_FLAG:
-    GOOGLE_CLOUD_MODELS: dict[str, ModelInfo] = {
-        "gemini-2.0-flash-001": ModelInfo(
-            id="gemini-2.0-flash-001",
-            label="Gemini 2.0 Flash",
-            input_per_m_usd=0.0,
-            output_per_m_usd=0.0,
-            cache_hit_per_m_usd=0.0,
-        ),
-        "gemini-2.5-flash-001": ModelInfo(
-            id="gemini-2.5-flash-001",
-            label="Gemini 2.5 Flash",
-            input_per_m_usd=0.0,
-            output_per_m_usd=0.0,
-            cache_hit_per_m_usd=0.0,
-        ),
-        "gemini-2.5-pro-001": ModelInfo(
-            id="gemini-2.5-pro-001",
-            label="Gemini 2.5 Pro",
-            input_per_m_usd=0.0,
-            output_per_m_usd=0.0,
-            cache_hit_per_m_usd=0.0,
-        ),
-    }
-    GOOGLE_CLOUD_PRICING: dict[str, dict[str, float]] = {}
-
-    PROVIDER_CATALOG["google_cloud"] = {
-        "label": "Google Cloud Gemini",
-        "base_url": "",
-        "env_key": "GOOGLE_CLOUD_PROJECT",
-        "default_model": "gemini-2.0-flash-001",
-        "default_thinking": "off",
-        "models": GOOGLE_CLOUD_MODELS,
-        "pricing": GOOGLE_CLOUD_PRICING,
-    }
