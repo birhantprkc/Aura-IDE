@@ -40,7 +40,17 @@ class ProviderRegistry:
     def all(self) -> dict[str, ProviderSpec]:
         return dict(self._providers)
 
-    def create_client(self, provider_id: str) -> "DeepSeekClient":
+    def create_client(self, provider_id: str) -> "DeepSeekClient | GoogleCloudClient":
+        if provider_id == "google_cloud":
+            from aura.providers.google_cloud.client import GoogleCloudClient
+            from aura.providers.google_cloud.config import (
+                get_google_cloud_project,
+                get_google_cloud_location,
+            )
+            return GoogleCloudClient(
+                project=get_google_cloud_project(),
+                location=get_google_cloud_location(),
+            )
         from aura.client.deepseek import DeepSeekClient
 
         return DeepSeekClient(provider=provider_id)
