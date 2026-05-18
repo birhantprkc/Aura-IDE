@@ -213,6 +213,11 @@ def _model_from_data(data: dict[str, Any], key: str, provider: ProviderId) -> st
             provider_cfg.default_model,
         )
 
+    # Role-specific fallbacks for DeepSeek.
+    if key == "default_worker_model" and provider == "deepseek":
+        return DEFAULT_WORKER_MODEL
+    if key == "default_planner_model" and provider == "deepseek":
+        return DEFAULT_PLANNER_MODEL
     return provider_cfg.default_model
 
 def settings_path() -> Path:

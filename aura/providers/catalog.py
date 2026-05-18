@@ -14,16 +14,55 @@ from aura.providers.base import ModelInfo, ThinkingMode
 # Mutable model / pricing caches — shared references
 # ---------------------------------------------------------------------------
 
-DEEPSEEK_MODELS: dict[str, ModelInfo] = {}
+DEEPSEEK_MODELS: dict[str, ModelInfo] = {
+    "deepseek-v4-flash": ModelInfo(
+        id="deepseek-v4-flash",
+        label="deepseek-v4-flash",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "deepseek-v4-pro": ModelInfo(
+        id="deepseek-v4-pro",
+        label="deepseek-v4-pro",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+}
 DEEPSEEK_PRICING: dict[str, dict[str, float]] = {}
 
-OPENAI_MODELS: dict[str, ModelInfo] = {}
+OPENAI_MODELS: dict[str, ModelInfo] = {
+    "gpt-4o": ModelInfo(
+        id="gpt-4o",
+        label="gpt-4o",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+}
 OPENAI_PRICING: dict[str, dict[str, float]] = {}
 
-ANTHROPIC_MODELS: dict[str, ModelInfo] = {}
+ANTHROPIC_MODELS: dict[str, ModelInfo] = {
+    "claude-sonnet-4-6": ModelInfo(
+        id="claude-sonnet-4-6",
+        label="claude-sonnet-4-6",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+}
 ANTHROPIC_PRICING: dict[str, dict[str, float]] = {}
 
-OPENROUTER_MODELS: dict[str, ModelInfo] = {}
+OPENROUTER_MODELS: dict[str, ModelInfo] = {
+    "openai/gpt-4o": ModelInfo(
+        id="openai/gpt-4o",
+        label="openai/gpt-4o",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+}
 OPENROUTER_PRICING: dict[str, dict[str, float]] = {}
 
 # ---------------------------------------------------------------------------

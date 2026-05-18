@@ -19,9 +19,8 @@ def qapp() -> QApplication:
 
 
 def test_settings_dialog_preserves_max_tool_rounds(
-    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    qapp: QApplication, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(SettingsDialog, "_start_auth_status_check", lambda self: None)
     settings = AppSettings(max_tool_rounds=123)
 
     dlg = SettingsDialog(
@@ -36,7 +35,7 @@ def test_settings_dialog_preserves_max_tool_rounds(
     dlg.close()
 
 
-def test_settings_dialog_closes_with_auth_status_thread(
+def test_settings_dialog_closes_cleanly(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     dlg = SettingsDialog(

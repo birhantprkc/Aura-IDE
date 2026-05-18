@@ -133,8 +133,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._left_pane.planner_thinking_changed.connect(lambda: self._refresh_status_bar())
         self._left_pane.worker_model_changed.connect(self._on_sidebar_worker_model_changed)
         self._left_pane.worker_thinking_changed.connect(self._on_sidebar_worker_thinking_changed)
-        self._left_pane.planner_backend_changed.connect(self._on_planner_backend_changed)
-        self._left_pane.worker_backend_changed.connect(self._on_worker_backend_changed)
         self._tree = self._left_pane.tree()
         splitter.addWidget(self._left_pane)
 
@@ -541,14 +539,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_sidebar_worker_thinking_changed(self, thinking: str) -> None:
         self._bridge.set_worker_thinking(thinking)  # type: ignore[arg-type]
-        self._refresh_status_bar()
-
-    def _on_planner_backend_changed(self, backend: str) -> None:
-        self._bridge.set_planner_backend(backend)
-        self._refresh_status_bar()
-
-    def _on_worker_backend_changed(self, backend: str) -> None:
-        self._bridge.set_worker_backend(backend)
         self._refresh_status_bar()
 
     def _set_sidebar_planner_worker_mode(self, enabled: bool) -> None:

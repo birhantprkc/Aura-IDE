@@ -117,6 +117,29 @@ def test_app_settings_defaults():
     assert s.default_worker_thinking == "high"
     assert s.default_planner_model == "deepseek-v4-flash"
     assert s.default_worker_model == "deepseek-v4-pro"
+    # Verify DEEPSEEK_MODELS is pre-populated with both models
+    from aura.providers.catalog import DEEPSEEK_MODELS
+    assert "deepseek-v4-flash" in DEEPSEEK_MODELS
+    assert "deepseek-v4-pro" in DEEPSEEK_MODELS
+
+
+def test_app_settings_from_dict_empty_preserves_deepseek_worker_pro():
+    """from_dict({}) should default to deepseek-v4-pro for worker model."""
+    s = AppSettings.from_dict({})
+    assert s.default_worker_model == "deepseek-v4-pro"
+    assert s.default_planner_model == "deepseek-v4-flash"
+
+
+def test_app_settings_from_dict_stale_model_falls_back_to_deepseek_pro():
+    """A stale default_worker_model should fall back to deepseek-v4-pro."""
+    data = {
+        "provider": "deepseek",
+        "planner_provider": "deepseek",
+        "worker_provider": "deepseek",
+        "default_worker_model": "some-non-existent-model",
+    }
+    s = AppSettings.from_dict(data)
+    assert s.default_worker_model == "deepseek-v4-pro"
 
 
 def test_app_settings_to_from_dict_roundtrip():
