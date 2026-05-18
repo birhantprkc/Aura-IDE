@@ -9,14 +9,31 @@ import sys
 import threading
 from pathlib import Path
 from unittest import mock
+from unittest.mock import patch
 
 import pytest
+from PySide6.QtWidgets import QApplication
+
+from aura.config import AppSettings
+from aura.gui.settings_dialog import SettingsDialog
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def qapp() -> QApplication:
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 def _unload_google_cloud_modules() -> None:
     for mod_name in list(sys.modules):
@@ -792,3 +809,30 @@ def test_ensure_no_raw_bytes_is_make_message_json_safe():
     from aura.providers.google_cloud.signatures import make_message_json_safe
 
     assert ENSURE_NO_RAW_BYTES is make_message_json_safe
+
+
+# ---------------------------------------------------------------------------
+# Settings dialog safety
+# ---------------------------------------------------------------------------
+
+
+def test_settings_dialog_with_missing_google_cloud_project(
+    qapp: QApplication, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+
+    with patch(
+        "aura.gui.settings_pages.models_page.fetch_provider_models",
+        side_effect=RuntimeError("should not be called"),
+    ) as mock_fetch:
+        dlg = SettingsDialog(
+            settings=AppSettings(
+                planner_provider="google_cloud", worker_provider="google_cloud"
+            ),
+            workspace_root=tmp_path,
+            on_change_root=lambda: None,
+        )
+        dlg.close()
+        qapp.processEvents()
+
+    mock_fetch.assert_not_called()

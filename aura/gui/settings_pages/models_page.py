@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QLabel,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -56,6 +57,7 @@ class ModelsPage(QWidget):
         self._discovery_inflight: set[str] = set()
         self._discovery_threads: dict[str, QThread] = {}
         self._discovery_workers: dict[str, DiscoveryWorker] = {}
+        self._closing: bool = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -116,11 +118,36 @@ class ModelsPage(QWidget):
             "Controls response randomness for the worker model. Lower = more deterministic."
         )
 
+        # Refresh buttons
+        self._planner_refresh_btn = QPushButton("Refresh  ▾")
+        self._planner_refresh_btn.setFixedWidth(80)
+        self._planner_refresh_btn.setStyleSheet(
+            f"color: {FG_DIM}; padding: 2px 4px;"
+        )
+        self._planner_refresh_btn.setToolTip(
+            "Fetch the latest available models from this provider"
+        )
+
+        self._worker_refresh_btn = QPushButton("Refresh  ▾")
+        self._worker_refresh_btn.setFixedWidth(80)
+        self._worker_refresh_btn.setStyleSheet(
+            f"color: {FG_DIM}; padding: 2px 4px;"
+        )
+        self._worker_refresh_btn.setToolTip(
+            "Fetch the latest available models from this provider"
+        )
+
         # --- 2. Setup Layout ---
 
         form.addRow("", self._pw_mode_chk)
         form.addRow("Planner provider:", self._planner_provider_combo)
-        form.addRow("Planner model:", self._planner_model_combo)
+
+        planner_model_row = QVBoxLayout()
+        planner_model_row.setSpacing(2)
+        planner_model_row.addWidget(self._planner_refresh_btn)
+        planner_model_row.addWidget(self._planner_model_combo)
+        form.addRow("Planner model:", planner_model_row)
+
         form.addRow("Planner thinking:", self._planner_thinking_combo)
 
         sep1 = QLabel("Worker")
@@ -131,7 +158,13 @@ class ModelsPage(QWidget):
         form.addRow("", sep1)
 
         form.addRow("Worker provider:", self._worker_provider_combo)
-        form.addRow("Worker model:", self._worker_model_combo)
+
+        worker_model_row = QVBoxLayout()
+        worker_model_row.setSpacing(2)
+        worker_model_row.addWidget(self._worker_refresh_btn)
+        worker_model_row.addWidget(self._worker_model_combo)
+        form.addRow("Worker model:", worker_model_row)
+
         form.addRow("Worker thinking:", self._worker_thinking_combo)
 
         temp_sep = QLabel("Temperature")
@@ -170,19 +203,18 @@ class ModelsPage(QWidget):
         self._refresh_pw_enabled()
 
         # --- 4. Connect Signals ---
-        # Connect AFTER initial population to avoid spurious signal firing 
+        # Connect AFTER initial population to avoid spurious signal firing
         # while some widgets might still be partially initialized.
         self._pw_mode_chk.toggled.connect(self._on_pw_toggled)
         self._planner_provider_combo.currentIndexChanged.connect(self._on_planner_provider_changed)
         self._worker_provider_combo.currentIndexChanged.connect(self._on_worker_provider_changed)
-
-        # --- 5. Start Background Tasks ---
-        self._start_discovery(self._settings.planner_provider)
-        self._start_discovery(self._settings.worker_provider)
+        self._planner_refresh_btn.clicked.connect(self._on_planner_refresh)
+        self._worker_refresh_btn.clicked.connect(self._on_worker_refresh)
 
     # --- Thread cleanup ---
 
     def cleanup_threads(self) -> None:
+        self._closing = True
         for provider_id, thread in list(self._discovery_threads.items()):
             try:
                 if thread.isRunning():
@@ -225,6 +257,8 @@ class ModelsPage(QWidget):
         pricing: dict,
         error: str,
     ) -> None:
+        if self._closing:
+            return
         self._discovery_inflight.discard(provider_id)
         self._discovery_threads.pop(provider_id, None)
         self._discovery_workers.pop(provider_id, None)
@@ -262,7 +296,6 @@ class ModelsPage(QWidget):
             resolve_role_default_model(provider_id, "planner"),
             role="planner",
         )
-        self._start_discovery(provider_id)
 
     def _on_worker_provider_changed(self) -> None:
         provider_id: ProviderId = self._worker_provider_combo.currentData()  # type: ignore[assignment]
@@ -272,7 +305,16 @@ class ModelsPage(QWidget):
             resolve_role_default_model(provider_id, "worker"),
             role="worker",
         )
-        self._start_discovery(provider_id)
+
+    def _on_planner_refresh(self) -> None:
+        provider_id: ProviderId = self._planner_provider_combo.currentData()  # type: ignore[assignment]
+        if provider_id:
+            self._start_discovery(provider_id)
+
+    def _on_worker_refresh(self) -> None:
+        provider_id: ProviderId = self._worker_provider_combo.currentData()  # type: ignore[assignment]
+        if provider_id:
+            self._start_discovery(provider_id)
 
     def _populate_all_role_models(self) -> None:
         planner_pid: ProviderId = self._planner_provider_combo.currentData()  # type: ignore[assignment]

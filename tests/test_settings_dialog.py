@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -45,3 +46,41 @@ def test_settings_dialog_closes_cleanly(
 
     dlg.close()
     qapp.processEvents()
+
+
+def test_settings_dialog_construction_does_not_fetch_models(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    with patch(
+        "aura.gui.settings_pages.models_page.fetch_provider_models",
+        side_effect=RuntimeError("should not be called"),
+    ) as mock_fetch:
+        dlg = SettingsDialog(
+            settings=AppSettings(),
+            workspace_root=tmp_path,
+            on_change_root=lambda: None,
+        )
+        dlg.close()
+        qapp.processEvents()
+
+    mock_fetch.assert_not_called()
+
+
+def test_settings_dialog_construction_with_google_cloud_does_not_fetch_models(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    with patch(
+        "aura.gui.settings_pages.models_page.fetch_provider_models",
+        side_effect=RuntimeError("should not be called"),
+    ) as mock_fetch:
+        dlg = SettingsDialog(
+            settings=AppSettings(
+                planner_provider="google_cloud", worker_provider="google_cloud"
+            ),
+            workspace_root=tmp_path,
+            on_change_root=lambda: None,
+        )
+        dlg.close()
+        qapp.processEvents()
+
+    mock_fetch.assert_not_called()
