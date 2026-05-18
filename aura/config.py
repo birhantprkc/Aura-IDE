@@ -25,6 +25,7 @@ from aura.settings import (
     AppSettings,
     load_settings,
     save_settings,
+    resolve_role_default_model,
     DEFAULT_PROVIDER,
     DEFAULT_SANDBOX_MODE,
     DEFAULT_VISION_ENABLED,

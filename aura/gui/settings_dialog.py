@@ -33,6 +33,7 @@ from aura.config import (
     AppSettings,
     fetch_provider_models,
     get_api_key,
+    resolve_role_default_model,
     save_dynamic_catalog,
     save_settings,
     set_api_key,
@@ -560,7 +561,7 @@ class SettingsDialog(QDialog):
         self._populate_role_models(
             self._planner_model_combo,
             provider_id,
-            self._settings.default_planner_model,
+            resolve_role_default_model(provider_id, "planner"),
             role="planner",
         )
         self._start_discovery(provider_id)
@@ -570,7 +571,7 @@ class SettingsDialog(QDialog):
         self._populate_role_models(
             self._worker_model_combo,
             provider_id,
-            self._settings.default_worker_model,
+            resolve_role_default_model(provider_id, "worker"),
             role="worker",
         )
         self._start_discovery(provider_id)
@@ -581,13 +582,13 @@ class SettingsDialog(QDialog):
         self._populate_role_models(
             self._planner_model_combo,
             planner_pid,
-            self._settings.default_planner_model,
+            resolve_role_default_model(planner_pid, "planner"),
             role="planner",
         )
         self._populate_role_models(
             self._worker_model_combo,
             worker_pid,
-            self._settings.default_worker_model,
+            resolve_role_default_model(worker_pid, "worker"),
             role="worker",
         )
 

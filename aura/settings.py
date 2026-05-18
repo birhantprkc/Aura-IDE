@@ -25,6 +25,28 @@ DEFAULT_VISION_ENABLED = True
 DEFAULT_VISION_MODEL = "llama3.2-vision"
 DEFAULT_VISION_ENDPOINT = "http://localhost:11434/v1"
 
+
+def resolve_role_default_model(provider_id: ProviderId, role: str) -> str:
+    """Return the default model for a given provider + role combo.
+
+    DeepSeek gets role-specific defaults (worker → deepseek-v4-pro,
+    planner → deepseek-v4-flash). All other providers use their
+    configured default_model from the registry.
+    """
+    from aura.providers.registry import provider_registry
+
+    cfg = provider_registry.get(provider_id)
+    if role == "worker" and provider_id == "deepseek":
+        from aura.providers.catalog import DEFAULT_WORKER_MODEL
+
+        return DEFAULT_WORKER_MODEL
+    if role == "planner" and provider_id == "deepseek":
+        from aura.providers.catalog import DEFAULT_PLANNER_MODEL
+
+        return DEFAULT_PLANNER_MODEL
+    return cfg.default_model
+
+
 logger = logging.getLogger(__name__)
 
 @dataclass
