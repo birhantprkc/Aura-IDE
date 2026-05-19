@@ -20,25 +20,23 @@ from aura.config import ThinkingMode
 class GeminiCLIBackend(CLIAgentBackend):
     """Agent backend that calls Google via the `gemini` CLI."""
 
-    # gemini CLI requires 'login' command for OAuth flow
-    auth_command = "gemini login" 
+    auth_command = "gemini auth login" 
 
     def __init__(self, workspace_root: Path | None = None) -> None:
         super().__init__(workspace_root=workspace_root)
 
     def check_auth(self) -> bool:
-        """Check if gemini CLI is likely authenticated."""
+        """Check if gemini CLI is authenticated."""
         path = shutil.which("gemini")
         if path is None:
             return False
 
-        # Simple check: can we get a version?
         import subprocess
         from aura.config import get_subprocess_kwargs
 
         try:
             result = subprocess.run(
-                [path, "--version"],
+                [path, "auth", "status"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
