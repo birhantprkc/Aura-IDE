@@ -6,13 +6,13 @@ Authentication: relies on `gemini` CLI being authenticated (OAuth).
 from __future__ import annotations
 
 import shlex
-import shutil
 import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from aura.backends.cli_base import CLIAgentBackend
+from aura.cli_tools import resolve_cli_executable
 from aura.client.events import ApiError, ContentDelta, Done, Event
 from aura.config import ThinkingMode
 
@@ -27,7 +27,7 @@ class GeminiCLIBackend(CLIAgentBackend):
 
     def check_auth(self) -> bool:
         """Check if gemini CLI is authenticated."""
-        path = shutil.which("gemini")
+        path = resolve_cli_executable("gemini")
         if path is None:
             return False
 
@@ -61,7 +61,8 @@ class GeminiCLIBackend(CLIAgentBackend):
             yield ApiError(status_code=None, message="Cancelled.")
             return
 
-        if shutil.which("gemini") is None:
+        resolved = resolve_cli_executable("gemini")
+        if resolved is None:
             yield ApiError(status_code=None, message="gemini CLI not found.")
             return
 
@@ -69,7 +70,7 @@ class GeminiCLIBackend(CLIAgentBackend):
         
         # We pass the prompt via stdin to avoid command-line length limits.
         # --skip-trust to avoid interactive prompts in headless mode.
-        command = "gemini --skip-trust"
+        command = f"{shlex.quote(resolved)} --skip-trust"
         
         result = yield from self._run_cli_agent_command(
             command=command,

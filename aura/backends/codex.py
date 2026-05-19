@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import logging
 import shlex
-import shutil
 import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from aura.backends.cli_base import CLIAgentBackend
+from aura.cli_tools import resolve_cli_executable
 from aura.client.events import ApiError, ContentDelta, Done, Event
 from aura.config import ThinkingMode
 
@@ -34,7 +34,7 @@ class CodexBackend(CLIAgentBackend):
 
     def check_auth(self) -> bool:
         """Check if codex is authenticated."""
-        path = shutil.which("codex")
+        path = resolve_cli_executable("codex")
         if path is None:
             return False
 
@@ -108,14 +108,15 @@ class CodexBackend(CLIAgentBackend):
             yield ApiError(status_code=None, message="Cancelled.")
             return
 
-        if shutil.which("codex") is None:
+        resolved = resolve_cli_executable("codex")
+        if resolved is None:
             yield ApiError(status_code=None, message="codex CLI not found.")
             return
 
         prompt_text = self._build_prompt(messages)
         
         # Use exec for non-interactive output
-        command = f"codex exec {shlex.quote(prompt_text)}"
+        command = f"{shlex.quote(resolved)} exec {shlex.quote(prompt_text)}"
         
         result = yield from self._run_cli_agent_command(
             command=command,

@@ -6,13 +6,13 @@ Authentication: relies on `claude auth login`.
 from __future__ import annotations
 
 import shlex
-import shutil
 import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from aura.backends.cli_base import CLIAgentBackend
+from aura.cli_tools import resolve_cli_executable
 from aura.client.events import ApiError, ContentDelta, Done, Event
 from aura.config import ThinkingMode
 
@@ -27,7 +27,7 @@ class ClaudeCodeBackend(CLIAgentBackend):
 
     def check_auth(self) -> bool:
         """Check if claude is authenticated."""
-        path = shutil.which("claude")
+        path = resolve_cli_executable("claude")
         if path is None:
             return False
 
@@ -65,14 +65,15 @@ class ClaudeCodeBackend(CLIAgentBackend):
             yield ApiError(status_code=None, message="Cancelled.")
             return
 
-        if shutil.which("claude") is None:
+        resolved = resolve_cli_executable("claude")
+        if resolved is None:
             yield ApiError(status_code=None, message="claude CLI not found.")
             return
 
         prompt_text = self._build_prompt(messages)
         
         # Use --bare to skip hooks/CLAUDE.md for speed and predictability
-        command = f"claude -p {shlex.quote(prompt_text)} --bare"
+        command = f"{shlex.quote(resolved)} -p {shlex.quote(prompt_text)} --bare"
         
         result = yield from self._run_cli_agent_command(
             command=command,
