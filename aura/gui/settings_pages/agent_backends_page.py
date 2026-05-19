@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.cli_tools import resolve_cli_executable
 from aura.config import AppSettings
 from aura.gui.theme import FG_DIM, SUCCESS, WARN
 
@@ -29,9 +30,19 @@ class _AuthCheckWorker(QObject):
         self.check_cmd = check_cmd
 
     def run(self):
+        resolved = resolve_cli_executable(self.check_cmd[0])
+        if resolved is None:
+            self.finished.emit(
+                self.backend_id,
+                False,
+                f"CLI tool '{self.check_cmd[0]}' not found — checked standard npm and system paths",
+            )
+            return
+
+        cmd = [resolved] + self.check_cmd[1:]
         try:
             proc = subprocess.run(
-                self.check_cmd,
+                cmd,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -148,11 +159,14 @@ class AgentBackendsPage(QWidget):
         ws = Path.cwd()
 
         if backend_id == "gemini":
-            SandboxExecutor._launch_interactive_terminal("gemini auth login", ws)
+            resolved = resolve_cli_executable("gemini") or "gemini"
+            SandboxExecutor._launch_interactive_terminal(f"{resolved} auth login", ws)
         elif backend_id == "claude_code":
-            SandboxExecutor._launch_interactive_terminal("claude auth login", ws)
+            resolved = resolve_cli_executable("claude") or "claude"
+            SandboxExecutor._launch_interactive_terminal(f"{resolved} auth login", ws)
         elif backend_id == "codex":
-            SandboxExecutor._launch_interactive_terminal("codex login", ws)
+            resolved = resolve_cli_executable("codex") or "codex"
+            SandboxExecutor._launch_interactive_terminal(f"{resolved} login", ws)
 
     def cleanup_threads(self) -> None:
         for thread in self._threads:
