@@ -4,12 +4,13 @@ Replaced by CodeEditorPane for the two-pane workspace.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, QObject, QEvent
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
+    QWidget,
     QFrame,
     QLabel,
     QApplication,
