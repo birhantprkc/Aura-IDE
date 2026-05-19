@@ -13,10 +13,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import (
     QAction,
-    QColor,
     QKeySequence,
     QShortcut,
-    QTextCharFormat,
     QTextCursor,
 )
 from PySide6.QtWidgets import (
@@ -26,13 +24,17 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QSizePolicy,
     QTabWidget,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from aura.focused_actions import ACTION_LABELS, build_prompt_for_action, is_edit_action
 from aura.gui.cards._helpers import _mono_font
+from aura.gui.editor.diff_overlay import (
+    clear_editor_marks,
+    mark_deleted_region,
+    mark_inserted_region,
+)
 from aura.gui.smooth_code_streamer import SmoothCodeStreamer
 from aura.gui.syntax import PygmentsHighlighter, language_from_path
 from aura.gui.theme import ACCENT, BG, BORDER, FG
@@ -97,13 +99,11 @@ class CodeEditorPane(QWidget):
 
     @staticmethod
     def _line_start(text: str, position: int) -> int:
-        """Return the character offset for the beginning of position's line."""
         position = max(0, min(position, len(text)))
         return text.rfind("\n", 0, position) + 1
 
     @staticmethod
     def _line_end(text: str, position: int) -> int:
-        """Return the character offset just after position's line."""
         position = max(0, min(position, len(text)))
         newline = text.find("\n", position)
         return len(text) if newline == -1 else newline + 1
@@ -406,7 +406,7 @@ class CodeEditorPane(QWidget):
 
         streamer.set_text_immediately(old_content)
         self._focus_editor_position(editor, old_start)
-        self._mark_deleted_region(editor, old_start, old_end)
+        mark_deleted_region(editor, old_start, old_end)
         self._set_tab_status(canonical_tool_id, f":{state['animation_change_line']} - editing")
         timer.start()
 
@@ -444,7 +444,6 @@ class CodeEditorPane(QWidget):
         timer: QTimer = state["timer"]
         streamer: SmoothCodeStreamer = state["streamer"]
 
-        # Update tab label
         state["active_count"] = max(0, state.get("active_count", 1) - 1)
         self._tool_aliases.pop(tool_id, None)
         if tool_id != canonical_tool_id:
@@ -693,7 +692,7 @@ class CodeEditorPane(QWidget):
             suffix = state["animation_suffix"]
             self._set_editor_text(editor, prefix + suffix, len(prefix))
             self._focus_editor_position(editor, len(prefix))
-            self._clear_editor_marks(editor)
+            clear_editor_marks(editor)
         elif next_phase == "replace":
             self._start_replacement_phase(state, editor)
 
@@ -713,7 +712,7 @@ class CodeEditorPane(QWidget):
             QTextCursor.MoveMode.KeepAnchor,
         )
         cursor.insertText("")
-        self._clear_editor_marks(editor)
+        clear_editor_marks(editor)
         self._set_tab_status(
             state.get("tool_id", ""), f":{state['animation_change_line']} - typing"
         )
@@ -740,9 +739,9 @@ class CodeEditorPane(QWidget):
             cursor_pos = len(prefix) + len(remaining)
             self._set_editor_text(editor, display, cursor_pos)
             if remaining:
-                self._mark_deleted_region(editor, len(prefix), cursor_pos)
+                mark_deleted_region(editor, len(prefix), cursor_pos)
             else:
-                self._clear_editor_marks(editor)
+                clear_editor_marks(editor)
         else:
             state["animation_char_index"] = max(
                 0,
@@ -755,9 +754,9 @@ class CodeEditorPane(QWidget):
             display = prefix + remaining + suffix
             self._set_editor_text(editor, display, len(prefix) + len(remaining))
             if remaining:
-                self._mark_deleted_region(editor, len(prefix), len(prefix) + len(remaining))
+                mark_deleted_region(editor, len(prefix), len(prefix) + len(remaining))
             else:
-                self._clear_editor_marks(editor)
+                clear_editor_marks(editor)
 
         no_lines_left = state.get("animation_delete_line_count", 0) == 0
         no_chars_left = (
@@ -785,7 +784,7 @@ class CodeEditorPane(QWidget):
         idx = state["animation_char_index"]
         display = prefix + new_mid[:idx] + suffix
         self._set_editor_text(editor, display, len(prefix) + idx)
-        self._mark_inserted_region(editor, len(prefix), len(prefix) + idx)
+        mark_inserted_region(editor, len(prefix), len(prefix) + idx)
         if idx >= len(new_mid):
             self._finish_edit_animation(state, editor)
 
@@ -803,9 +802,9 @@ class CodeEditorPane(QWidget):
         change_start = state.get("animation_change_start", len(state["animation_prefix"]))
         change_end = change_start + len(state.get("animation_new_middle", ""))
         if change_end > change_start:
-            self._mark_inserted_region(editor, change_start, change_end)
+            mark_inserted_region(editor, change_start, change_end)
         else:
-            self._clear_editor_marks(editor)
+            clear_editor_marks(editor)
         self._set_tab_status(state.get("tool_id", ""), " ✓")
 
     def _on_streamer_finished(self, tool_id: str) -> None:
@@ -820,7 +819,7 @@ class CodeEditorPane(QWidget):
             change_start = state.get("animation_change_start", 0)
             change_end = change_start + len(state.get("animation_new_middle", ""))
             if change_end > change_start:
-                self._mark_inserted_region(editor, change_start, change_end)
+                mark_inserted_region(editor, change_start, change_end)
         if state.get("pending_done") and state.get("active_count", 0) == 0:
             state["pending_done"] = False
             self._set_tab_status(canonical_tool_id, " ✓")
@@ -853,35 +852,13 @@ class CodeEditorPane(QWidget):
         editor.setTextCursor(cursor)
         editor.centerCursor()
 
-    def _mark_deleted_region(
-        self, editor: QPlainTextEdit, start: int, end: int
-    ) -> None:
-        self._set_editor_mark(editor, start, end, QColor(247, 118, 142, 58))
 
-    def _mark_inserted_region(
-        self, editor: QPlainTextEdit, start: int, end: int
-    ) -> None:
-        self._set_editor_mark(editor, start, end, QColor(158, 206, 106, 48))
 
-    def _set_editor_mark(
-        self, editor: QPlainTextEdit, start: int, end: int, color: QColor
-    ) -> None:
-        if end <= start:
-            self._clear_editor_marks(editor)
-            return
-        text_len = len(editor.toPlainText())
-        cursor = QTextCursor(editor.document())
-        cursor.setPosition(max(0, min(start, text_len)))
-        cursor.setPosition(max(0, min(end, text_len)), QTextCursor.MoveMode.KeepAnchor)
-        selection = QTextEdit.ExtraSelection()
-        fmt = QTextCharFormat()
-        fmt.setBackground(color)
-        selection.format = fmt
-        selection.cursor = cursor
-        editor.setExtraSelections([selection])
 
-    def _clear_editor_marks(self, editor: QPlainTextEdit) -> None:
-        editor.setExtraSelections([])
+
+
+
+
 
     def _set_tab_status(self, tool_id: str, suffix: str) -> None:
         canonical_tool_id = self._canonical_tool_id(tool_id)
