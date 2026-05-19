@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.gui.aura_widget import AuraWidget
+from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.cards._helpers import _fade_in_widget
 from aura.gui.cards.assistant_card import AssistantCard
 from aura.gui.cards.code_writer_card import CodeWriterCard
