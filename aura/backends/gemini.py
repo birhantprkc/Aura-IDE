@@ -18,6 +18,9 @@ from aura.cli_tools import resolve_cli_executable
 from aura.client.events import ApiError, Event
 from aura.config import ThinkingMode
 
+# Default model identifier passed to the gemini CLI via --model.
+GEMINI_MODEL: str = "gemini-3.1-pro-preview"
+
 
 class GeminiCLIBackend(CLIAgentBackend):
     """Agent backend that calls Google via the `gemini` CLI."""
@@ -80,7 +83,7 @@ class GeminiCLIBackend(CLIAgentBackend):
         # -p "" ensures non-interactive mode and reads from stdin.
         # --output-format stream-json yields structured JSON events.
         # --yolo ensures it doesn't prompt for permission when executing tools.
-        command = f"{quoted_resolved} -p \"\" --skip-trust --output-format stream-json --yolo"
+        command = f"{quoted_resolved} -p \"\" --skip-trust --output-format stream-json --yolo --model {GEMINI_MODEL}"
         
         adapter = CLIEventAdapter()
         
