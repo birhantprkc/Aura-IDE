@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QRadialGradient
 from PySide6.QtWidgets import QToolButton
 
-from aura.gui.aura_widget import GlassSwitch
+from aura.gui.widgets.glass_switch import GlassSwitch
 
 
 class WindowChromeMixin:

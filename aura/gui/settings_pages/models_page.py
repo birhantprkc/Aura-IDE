@@ -22,7 +22,7 @@ from aura.config import (
 from aura.providers.base import ProviderId
 from aura.providers.registry import provider_registry
 from aura.gui.theme import FG_DIM
-from aura.gui.aura_widget import GlassSwitch
+from aura.gui.widgets.glass_switch import GlassSwitch
 
 logger = logging.getLogger(__name__)
 

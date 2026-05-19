@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import media_path
-from aura.gui.aura_widget import GlassSwitch
+from aura.gui.widgets.glass_switch import GlassSwitch
 
 def _toolbar_separator() -> QFrame:
     sep = QFrame()

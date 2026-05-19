@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 
 from aura.config import AppSettings
 from aura.gui.theme import FG_DIM
-from aura.gui.aura_widget import GlassSwitch
+from aura.gui.widgets.glass_switch import GlassSwitch
 
 
 class AutomationPage(QWidget):
