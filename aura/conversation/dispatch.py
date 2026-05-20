@@ -12,6 +12,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from aura.craft.types import ExplicitSpecContract
+
 
 @dataclass
 class WorkerDispatchRequest:
@@ -26,7 +28,12 @@ class WorkerDispatchRequest:
     validation_commands: list[str] = field(default_factory=list)
     risk_notes: list[str] = field(default_factory=list)
     non_goals: list[str] = field(default_factory=list)
-
+    expected_public_symbols: list[str] = field(default_factory=list)
+    expected_dataclass_fields: list[str] = field(default_factory=list)
+    forbidden_public_methods: list[str] = field(default_factory=list)
+    forbidden_calls: list[str] = field(default_factory=list)
+    contract: ExplicitSpecContract | None = None
+    
     def to_dict(self) -> dict[str, Any]:
         return {
             "goal": self.goal,
@@ -40,6 +47,11 @@ class WorkerDispatchRequest:
             "validation_commands": list(self.validation_commands),
             "risk_notes": list(self.risk_notes),
             "non_goals": list(self.non_goals),
+            "expected_public_symbols": list(self.expected_public_symbols),
+            "expected_dataclass_fields": list(self.expected_dataclass_fields),
+            "forbidden_public_methods": list(self.forbidden_public_methods),
+            "forbidden_calls": list(self.forbidden_calls),
+            "contract": self.contract.to_dict() if self.contract else None,
         }
 
     @classmethod
@@ -59,6 +71,11 @@ class WorkerDispatchRequest:
             validation_commands=_string_list(data.get("validation_commands")),
             risk_notes=_string_list(data.get("risk_notes")),
             non_goals=_string_list(data.get("non_goals")),
+            expected_public_symbols=_string_list(data.get("expected_public_symbols")),
+            expected_dataclass_fields=_string_list(data.get("expected_dataclass_fields")),
+            forbidden_public_methods=_string_list(data.get("forbidden_public_methods")),
+            forbidden_calls=_string_list(data.get("forbidden_calls")),
+            contract=ExplicitSpecContract.from_dict(data["contract"]) if data.get("contract") else None,
         )
 
 
@@ -148,6 +165,7 @@ class WorkerTaskSpec:
     validation_commands: list[str] = field(default_factory=list)
     risk_notes: list[str] = field(default_factory=list)
     non_goals: list[str] = field(default_factory=list)
+    contract: ExplicitSpecContract | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -184,6 +202,7 @@ class WorkerTaskSpec:
             validation_commands=_str_list("validation_commands"),
             risk_notes=_str_list("risk_notes"),
             non_goals=_str_list("non_goals"),
+            contract=ExplicitSpecContract.from_dict(data["contract"]) if data.get("contract") else None,
         )
 
 
@@ -268,6 +287,15 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
                     if line and line.startswith(("-", "*")):
                         non_goals.append(line.lstrip("-* ").strip())
 
+    contract = ExplicitSpecContract(
+        expected_public_symbols=list(req.expected_public_symbols),
+        expected_dataclass_fields=list(req.expected_dataclass_fields),
+        forbidden_public_methods=list(req.forbidden_public_methods),
+        forbidden_calls=list(req.forbidden_calls),
+        required_outputs=list(req.required_outputs),
+        non_goals=non_goals,
+    )
+
     return WorkerTaskSpec(
         goal=req.goal,
         files=list(req.files),
@@ -280,6 +308,7 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
         forbidden_responsibilities=list(req.forbidden_responsibilities),
         required_outputs=list(req.required_outputs),
         risk_notes=list(req.risk_notes),
+        contract=contract,
     )
 
 

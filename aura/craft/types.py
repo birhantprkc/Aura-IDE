@@ -3,11 +3,16 @@ import ast
 from enum import Enum
 from pathlib import Path
 from dataclasses import dataclass, field
+from typing import Any
 
 class CraftIssueSeverity(str, Enum):
     HARD = "hard"
     SOFT = "soft"
 
+class OwnershipContext(str, Enum):
+    """Determines strictness of authorship checks."""
+    AURA = "aura"        # Aura-managed file — run all authorship checks
+    FOREIGN = "foreign"  # Foreign repo / small patch — suppress namespace ceremonies
 
 class ChangeIntent(str, Enum):
     bug_fix = "bug_fix"
@@ -16,6 +21,41 @@ class ChangeIntent(str, Enum):
     refactor = "refactor"
     config = "config"
     unknown = "unknown"
+
+@dataclass
+class ExplicitSpecContract:
+    """Formal contract between Planner and Worker.
+    
+    Captures what the Worker must produce and must not do.
+    Populated from the Planner's dispatch fields and verified by ContractGate.
+    """
+    expected_public_symbols: list[str] = field(default_factory=list)
+    expected_dataclass_fields: list[str] = field(default_factory=list)
+    forbidden_public_methods: list[str] = field(default_factory=list)
+    forbidden_calls: list[str] = field(default_factory=list)
+    required_outputs: list[str] = field(default_factory=list)
+    non_goals: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "expected_public_symbols": list(self.expected_public_symbols),
+            "expected_dataclass_fields": list(self.expected_dataclass_fields),
+            "forbidden_public_methods": list(self.forbidden_public_methods),
+            "forbidden_calls": list(self.forbidden_calls),
+            "required_outputs": list(self.required_outputs),
+            "non_goals": list(self.non_goals),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ExplicitSpecContract":
+        return cls(
+            expected_public_symbols=list(data.get("expected_public_symbols", [])),
+            expected_dataclass_fields=list(data.get("expected_dataclass_fields", [])),
+            forbidden_public_methods=list(data.get("forbidden_public_methods", [])),
+            forbidden_calls=list(data.get("forbidden_calls", [])),
+            required_outputs=list(data.get("required_outputs", [])),
+            non_goals=list(data.get("non_goals", [])),
+        )
 
 @dataclass
 class ProposalCapsule:
@@ -34,6 +74,9 @@ class ProposalCapsule:
     expected_dataclass_fields: dict[str, list[str]] = field(default_factory=dict)
     forbidden_public_methods: list[str] = field(default_factory=list)
     forbidden_calls: list[str] = field(default_factory=list)
+    ownership_context: OwnershipContext = OwnershipContext.AURA
+    ast_tree: ast.Module | None = None
+    contract: ExplicitSpecContract | None = None
 
 @dataclass
 class CraftIssue:

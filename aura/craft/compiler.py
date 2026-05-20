@@ -1,6 +1,9 @@
 from __future__ import annotations
-from .types import ProposalCapsule, CraftIssue, CompiledPatch, CompilerBounce, CompilerReject
+import ast
+from .types import ProposalCapsule, CraftIssue, CompiledPatch, CompilerBounce, CompilerReject, CraftDecision
 from .engine import CraftEngine
+from .contract_gate import ContractGate
+from .reference_checker import ReferenceChecker
 
 
 class CompilerService:
@@ -12,10 +15,12 @@ class CompilerService:
     
     def __init__(self, max_retries: int = 3):
         self.max_retries = max_retries
-        self._attempts: dict[str, int] = {}  # proposal_id -> attempt count
+        self._attempts: dict[str, int] = {}
         self._engine = CraftEngine()
+        self._contract_gate = ContractGate()
+        self._ref_checker = ReferenceChecker()
     
-    def process_proposal(self, capsule: ProposalCapsule) -> CompiledPatch | CompilerBounce | CompilerReject:
+    def process_proposal(self, capsule: ProposalCapsule, workspace_root=None) -> CompiledPatch | CompilerBounce | CompilerReject:
         """Main entry point. Returns CompiledPatch on success, CompilerBounce
         for repairable rejections, CompilerReject when max retries exhausted."""
         
@@ -25,14 +30,14 @@ class CompilerService:
         attempt = self._attempts.get(proposal_id, 0) + 1
         self._attempts[proposal_id] = attempt
         
-        decision = self._run_pipeline(capsule)
+        decision = self._run_pipeline(capsule, workspace_root=workspace_root)
         
         if decision.approved:
             self.reset_attempts(proposal_id)
             return CompiledPatch(
                 capsule=capsule,
                 cleaned_code=decision.cleaned_code,
-                checks_passed=["craft_engine"],
+                checks_passed=[c for c in ["craft_engine", "contract_gate" if capsule.contract else None, "reference_checker"] if c is not None],
             )
         
         if attempt <= self.max_retries:
@@ -52,9 +57,41 @@ class CompilerService:
             reason=f"Rejected after {attempt} attempts due to unresolvable issues.",
         )
     
-    def _run_pipeline(self, capsule: ProposalCapsule):
+    def _run_pipeline(self, capsule: ProposalCapsule, workspace_root=None):
         """Run the compiler pipeline stages. In Phase 1, delegates to CraftEngine."""
-        return self._engine.process_proposal(capsule)
+        
+        # Stage 1: Existing CraftEngine checks
+        decision = self._engine.process_proposal(capsule)
+        
+        # Stage 2: Contract Gate (runs for ALL files with a contract)
+        if capsule.contract is not None:
+            contract_issues = self._contract_gate.verify(capsule)
+            if contract_issues:
+                # Merge contract issues into the decision
+                if decision.approved:
+                    decision = CraftDecision(approved=False, issues=contract_issues, cleaned_code=capsule.proposed_code)
+                else:
+                    # Use a set to avoid duplicate issues, comparing by (code, line) for simplicity
+                    existing_issues_set = {(issue.code, issue.line) for issue in decision.issues}
+                    for new_issue in contract_issues:
+                        if (new_issue.code, new_issue.line) not in existing_issues_set:
+                            decision.issues.append(new_issue)
+                            existing_issues_set.add((new_issue.code, new_issue.line))
+                            
+        # Stage 3: Reference Validation
+        ref_issues = self._ref_checker.check(capsule, workspace_root=workspace_root)
+        if ref_issues:
+            # Merge reference issues into the decision
+            if decision.approved:
+                decision = CraftDecision(approved=False, issues=ref_issues, cleaned_code=capsule.proposed_code)
+            else:
+                existing_issues_set = {(issue.code, issue.line) for issue in decision.issues}
+                for new_issue in ref_issues:
+                    if (new_issue.code, new_issue.line) not in existing_issues_set:
+                        decision.issues.append(new_issue)
+                        existing_issues_set.add((new_issue.code, new_issue.line))
+        
+        return decision
     
     def _build_repair_instructions(self, issues: list[CraftIssue]) -> str:
         """Build human-readable repair instructions from issues list."""

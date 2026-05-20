@@ -10,6 +10,20 @@ from aura.client.events import (
 from aura.providers.google_cloud.signatures import decode_signature, make_message_json_safe
 
 
+def _lookup_thought_signature(
+    google_call_metadata: dict[str, dict[str, Any]] | None,
+    call_id: str,
+    name: str = "",
+) -> dict | None:
+    """Look up thought_signature metadata by call_id, falling back to fn:name."""
+    if not google_call_metadata:
+        return None
+    metadata = google_call_metadata.get(call_id)
+    if metadata is None and name:
+        metadata = google_call_metadata.get(f"fn:{name}")
+    return metadata
+
+
 def aura_tools_to_google_declarations(tools: list[dict]) -> list[dict]:
     """Convert Aura (OpenAI-compatible) tools to Google function declarations.
 
@@ -145,10 +159,8 @@ def aura_messages_to_google_contents(
                             "args": args,
                         }
                     }
-                    metadata = (
-                        google_call_metadata.get(call_id)
-                        if google_call_metadata
-                        else None
+                    metadata = _lookup_thought_signature(
+                        google_call_metadata, call_id, str(fn.get("name", ""))
                     )
                     if metadata:
                         sig = metadata.get("thought_signature")

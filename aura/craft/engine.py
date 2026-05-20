@@ -1,7 +1,7 @@
 import ast
 import logging
 import re
-from .types import CraftDecision, CraftIssue, CraftIssueSeverity, ProposalCapsule, node_in_ranges, line_in_ranges
+from .types import CraftDecision, CraftIssue, CraftIssueSeverity, ProposalCapsule, node_in_ranges, line_in_ranges, OwnershipContext
 from aura.quality.features import _GENERIC_NAMES
 
 _log = logging.getLogger(__name__)
@@ -230,16 +230,16 @@ class CraftEngine:
         if issues:
             return CraftDecision(approved=False, cleaned_code=cleaned_code, issues=issues)
 
-        # Phase C: Authorship soft checks for new Aura-owned Python files
-        if capsule.is_new_file and str(capsule.path).startswith("aura/"):
-            authorship_issues = self._run_authorship_checks(capsule)
+        # Phase C: Authorship soft checks for new Aura-owned Python files or explicitly foreign context
+        if capsule.is_new_file and (str(capsule.path).startswith("aura/") or capsule.ownership_context == OwnershipContext.FOREIGN):
+            authorship_issues = self._run_authorship_checks(capsule, capsule.ownership_context)
             if authorship_issues:
                 return CraftDecision(approved=False, cleaned_code=cleaned_code, issues=authorship_issues)
             
         return CraftDecision(approved=True, cleaned_code=cleaned_code)
 
-    def _run_authorship_checks(self, capsule: ProposalCapsule) -> list[CraftIssue]:
-        """Run all 7 soft authorship checks for new Aura-owned Python files."""
+    def _run_authorship_checks(self, capsule: ProposalCapsule, ownership_context: OwnershipContext = OwnershipContext.AURA) -> list[CraftIssue]:
+        """Run authorship checks. Some soft checks are gated behind OwnershipContext.AURA."""
         try:
             tree = ast.parse(capsule.proposed_code)
         except SyntaxError:
@@ -265,86 +265,89 @@ class CraftEngine:
                             ))
 
         # section_banner
-        for lineno, line_text in enumerate(source_lines, start=1):
-            stripped = line_text.strip()
-            if not stripped.startswith("#"):
-                continue
-            if re.match(r'^#[=*/\\-]{3,}\s*\w+.*[=*/\\-]{3,}$', stripped) or \
-               re.match(r'^#\s*-{3,}\s', stripped) or \
-               re.match(r'^#\s*={3,}\s', stripped) or \
-               re.match(r'^#[=*\-~]{4,}$', stripped):
-                issues.append(CraftIssue(
-                    line=lineno,
-                    column=0,
-                    code="section_banner",
-                    message="Decorative section banner comment.",
-                    suggestion="Remove decorative section banners. Use focused comments instead.",
-                    severity=CraftIssueSeverity.SOFT,
-                ))
-
-        # boilerplate_docstring
-        # Module-level docstring
-        if (tree.body
-                and isinstance(tree.body[0], ast.Expr)
-                and isinstance(tree.body[0].value, ast.Constant)
-                and isinstance(tree.body[0].value.value, str)):
-            doc = tree.body[0].value.value.strip().lower()
-            if doc.startswith(("module ", "this module ", "this file ")):
-                issues.append(CraftIssue(
-                    line=tree.body[0].lineno,
-                    column=tree.body[0].col_offset,
-                    code="boilerplate_docstring",
-                    message="Module-level docstring is boilerplate.",
-                    suggestion="Remove or replace with a specific, useful description.",
-                    severity=CraftIssueSeverity.SOFT,
-                ))
-
-        # Function/method docstrings
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if (node.body
-                        and isinstance(node.body[0], ast.Expr)
-                        and isinstance(node.body[0].value, ast.Constant)
-                        and isinstance(node.body[0].value.value, str)):
-                    doc = node.body[0].value.value.strip().lower()
-                    if doc.startswith(("this function ", "this method ", "this class ")):
-                        issues.append(CraftIssue(
-                            line=node.body[0].lineno,
-                            column=node.body[0].col_offset,
-                            code="boilerplate_docstring",
-                            message=f"Docstring for '{node.name}' is boilerplate.",
-                            suggestion="Replace with a specific description or remove it.",
-                            severity=CraftIssueSeverity.SOFT,
-                        ))
-
-        # staticmethod_class
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef):
-                methods = [item for item in node.body if isinstance(item, ast.FunctionDef)]
-                if not methods:
+        if ownership_context != OwnershipContext.FOREIGN:
+            for lineno, line_text in enumerate(source_lines, start=1):
+                stripped = line_text.strip()
+                if not stripped.startswith("#"):
                     continue
-                has_init = any(m.name == "__init__" for m in methods)
-                if has_init:
-                    continue
-                all_static = True
-                for m in methods:
-                    is_static = any(
-                        (isinstance(d, ast.Name) and d.id == "staticmethod")
-                        or (isinstance(d, ast.Attribute) and d.attr == "staticmethod")
-                        for d in m.decorator_list
-                    )
-                    if not is_static:
-                        all_static = False
-                        break
-                if all_static:
+                if re.match(r'^#[=*/\\-]{3,}\s*\w+.*[=*/\\-]{3,}$', stripped) or \
+                   re.match(r'^#\s*-{3,}\s', stripped) or \
+                   re.match(r'^#\s*={3,}\s', stripped) or \
+                   re.match(r'^#[=*\-~]{4,}$', stripped):
                     issues.append(CraftIssue(
-                        line=node.lineno,
-                        column=node.col_offset,
-                        code="staticmethod_class",
-                        message=f"Class '{node.name}' contains only static methods.",
-                        suggestion="Use module-level functions instead of a static-method-only class.",
+                        line=lineno,
+                        column=0,
+                        code="section_banner",
+                        message="Decorative section banner comment.",
+                        suggestion="Remove decorative section banners. Use focused comments instead.",
                         severity=CraftIssueSeverity.SOFT,
                     ))
+
+        # boilerplate_docstring
+        if ownership_context != OwnershipContext.FOREIGN:
+            # Module-level docstring
+            if (tree.body
+                    and isinstance(tree.body[0], ast.Expr)
+                    and isinstance(tree.body[0].value, ast.Constant)
+                    and isinstance(tree.body[0].value.value, str)):
+                doc = tree.body[0].value.value.strip().lower()
+                if doc.startswith(("module ", "this module ", "this file ")):
+                    issues.append(CraftIssue(
+                        line=tree.body[0].lineno,
+                        column=tree.body[0].col_offset,
+                        code="boilerplate_docstring",
+                        message="Module-level docstring is boilerplate.",
+                        suggestion="Remove or replace with a specific, useful description.",
+                        severity=CraftIssueSeverity.SOFT,
+                    ))
+
+            # Function/method docstrings
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if (node.body
+                            and isinstance(node.body[0], ast.Expr)
+                            and isinstance(node.body[0].value, ast.Constant)
+                            and isinstance(node.body[0].value.value, str)):
+                        doc = node.body[0].value.value.strip().lower()
+                        if doc.startswith(("this function ", "this method ", "this class ")):
+                            issues.append(CraftIssue(
+                                line=node.body[0].lineno,
+                                column=node.body[0].col_offset,
+                                code="boilerplate_docstring",
+                                message=f"Docstring for '{node.name}' is boilerplate.",
+                                suggestion="Replace with a specific description or remove it.",
+                                severity=CraftIssueSeverity.SOFT,
+                            ))
+
+        # staticmethod_class
+        if ownership_context != OwnershipContext.FOREIGN:
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    methods = [item for item in node.body if isinstance(item, ast.FunctionDef)]
+                    if not methods:
+                        continue
+                    has_init = any(m.name == "__init__" for m in methods)
+                    if has_init:
+                        continue
+                    all_static = True
+                    for m in methods:
+                        is_static = any(
+                            (isinstance(d, ast.Name) and d.id == "staticmethod")
+                            or (isinstance(d, ast.Attribute) and d.attr == "staticmethod")
+                            for d in m.decorator_list
+                        )
+                        if not is_static:
+                            all_static = False
+                            break
+                    if all_static:
+                        issues.append(CraftIssue(
+                            line=node.lineno,
+                            column=node.col_offset,
+                            code="staticmethod_class",
+                            message=f"Class '{node.name}' contains only static methods.",
+                            suggestion="Use module-level functions instead of a static-method-only class.",
+                            severity=CraftIssueSeverity.SOFT,
+                        ))
 
         # clever_helper
         # Count call sites per function name
@@ -453,7 +456,8 @@ class CraftEngine:
         issues.extend(self._check_destructive_operations(tree, capsule))
         issues.extend(self._check_extra_public_api(tree, capsule))
         issues.extend(self._check_schema_fidelity(tree, capsule))
-        issues.extend(self._check_empty_ceremony_class(tree))
+        if ownership_context != OwnershipContext.FOREIGN:
+            issues.extend(self._check_empty_ceremony_class(tree))
         issues.extend(self._check_forbidden_public_methods(tree, capsule))
         issues.extend(self._check_forbidden_calls(tree, capsule))
         issues.extend(self._check_scaffold_smell(tree, capsule, source_lines))

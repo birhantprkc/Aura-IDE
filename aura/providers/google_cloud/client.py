@@ -208,6 +208,15 @@ class GoogleCloudClient:
                             self._call_metadata[call_id] = {
                                 "thought_signature": encode_signature_safe(thought_signature)
                             }
+                            # Also index by function name as fallback.
+                            # The SDK may internally prefix call IDs (e.g. "default_api:"),
+                            # so the call_id stored in the message history may not match
+                            # the call_id used during streaming.  The fn: prefix avoids
+                            # collisions with real call IDs.
+                            if name:
+                                self._call_metadata[f"fn:{name}"] = {
+                                    "thought_signature": encode_signature_safe(thought_signature)
+                                }
                         tool_calls[idx] = tc
                         seen_tool_starts.add(idx)
                         from aura.client.events import ToolCallArgsDelta, ToolCallEnd, ToolCallStart

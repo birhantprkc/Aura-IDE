@@ -524,6 +524,38 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         "When provided, these override Non-Goals parsed from spec."
                     ),
                 },
+                "expected_public_symbols": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Names of public symbols (classes, functions, constants) the Worker must define. "
+                        "The ContractGate will verify these exist in the output."
+                    ),
+                },
+                "expected_dataclass_fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Specific field names that must exist on dataclass definitions, "
+                        "e.g. ['id', 'name', 'created_at']. The ContractGate will verify these fields are present."
+                    ),
+                },
+                "forbidden_public_methods": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Method names the Worker must NOT introduce on public classes, "
+                        "e.g. ['to_dict', 'from_dict'] on domain models that shouldn't have serialization."
+                    ),
+                },
+                "forbidden_calls": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Function call names the Worker must NOT use, "
+                        "e.g. ['print', 'input'] for backend code or ['eval', 'exec'] for security."
+                    ),
+                },
             },
             "required": ["goal", "files", "spec", "acceptance", "summary"],
         },

@@ -47,6 +47,11 @@ from aura.conversation.tools.dynamic_registry import DynamicToolRegistry
 from aura.conversation.tools.mcp_registry import MCPToolRegistry
 from aura.conversation.tools.executor import ToolExecutor
 
+try:
+    from aura.craft import ExplicitSpecContract
+except ImportError:
+    ExplicitSpecContract = None
+
 # Tool handler dispatch table.
 # Maps tool name -> unbound method that accepts (self, args, approval_cb, reject_all).
 TOOL_HANDLERS: dict[str, Any] = {}
@@ -82,6 +87,7 @@ class ToolRegistry(
         self._catalog = ToolCatalog()
         self._dynamic_tools = DynamicToolRegistry(self._root)
         self._mcp_tools = MCPToolRegistry()
+        self._contract: ExplicitSpecContract | None = None
         self._executor = ToolExecutor(
             owner=self,
             dynamic_tools=self._dynamic_tools,
@@ -143,6 +149,14 @@ class ToolRegistry(
         return self._mcp_tools.connect_server(server_command)
 
     # ---- path resolution ---------------------------------------------------
+
+    def set_contract(self, contract: ExplicitSpecContract | None) -> None:
+        """Set a Planner contract for the current worker session."""
+        self._contract = contract
+
+    def get_contract(self) -> ExplicitSpecContract | None:
+        """Get the current Planner contract, if any."""
+        return self._contract
 
     def _resolve_in_root(self, raw: str) -> Path:
         """Resolve a workspace-relative path; raise if it escapes the jail.

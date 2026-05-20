@@ -253,6 +253,9 @@ class _DispatchProxy(QObject):
         worker_history.append_user_text(_format_spec_as_user_message(task_spec))
 
         worker_registry = self._registry_factory("worker")
+        # Set the Planner contract on the worker's registry for contract gate checks
+        if task_spec.contract is not None:
+            worker_registry.set_contract(task_spec.contract)
         worker_manager = ConversationManager(worker_history, worker_registry)
 
         self.workerStarted.emit(tool_call_id)

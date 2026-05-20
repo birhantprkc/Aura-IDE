@@ -242,6 +242,10 @@ Optional structured fields (all list[str]):
 - `validation_commands`: exact focused commands when known
 - `risk_notes`: realistic failure/security/integration risks
 - `non_goals`: things not to build
+- `expected_public_symbols`: names of public symbols (classes, functions, constants) the Worker must define
+- `expected_dataclass_fields`: specific field names that must exist on dataclass definitions
+- `forbidden_public_methods`: method names the Worker must not introduce on public classes
+- `forbidden_calls`: function call names the Worker must not use (e.g. 'print', 'eval')
 
 The `dispatch_to_worker` tool arguments must be complete:
 - Include enough context for the Worker to execute safely without seeing this conversation.

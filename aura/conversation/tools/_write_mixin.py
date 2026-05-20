@@ -24,12 +24,13 @@ from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
 # `registry` is already in sys.modules by the time this module is loaded.
 
 try:
-    from aura.craft import CraftEngine, ProposalCapsule, ChangeIntent, line_in_ranges, CompilerService, CompiledPatch, CompilerBounce, CompilerReject
+    from aura.craft import CraftEngine, ProposalCapsule, ChangeIntent, line_in_ranges, CompilerService, CompiledPatch, CompilerBounce, CompilerReject, ExplicitSpecContract, OwnershipContext
     from aura.craft.compiler import compiler_service
 except ImportError:
     CraftEngine = None
     CompilerService = None
     compiler_service = None
+    ExplicitSpecContract = None
 
 from aura.conversation.tools import registry as _reg
 
@@ -326,7 +327,7 @@ def _compute_craft_line_ranges(proposal: dict) -> list[tuple[int, int]]:
     return [(1, len(proposed_lines) + 1)]
 
 
-def _run_compiler_pipeline(proposal: dict, tool_name: str) -> ToolExecResult | None:
+def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpecContract | None = None, workspace_root=None) -> ToolExecResult | None:
     if compiler_service is None:
         return None
         
@@ -342,6 +343,8 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str) -> ToolExecResult | N
         return None
         
     try:
+        is_new_file = proposal.get("is_new_file", False)
+        ownership_context = OwnershipContext.AURA if (rel_path.startswith("aura/") and is_new_file) else OwnershipContext.FOREIGN
         capsule = ProposalCapsule(
             path=Path(rel_path),
             language="python",
@@ -349,10 +352,12 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str) -> ToolExecResult | N
             original_code=proposal.get("old_content", ""),
             proposed_code=proposal["new_content"],
             changed_line_ranges=_compute_craft_line_ranges(proposal),
-            is_new_file=proposal.get("is_new_file", False),
+            is_new_file=is_new_file,
+            ownership_context=ownership_context,
+            contract=contract,
         )
         
-        result = compiler_service.process_proposal(capsule)
+        result = compiler_service.process_proposal(capsule, workspace_root=workspace_root)
         
         if is_observe:
             if not isinstance(result, CompiledPatch):
@@ -479,7 +484,7 @@ class WriteHandlersMixin:
                 gate_error = _maybe_humanize_proposal(proposal)
                 if gate_error is not None:
                     return gate_error
-                craft_error = _run_compiler_pipeline(proposal, "write_file")
+                craft_error = _run_compiler_pipeline(proposal, "write_file", contract=self.get_contract(), workspace_root=self._root)
                 if craft_error is not None:
                     return craft_error
 
@@ -502,13 +507,12 @@ class WriteHandlersMixin:
             if not proposal.get("ok", False):
                 return ToolExecResult(ok=False, payload=proposal)
 
-            # Humanizer: observe-only for existing file edits, gated by env var
-            if os.environ.get("AURA_HUMANIZER_EDIT_FILE", "") == "1":
-                _maybe_observe_humanizer(proposal)
-            if os.environ.get("AURA_CRAFT_EDIT_FILE", "") == "1":
-                craft_error = _run_compiler_pipeline(proposal, "edit_file")
-                if craft_error is not None:
-                    return craft_error
+            # Humanizer: observe-only for existing file edits
+            _maybe_observe_humanizer(proposal)
+            
+            craft_error = _run_compiler_pipeline(proposal, "edit_file", contract=self.get_contract(), workspace_root=self._root)
+            if craft_error is not None:
+                return craft_error
 
             req = ApprovalRequest(
                 tool_name="edit_file",
@@ -537,7 +541,7 @@ class WriteHandlersMixin:
             gate_error = _maybe_humanize_proposal(proposal)
             if gate_error is not None:
                 return gate_error
-            craft_error = _run_compiler_pipeline(proposal, "edit_symbol")
+            craft_error = _run_compiler_pipeline(proposal, "edit_symbol", contract=self.get_contract(), workspace_root=self._root)
             if craft_error is not None:
                 return craft_error
 
