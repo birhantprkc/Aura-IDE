@@ -4,7 +4,8 @@ from .types import ProposalCapsule, CraftIssue, CompiledPatch, CompilerBounce, C
 from .engine import CraftEngine
 from .contract_gate import ContractGate
 from .reference_checker import ReferenceChecker
-
+from .mutator import SafeMutator
+from .formatter import CodeFormatter
 
 class CompilerService:
     """The strict compiler boundary between LLM and user workspace.
@@ -19,6 +20,8 @@ class CompilerService:
         self._engine = CraftEngine()
         self._contract_gate = ContractGate()
         self._ref_checker = ReferenceChecker()
+        self._mutator = SafeMutator()
+        self._formatter = CodeFormatter()
     
     def process_proposal(self, capsule: ProposalCapsule, workspace_root=None) -> CompiledPatch | CompilerBounce | CompilerReject:
         """Main entry point. Returns CompiledPatch on success, CompilerBounce
@@ -60,6 +63,15 @@ class CompilerService:
     def _run_pipeline(self, capsule: ProposalCapsule, workspace_root=None):
         """Run the compiler pipeline stages. In Phase 1, delegates to CraftEngine."""
         
+        # Stage 0: SafeMutator
+        cleaned = self._mutator.mutate(capsule.proposed_code, path=capsule.path)
+        if cleaned != capsule.proposed_code:
+            capsule.proposed_code = cleaned
+            try:
+                capsule.ast_tree = ast.parse(cleaned)
+            except SyntaxError:
+                pass
+                
         # Stage 1: Existing CraftEngine checks
         decision = self._engine.process_proposal(capsule)
         
@@ -90,6 +102,10 @@ class CompilerService:
                     if (new_issue.code, new_issue.line) not in existing_issues_set:
                         decision.issues.append(new_issue)
                         existing_issues_set.add((new_issue.code, new_issue.line))
+                        
+        # Final Stage: CodeFormatter
+        if decision.approved:
+            decision.cleaned_code = self._formatter.format_code(decision.cleaned_code, workspace_root=workspace_root)
         
         return decision
     

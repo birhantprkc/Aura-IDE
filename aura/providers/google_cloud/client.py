@@ -45,16 +45,22 @@ class GoogleCloudClient:
         """Lazily create and return the google-genai Client."""
         if self._client is None:
             from google import genai  # type: ignore[import-untyped]
+            from google.genai import types
+
+            # 120 seconds timeout (120,000 ms) to prevent hanging under unstable network
+            http_options = types.HttpOptions(timeout=120000)
 
             if self._api_key:
                 self._client = genai.Client(
                     api_key=self._api_key,
+                    http_options=http_options,
                 )
             else:
                 self._client = genai.Client(
                     vertexai=True,
                     project=self._project,
                     location=self._location,
+                    http_options=http_options,
                 )
         return self._client
 

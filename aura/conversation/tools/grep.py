@@ -19,6 +19,15 @@ def _should_skip(path: Path) -> bool:
     return False
 
 
+def _safe_relative_to(path: Path, root: Path) -> Path:
+    """Safely compute relative path, handling Windows case-insensitivity."""
+    import os
+    try:
+        return Path(os.path.relpath(path, root))
+    except Exception:
+        return path.relative_to(root)
+
+
 def grep_files(
     workspace_root: Path,
     pattern: str,
@@ -43,6 +52,7 @@ def grep_files(
             case_sensitive,
             max_results,
             include_pattern,
+            rg_path=rg_path,
         )
         return _maybe_retry_as_regex(
             result,
@@ -53,6 +63,7 @@ def grep_files(
             case_sensitive,
             max_results,
             include_pattern,
+            rg_path=rg_path,
         )
 
     result = _grep_python(
@@ -90,6 +101,7 @@ def _maybe_retry_as_regex(
     case_sensitive: bool,
     max_results: int,
     include_pattern: str | None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     if regex_mode or not result.get("ok") or result.get("matches") or not _looks_like_regex(pattern):
         return result
@@ -101,6 +113,7 @@ def _maybe_retry_as_regex(
         case_sensitive,
         max_results,
         include_pattern,
+        **kwargs,
     )
     if retry.get("ok") and retry.get("matches"):
         retry["auto_regex_retry"] = True
@@ -115,10 +128,13 @@ def _grep_ripgrep(
     regex: bool,
     case_sensitive: bool,
     max_results: int,
-    include: str | None
+    include: str | None,
+    rg_path: str | None = None,
 ) -> dict[str, Any]:
+    # Use the resolved rg_path to guarantee execution consistency
+    exe = rg_path or shutil.which("rg") or "rg"
     # Use --hidden to search .github, .env, etc. (but SKIP_DIRS still excludes .git/.venv)
-    cmd = ["rg", "--json", "--column", "--max-count", str(max_results), "--hidden"]
+    cmd = [exe, "--json", "--column", "--max-count", str(max_results), "--hidden"]
     
     if not regex:
         cmd.append("--fixed-strings")
@@ -177,9 +193,10 @@ def _grep_ripgrep(
                     abs_match_path = abs_match_path.resolve()
                     
                 try:
-                    rel_path = abs_match_path.relative_to(root_resolved).as_posix()
-                except ValueError:
-                    # Fallback if relative_to fails (e.g. case mismatch or outside root)
+                    import os
+                    rel_path = Path(os.path.relpath(abs_match_path, root_resolved)).as_posix()
+                except Exception:
+                    # Fallback if relative_to / relpath fails (e.g. outside root)
                     rel_path = raw_match_path
                 
                 matches.append({
@@ -238,7 +255,7 @@ def _grep_python(
     candidates: list[Path] = []
     if include_pattern:
         for p in workspace_root.rglob(include_pattern):
-            if _should_skip(p.relative_to(workspace_root)):
+            if _should_skip(_safe_relative_to(p, workspace_root)):
                 continue
             if p.is_file():
                 candidates.append(p)
@@ -250,7 +267,7 @@ def _grep_python(
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
             for f in files:
                 p = Path(root_dir) / f
-                if _should_skip(p.relative_to(workspace_root)):
+                if _should_skip(_safe_relative_to(p, workspace_root)):
                     continue
                 candidates.append(p)
                 # Soft cap on candidate list to avoid extreme memory usage
@@ -262,7 +279,7 @@ def _grep_python(
     for file_path in candidates:
         if len(matches) >= max_results:
             break
-        rel = file_path.relative_to(workspace_root).as_posix()
+        rel = _safe_relative_to(file_path, workspace_root).as_posix()
         try:
             # Prevent hanging on massive binary/log files during search fallback
             file_size = file_path.stat().st_size
