@@ -80,19 +80,26 @@ def test_save_thread_updates_conversation_path(tmp_path):
     assert loaded.conversation_path == conv_path
 
 
-def test_list_threads_returns_sorted(tmp_path):
+def test_list_threads_returns_sorted(tmp_path, monkeypatch):
     """list_threads returns threads sorted by updated_at descending."""
     ws = tmp_path / "project"
     ws.mkdir()
     store = ProjectStore()
     project = store.create_or_update_project(ws)
     
+    # Mock _utc_iso to return incrementing times to guarantee deterministic sort order
+    times = ["2026-05-21T12:00:00Z", "2026-05-21T12:01:00Z"]
+    def mock_utc_iso():
+        return times.pop(0) if times else "2026-05-21T12:02:00Z"
+        
+    monkeypatch.setattr("aura.projects.store._utc_iso", mock_utc_iso)
+    
     t1 = store.create_thread(project, title="First")
     t2 = store.create_thread(project, title="Second")
     
     threads = store.list_threads(project)
     assert len(threads) == 2
-    # Second was created later, so should be first
+    # Second was created later, so should be first in descending order
     assert threads[0].title == "Second"
     assert threads[1].title == "First"
 
