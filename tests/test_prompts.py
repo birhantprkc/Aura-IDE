@@ -13,16 +13,16 @@ from aura.conversation.tools._schemas import DISPATCH_TOOL_DEF
 def test_planner_worker_contract_consistency():
     """Ensure Planner and Worker agree on the handoff format."""
     plan_nomenclature = "Builder Note"
-    
+
     # 1. Planner must be instructed to provide this section
     assert plan_nomenclature in PLANNER_SYSTEM_PROMPT
-    
+
     # 2. Worker must be instructed to follow this section
     assert plan_nomenclature in WORKER_SYSTEM_PROMPT
-    
-    # 3. The dispatch_to_worker tool schema must require it
+
+    # 3. The dispatch_to_worker tool schema must reference Builder Note style
     spec_desc = DISPATCH_TOOL_DEF["function"]["parameters"]["properties"]["spec"]["description"]
-    assert "implementation handoff" in spec_desc
+    assert "Builder Note" in spec_desc
 
 
 def test_planner_required_spec_sections():
@@ -33,7 +33,7 @@ def test_planner_required_spec_sections():
         "Builder Note",
         "Acceptance",
     ]
-    
+
     for section in required_sections:
         assert section in PLANNER_SYSTEM_PROMPT
 
@@ -44,21 +44,13 @@ def test_worker_adherence_protocol():
     assert "Acceptance Verification" in WORKER_SYSTEM_PROMPT
 
 
-def test_tool_schema_matches_planner_instructions():
-    """Ensure the dispatch_to_worker schema matches the Planner's prompt instructions."""
+def test_tool_schema_uses_builder_note_style():
+    """Ensure the dispatch_to_worker spec uses Builder Note style, not formal sections."""
     spec_desc = DISPATCH_TOOL_DEF["function"]["parameters"]["properties"]["spec"]["description"]
-    
-    required_sections = [
-        "Core Behavior",
-        "Failure Behavior",
-        "Code Shape",
-        "File-by-File Implementation Plan",
-        "Acceptance Checks",
-        "Non-Goals",
-    ]
-    
-    for section in required_sections:
-        assert section in spec_desc
+
+    assert "Builder Note" in spec_desc
+    assert "implementation handoff" in spec_desc
+    assert "Do not require or default to formal sections" in spec_desc
 
 
 def test_snappy_planner_worker_rules():
@@ -68,13 +60,13 @@ def test_snappy_planner_worker_rules():
     assert "fast dispatch compiler" in PLANNER_SYSTEM_PROMPT
     assert "Inspect only the minimum repo context needed" in PLANNER_SYSTEM_PROMPT
     assert "Do not narrate reasoning" in PLANNER_SYSTEM_PROMPT
-    
+
     # Worker
     assert "Snappy execution" in WORKER_SYSTEM_PROMPT
     assert "update_todo_list" in WORKER_SYSTEM_PROMPT
     assert "The TODO list is the visible execution plan" in WORKER_SYSTEM_PROMPT
     assert "Do not emit prose or XML planning" in WORKER_SYSTEM_PROMPT
-    
+
     # Continuation report still exists
     assert "continuation_report" in WORKER_SYSTEM_PROMPT
 
