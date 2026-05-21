@@ -130,9 +130,7 @@ class AuraPlayground(QWidget):
     def is_terminal_window_open(self) -> bool:
         return self._terminal_window.is_open()
 
-    # ------------------------------------------------------------------
     # Public API (backward-compatible with worker_handler.py)
-    # ------------------------------------------------------------------
 
     def begin_assistant(self):
         """Reset the workspace for a new assistant run."""
@@ -277,14 +275,11 @@ class AuraPlayground(QWidget):
         self._terminal_window.set_result(process_id, exit_code)
 
     def worker_finished(self, ok: bool, summary: str):
-        # self._code_editor.close_all_tabs()
-        # self._info_hub.close_all_terminal_tabs()
+        self.clear()
         self._info_hub.show_final_summary(ok, summary)
 
     def worker_cancelled(self):
-        # self._code_editor.close_all_tabs()
-        # self._info_hub.close_all_terminal_tabs()
-        pass
+        self.clear()
 
     def clear(self):
         self._code_editor.close_all_tabs()
