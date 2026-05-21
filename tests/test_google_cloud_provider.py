@@ -93,10 +93,36 @@ def test_config_defaults(monkeypatch):
 def test_is_configured(monkeypatch):
     from aura.providers.google_cloud.config import is_configured
 
+    # Clear everything first to isolate from host system environment / keys
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr("aura.key_manager.has_key", lambda p: False)
+
+    assert is_configured() is False
+
+    # 1. Project configured
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj")
     assert is_configured() is True
-
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT")
+    assert is_configured() is False
+
+    # 2. GEMINI_API_KEY configured
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini_key")
+    assert is_configured() is True
+    monkeypatch.delenv("GEMINI_API_KEY")
+    assert is_configured() is False
+
+    # 3. GOOGLE_API_KEY configured
+    monkeypatch.setenv("GOOGLE_API_KEY", "google_key")
+    assert is_configured() is True
+    monkeypatch.delenv("GOOGLE_API_KEY")
+    assert is_configured() is False
+
+    # 4. Stored key configured
+    monkeypatch.setattr("aura.key_manager.has_key", lambda p: p == "google_cloud")
+    assert is_configured() is True
+    monkeypatch.setattr("aura.key_manager.has_key", lambda p: False)
     assert is_configured() is False
 
 

@@ -26,5 +26,17 @@ def get_google_cloud_config() -> dict[str, str | None]:
 
 
 def is_configured() -> bool:
-    """Return True if a Google Cloud project or GEMINI_API_KEY is set."""
-    return get_google_cloud_project() is not None or "GEMINI_API_KEY" in os.environ
+    """Return True if a Google Cloud project or any Gemini API key is configured."""
+    if get_google_cloud_project() is not None:
+        return True
+    if "GEMINI_API_KEY" in os.environ:
+        return True
+    if "GOOGLE_API_KEY" in os.environ:
+        return True
+    try:
+        from aura.key_manager import has_key
+        if has_key("google_cloud"):
+            return True
+    except (ImportError, AttributeError):
+        pass
+    return False

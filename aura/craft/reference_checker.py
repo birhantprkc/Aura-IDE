@@ -71,6 +71,16 @@ class ReferenceChecker:
     # Workspace index
     # ------------------------------------------------------------------
 
+    def invalidate_workspace_index(self, workspace_root: Path | None = None) -> None:
+        """Clear cached workspace index so the next check rebuilds it lazily."""
+        if workspace_root is not None and self._workspace_root != workspace_root:
+            return
+        self._workspace_symbols = None
+        self._workspace_modules = None
+        self._workspace_root = None
+        self._workspace_functions = {}
+        self._workspace_classes = {}
+
     def _build_workspace_index(self, workspace_root: Path) -> None:
         if self._workspace_symbols is not None and self._workspace_root == workspace_root:
             return
@@ -204,6 +214,16 @@ class ReferenceChecker:
         except SyntaxError:
             return []
 
+        package_parts: list[str] = []
+        if getattr(capsule, "path", None) and workspace_root:
+            try:
+                rel_path = capsule.path.relative_to(workspace_root)
+                parts = list(rel_path.parts)
+                if parts:
+                    package_parts = parts[:-1]
+            except ValueError:
+                pass
+
         local_defs = set()
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -223,11 +243,26 @@ class ReferenceChecker:
                     imported_names[name] = alias.name
                     import_sources.append((alias.name, node, None))
             elif isinstance(node, ast.ImportFrom):
-                if node.module:
+                level = node.level or 0
+                base_module = node.module or ""
+
+                if level > 0 and package_parts:
+                    if level == 1:
+                        resolved_parts = list(package_parts)
+                    else:
+                        resolved_parts = package_parts[:-(level - 1)]
+
+                    if base_module:
+                        resolved_parts.append(base_module)
+                    resolved_module = ".".join(resolved_parts)
+                else:
+                    resolved_module = base_module if level == 0 else ("." * level) + base_module
+
+                if resolved_module:
                     for alias in node.names:
                         name = alias.asname or alias.name
-                        imported_names[name] = f"{node.module}.{alias.name}"
-                        import_sources.append((node.module, node, alias.name))
+                        imported_names[name] = f"{resolved_module}.{alias.name}"
+                        import_sources.append((resolved_module, node, alias.name))
 
         issues: list[CraftIssue] = []
         builtin_names = set(dir(builtins))

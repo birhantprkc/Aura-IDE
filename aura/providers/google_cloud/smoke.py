@@ -59,23 +59,74 @@ def validate_config() -> list[str]:
     if cfg["location"] != DEFAULT_LOCATION:
         failures.append(f"location should default to {DEFAULT_LOCATION}")
 
-    # With env vars
-    os.environ[GOOGLE_CLOUD_PROJECT_ENV] = "test-project"
-    os.environ[GOOGLE_CLOUD_LOCATION_ENV] = "us-central1"
+    # Save existing env keys and store key mock if any to make it immune to host env
+    orig_project = os.environ.get(GOOGLE_CLOUD_PROJECT_ENV)
+    orig_location = os.environ.get(GOOGLE_CLOUD_LOCATION_ENV)
+    orig_gemini = os.environ.get("GEMINI_API_KEY")
+    orig_google = os.environ.get("GOOGLE_API_KEY")
+
+    # Clear env
+    for k in [GOOGLE_CLOUD_PROJECT_ENV, GOOGLE_CLOUD_LOCATION_ENV, "GEMINI_API_KEY", "GOOGLE_API_KEY"]:
+        os.environ.pop(k, None)
+
+    # Mock has_key so stored keys don't interfere
+    import aura.key_manager
+    orig_has_key = getattr(aura.key_manager, "has_key", None)
+    aura.key_manager.has_key = lambda p: False
+
     try:
+        # With env vars
+        os.environ[GOOGLE_CLOUD_PROJECT_ENV] = "test-project"
+        os.environ[GOOGLE_CLOUD_LOCATION_ENV] = "us-central1"
         if get_google_cloud_project() != "test-project":
             failures.append("get_google_cloud_project did not read env")
         if get_google_cloud_location() != "us-central1":
             failures.append("get_google_cloud_location did not read env")
         if not is_configured():
             failures.append("is_configured should be True when project is set")
-    finally:
+
+        # Without project
         del os.environ[GOOGLE_CLOUD_PROJECT_ENV]
         del os.environ[GOOGLE_CLOUD_LOCATION_ENV]
+        if is_configured():
+            failures.append("is_configured should be False after env cleanup")
 
-    # Without project
-    if is_configured():
-        failures.append("is_configured should be False after env cleanup")
+        # With GEMINI_API_KEY
+        os.environ["GEMINI_API_KEY"] = "gemini-test"
+        if not is_configured():
+            failures.append("is_configured should be True when GEMINI_API_KEY is set")
+        del os.environ["GEMINI_API_KEY"]
+
+        # With GOOGLE_API_KEY
+        os.environ["GOOGLE_API_KEY"] = "google-test"
+        if not is_configured():
+            failures.append("is_configured should be True when GOOGLE_API_KEY is set")
+        del os.environ["GOOGLE_API_KEY"]
+
+        # With stored key
+        aura.key_manager.has_key = lambda p: p == "google_cloud"
+        if not is_configured():
+            failures.append("is_configured should be True when stored key is set")
+
+    finally:
+        # Restore environment
+        if orig_project is not None:
+            os.environ[GOOGLE_CLOUD_PROJECT_ENV] = orig_project
+        if orig_location is not None:
+            os.environ[GOOGLE_CLOUD_LOCATION_ENV] = orig_location
+        if orig_gemini is not None:
+            os.environ["GEMINI_API_KEY"] = orig_gemini
+        if orig_google is not None:
+            os.environ["GOOGLE_API_KEY"] = orig_google
+
+        # Restore has_key
+        if orig_has_key is not None:
+            aura.key_manager.has_key = orig_has_key
+        else:
+            try:
+                delattr(aura.key_manager, "has_key")
+            except AttributeError:
+                pass
 
     return failures
 

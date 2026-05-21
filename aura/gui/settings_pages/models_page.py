@@ -117,25 +117,6 @@ class ModelsPage(QWidget):
             "Controls response randomness for the worker model. Lower = more deterministic."
         )
 
-        # Refresh buttons
-        self._planner_refresh_btn = QPushButton("Refresh  ▾")
-        self._planner_refresh_btn.setFixedWidth(80)
-        self._planner_refresh_btn.setStyleSheet(
-            f"color: {FG_DIM}; padding: 2px 4px;"
-        )
-        self._planner_refresh_btn.setToolTip(
-            "Fetch the latest available models from this provider"
-        )
-
-        self._worker_refresh_btn = QPushButton("Refresh  ▾")
-        self._worker_refresh_btn.setFixedWidth(80)
-        self._worker_refresh_btn.setStyleSheet(
-            f"color: {FG_DIM}; padding: 2px 4px;"
-        )
-        self._worker_refresh_btn.setToolTip(
-            "Fetch the latest available models from this provider"
-        )
-
         # --- 2. Setup Layout ---
 
         form.addRow("", self._pw_mode_chk)
@@ -143,7 +124,6 @@ class ModelsPage(QWidget):
 
         planner_model_row = QVBoxLayout()
         planner_model_row.setSpacing(2)
-        planner_model_row.addWidget(self._planner_refresh_btn)
         planner_model_row.addWidget(self._planner_model_combo)
         form.addRow("Planner model:", planner_model_row)
 
@@ -160,7 +140,6 @@ class ModelsPage(QWidget):
 
         worker_model_row = QVBoxLayout()
         worker_model_row.setSpacing(2)
-        worker_model_row.addWidget(self._worker_refresh_btn)
         worker_model_row.addWidget(self._worker_model_combo)
         form.addRow("Worker model:", worker_model_row)
 
@@ -207,8 +186,6 @@ class ModelsPage(QWidget):
         self._pw_mode_chk.toggled.connect(self._on_pw_toggled)
         self._planner_provider_combo.currentIndexChanged.connect(self._on_planner_provider_changed)
         self._worker_provider_combo.currentIndexChanged.connect(self._on_worker_provider_changed)
-        self._planner_refresh_btn.clicked.connect(self._on_planner_refresh)
-        self._worker_refresh_btn.clicked.connect(self._on_worker_refresh)
 
     # --- Thread cleanup ---
 
@@ -304,16 +281,6 @@ class ModelsPage(QWidget):
             resolve_role_default_model(provider_id, "worker"),
             role="worker",
         )
-
-    def _on_planner_refresh(self) -> None:
-        provider_id: ProviderId = self._planner_provider_combo.currentData()  # type: ignore[assignment]
-        if provider_id:
-            self._start_discovery(provider_id)
-
-    def _on_worker_refresh(self) -> None:
-        provider_id: ProviderId = self._worker_provider_combo.currentData()  # type: ignore[assignment]
-        if provider_id:
-            self._start_discovery(provider_id)
 
     def _populate_all_role_models(self) -> None:
         planner_pid: ProviderId = self._planner_provider_combo.currentData()  # type: ignore[assignment]

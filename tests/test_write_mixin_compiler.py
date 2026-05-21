@@ -165,3 +165,76 @@ class TestWriteMixinCompiler:
             args = mock_craft.call_args[0]
             assert args[0]["rel_path"] == "existing.py"
             assert args[1] == "edit_symbol"
+
+    @pytest.mark.usefixtures("enable_craft")
+    def test_invalidation_on_approved_write_integration(self, tmp_workspace):
+        reg = DummyWriteRegistry(tmp_workspace)
+        
+        class MockApprove:
+            action = "approve"
+            metadata = {}
+        approve_cb = MagicMock(return_value=MockApprove())
+        
+        # Write 1: Add a symbol to constants.py
+        res1 = _handler("write_file")(
+            reg, {"path": "constants.py", "content": "MY_SYMBOL = 42\n"}, approve_cb, False
+        )
+        assert res1.ok
+        
+        # Write 2: Use that symbol in another file
+        res2 = _handler("write_file")(
+            reg, {"path": "main.py", "content": "from constants import MY_SYMBOL\nprint(MY_SYMBOL)\n"}, approve_cb, False
+        )
+        assert res2.ok
+        assert res2.payload.get("bounce") is not True
+
+    @pytest.mark.usefixtures("enable_craft")
+    def test_rejected_writes_do_not_invalidate(self, tmp_workspace):
+        reg = DummyWriteRegistry(tmp_workspace)
+        
+        class MockReject:
+            action = "reject"
+            metadata = {}
+        approve_cb = MagicMock(return_value=MockReject())
+        
+        with patch("aura.conversation.tools._write_mixin.compiler_service.invalidate_workspace_index") as mock_inval:
+            res = _handler("write_file")(
+                reg, {"path": "constants.py", "content": "MY_SYMBOL = 42\n"}, approve_cb, False
+            )
+            assert not res.ok
+            mock_inval.assert_not_called()
+
+    @pytest.mark.usefixtures("enable_craft")
+    def test_compiler_bounces_do_not_invalidate(self, tmp_workspace):
+        reg = DummyWriteRegistry(tmp_workspace)
+        
+        class MockApprove:
+            action = "approve"
+            metadata = {}
+        approve_cb = MagicMock(return_value=MockApprove())
+        
+        with patch("aura.conversation.tools._write_mixin.compiler_service.invalidate_workspace_index") as mock_inval:
+            res = _handler("write_file")(
+                reg, {"path": "main.py", "content": "import does_not_exist\n"}, approve_cb, False
+            )
+            assert not res.ok
+            assert res.payload.get("bounce") is True
+            mock_inval.assert_not_called()
+
+    @pytest.mark.usefixtures("enable_craft")
+    def test_reject_all_does_not_invalidate(self, tmp_workspace):
+        reg = DummyWriteRegistry(tmp_workspace)
+        
+        class MockApprove:
+            action = "approve"
+            metadata = {}
+        approve_cb = MagicMock(return_value=MockApprove())
+        
+        with patch("aura.conversation.tools._write_mixin.compiler_service.invalidate_workspace_index") as mock_inval:
+            res = _handler("write_file")(
+                reg, {"path": "main.py", "content": "MY_SYMBOL = 42\n"}, approve_cb, True
+            )
+            assert not res.ok
+            assert res.extras.get("rejected_all") is True
+            mock_inval.assert_not_called()
+

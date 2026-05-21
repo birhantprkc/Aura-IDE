@@ -19,7 +19,7 @@ from aura.models import PROVIDERS
 
 def test_all_providers_registered():
     """The PROVIDERS dict should contain all expected providers."""
-    expected = {"deepseek", "openai", "openrouter", "anthropic", "google_cloud", "gemini_cli", "claude_code", "codex"}
+    expected = {"deepseek", "openai", "openrouter", "anthropic", "google_cloud", "claude_code", "codex"}
     assert set(PROVIDERS.keys()) == expected
 
 
@@ -32,7 +32,7 @@ def test_provider_ids_are_valid():
 def test_provider_bases_are_urls():
     """Every base_url should start with https:// (except google_cloud and agents)."""
     for cfg in PROVIDERS.values():
-        if cfg.id in ("google_cloud", "gemini_cli", "claude_code", "codex"):
+        if cfg.id in ("google_cloud", "claude_code", "codex"):
             continue
         assert cfg.base_url.startswith("https://")
 
@@ -40,7 +40,7 @@ def test_provider_bases_are_urls():
 def test_provider_has_env_key():
     """Every real provider should have a non-empty primary env_key."""
     for cfg in PROVIDERS.values():
-        if cfg.id in ("gemini_cli", "claude_code", "codex"):
+        if cfg.id in ("claude_code", "codex"):
             continue
         assert cfg.env_key
         assert cfg.env_key.startswith(("OPEN", "DEEPSEEK", "ANTHROPIC", "GOOGLE_CLOUD_PROJECT", "GEMINI"))
@@ -368,7 +368,7 @@ def test_redact_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_provider_registry_contains_expected():
     """provider_registry should contain the expected supported providers."""
     from aura.providers.registry import provider_registry
-    expected = {"deepseek", "openai", "openrouter", "anthropic", "google_cloud", "gemini_cli", "claude_code", "codex"}
+    expected = {"deepseek", "openai", "openrouter", "anthropic", "google_cloud", "claude_code", "codex"}
     assert set(provider_registry.ids()) == expected
 
 
@@ -385,7 +385,7 @@ def test_provider_registry_creates_client():
     from aura.providers.google_cloud.client import GoogleCloudClient
     from aura.providers.registry import provider_registry
     for pid in provider_registry.ids():
-        if pid in ("gemini_cli", "claude_code", "codex"):
+        if pid in ("claude_code", "codex"):
             continue
         client = provider_registry.create_client(pid)
         if pid == "google_cloud":
@@ -410,3 +410,32 @@ def test_settings_migrates_vertex_ai_to_deepseek():
     s = AppSettings.from_dict(data)
     assert s.provider == DEFAULT_PROVIDER
     assert s.provider == "deepseek"
+
+
+def test_google_cloud_api_key_fallbacks(monkeypatch):
+    """get_api_key for google_cloud should check GEMINI_API_KEY, then GOOGLE_API_KEY, then stored keys."""
+    from aura.config import get_api_key
+
+    # Clear keys/environment
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr("aura.config._stored_get_key", lambda p: None)
+
+    # 1. No keys configured
+    assert get_api_key("google_cloud") is None
+
+    # 2. GOOGLE_API_KEY fallback
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-secret")
+    assert get_api_key("google_cloud") == "google-secret"
+
+    # 3. GEMINI_API_KEY takes precedence
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    assert get_api_key("google_cloud") == "gemini-secret"
+
+    # Clear environment to test stored keys fallback
+    monkeypatch.delenv("GEMINI_API_KEY")
+    monkeypatch.delenv("GOOGLE_API_KEY")
+
+    # 4. Stored key fallback
+    monkeypatch.setattr("aura.config._stored_get_key", lambda p: "stored-secret" if p == "google_cloud" else None)
+    assert get_api_key("google_cloud") == "stored-secret"

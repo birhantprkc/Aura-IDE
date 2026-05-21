@@ -44,13 +44,22 @@ class GoogleCloudClient:
     def _get_client(self) -> Any:
         """Lazily create and return the google-genai Client."""
         if self._client is None:
+            import os
             from google import genai  # type: ignore[import-untyped]
             from google.genai import types
 
             # 120 seconds timeout (120,000 ms) to prevent hanging under unstable network
             http_options = types.HttpOptions(timeout=120000)
+            use_vertex = bool(self._project) or os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in ("1", "true")
 
-            if self._api_key:
+            if use_vertex:
+                self._client = genai.Client(
+                    vertexai=True,
+                    project=self._project,
+                    location=self._location,
+                    http_options=http_options,
+                )
+            elif self._api_key:
                 self._client = genai.Client(
                     api_key=self._api_key,
                     http_options=http_options,
@@ -68,7 +77,7 @@ class GoogleCloudClient:
         try:
             client = self._get_client()
             models = client.models.list()
-            return [m.name for m in models]
+            return [m.name.removeprefix("models/") for m in models]
         except Exception:
             return []
 
@@ -76,7 +85,13 @@ class GoogleCloudClient:
         try:
             client = self._get_client()
             models = client.models.list()
-            return [{"id": m.name, "name": getattr(m, "display_name", None) or m.name} for m in models]
+            return [
+                {
+                    "id": m.name.removeprefix("models/"),
+                    "name": getattr(m, "display_name", None) or m.name.removeprefix("models/"),
+                }
+                for m in models
+            ]
         except Exception:
             return []
 

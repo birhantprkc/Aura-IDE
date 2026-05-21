@@ -1,8 +1,9 @@
 from __future__ import annotations
 import ast
-from .types import ProposalCapsule, CraftIssue, CompiledPatch, CompilerBounce, CompilerReject, CraftDecision
+from .types import ProposalCapsule, CraftIssue, CompiledPatch, CompilerBounce, CompilerReject, CraftDecision, filter_delta_issues
 from .engine import CraftEngine
 from .contract_gate import ContractGate
+import dataclasses
 from .reference_checker import ReferenceChecker
 from .mutator import SafeMutator
 from .formatter import CodeFormatter
@@ -91,17 +92,39 @@ class CompilerService:
                             existing_issues_set.add((new_issue.code, new_issue.line))
                             
         # Stage 3: Reference Validation
-        ref_issues = self._ref_checker.check(capsule, workspace_root=workspace_root)
-        if ref_issues:
-            # Merge reference issues into the decision
-            if decision.approved:
-                decision = CraftDecision(approved=False, issues=ref_issues, cleaned_code=capsule.proposed_code)
-            else:
-                existing_issues_set = {(issue.code, issue.line) for issue in decision.issues}
-                for new_issue in ref_issues:
-                    if (new_issue.code, new_issue.line) not in existing_issues_set:
-                        decision.issues.append(new_issue)
-                        existing_issues_set.add((new_issue.code, new_issue.line))
+        proposed_ref_issues = self._ref_checker.check(capsule, workspace_root=workspace_root)
+        if proposed_ref_issues:
+            original_ref_issues = []
+            if not capsule.is_new_file and capsule.original_code:
+                baseline_capsule = dataclasses.replace(
+                    capsule,
+                    proposed_code=capsule.original_code,
+                    changed_line_ranges=[]
+                )
+                try:
+                    baseline_capsule.ast_tree = ast.parse(capsule.original_code)
+                except SyntaxError:
+                    baseline_capsule.ast_tree = None
+                
+                original_ref_issues = self._ref_checker.check(baseline_capsule, workspace_root=workspace_root)
+
+            filtered_ref_issues = filter_delta_issues(
+                proposed_issues=proposed_ref_issues,
+                original_issues=original_ref_issues,
+                changed_ranges=capsule.changed_line_ranges,
+                is_new_file=capsule.is_new_file
+            )
+
+            # Merge filtered reference issues into the decision
+            if filtered_ref_issues:
+                if decision.approved:
+                    decision = CraftDecision(approved=False, issues=filtered_ref_issues, cleaned_code=capsule.proposed_code)
+                else:
+                    existing_issues_set = {(issue.code, issue.line) for issue in decision.issues}
+                    for new_issue in filtered_ref_issues:
+                        if (new_issue.code, new_issue.line) not in existing_issues_set:
+                            decision.issues.append(new_issue)
+                            existing_issues_set.add((new_issue.code, new_issue.line))
                         
         # Final Stage: CodeFormatter
         if decision.approved:
@@ -118,6 +141,10 @@ class CompilerService:
                 lines.append(f"  Suggestion: {issue.suggestion}")
         return "\n".join(lines)
     
+    def invalidate_workspace_index(self, workspace_root=None) -> None:
+        """Clear cached workspace index in the reference checker."""
+        self._ref_checker.invalidate_workspace_index(workspace_root)
+
     def reset_attempts(self, proposal_id: str) -> None:
         """Clear retry tracking for a proposal."""
         self._attempts.pop(proposal_id, None)

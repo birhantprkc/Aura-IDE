@@ -63,9 +63,16 @@ def get_api_key(provider_id: str) -> str | None:
     cfg = provider_registry.get(provider_id)
 
     # 1. Environment variable takes precedence.
-    val = os.environ.get(cfg.env_key)
-    if val:
-        return val
+    if cfg.env_key:
+        val: str | None = os.environ.get(cfg.env_key)
+        if val:
+            return val
+
+    # 1b. Extra fallback for google_cloud using GOOGLE_API_KEY
+    if provider_id == "google_cloud":
+        google_val: str | None = os.environ.get("GOOGLE_API_KEY")
+        if google_val:
+            return google_val
 
     # 2. Stored key (hardware-tethered, auto-migrates legacy plaintext)
     return _stored_get_key(provider_id)

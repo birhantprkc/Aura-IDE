@@ -167,56 +167,48 @@ OPENROUTER_PRICING: dict[str, dict[str, float]] = {
 # ---------------------------------------------------------------------------
 
 GOOGLE_CLOUD_MODELS: dict[str, ModelInfo] = {
-    "gemini-3.1-pro-preview": ModelInfo(
-        id="gemini-3.1-pro-preview",
-        label="Gemini 3.1 Pro Preview",
-        input_per_m_usd=5.00,
-        output_per_m_usd=20.00,
-        cache_hit_per_m_usd=2.50,
-    ),
-    "gemini-3-flash-preview": ModelInfo(
-        id="gemini-3-flash-preview",
-        label="Gemini 3 Flash Preview",
-        input_per_m_usd=0.15,
-        output_per_m_usd=0.60,
-        cache_hit_per_m_usd=0.075,
-    ),
-    "gemini-3.1-flash-lite": ModelInfo(
-        id="gemini-3.1-flash-lite",
-        label="Gemini 3.1 Flash-Lite",
-        input_per_m_usd=0.075,
-        output_per_m_usd=0.30,
-        cache_hit_per_m_usd=0.0375,
-    ),
     "gemini-2.5-pro": ModelInfo(
         id="gemini-2.5-pro",
         label="Gemini 2.5 Pro",
         input_per_m_usd=1.25,
-        output_per_m_usd=10.00,
-        cache_hit_per_m_usd=0.625,
+        output_per_m_usd=5.00,
+        cache_hit_per_m_usd=0.3125,
     ),
     "gemini-2.5-flash": ModelInfo(
         id="gemini-2.5-flash",
         label="Gemini 2.5 Flash",
-        input_per_m_usd=0.15,
-        output_per_m_usd=0.60,
-        cache_hit_per_m_usd=0.075,
-    ),
-    "gemini-2.5-flash-lite": ModelInfo(
-        id="gemini-2.5-flash-lite",
-        label="Gemini 2.5 Flash-Lite",
         input_per_m_usd=0.075,
         output_per_m_usd=0.30,
-        cache_hit_per_m_usd=0.0375,
+        cache_hit_per_m_usd=0.01875,
+    ),
+    "gemini-2.0-flash": ModelInfo(
+        id="gemini-2.0-flash",
+        label="Gemini 2.0 Flash",
+        input_per_m_usd=0.10,
+        output_per_m_usd=0.40,
+        cache_hit_per_m_usd=0.025,
+    ),
+    "gemini-1.5-pro": ModelInfo(
+        id="gemini-1.5-pro",
+        label="Gemini 1.5 Pro",
+        input_per_m_usd=1.25,
+        output_per_m_usd=5.00,
+        cache_hit_per_m_usd=0.3125,
+    ),
+    "gemini-1.5-flash": ModelInfo(
+        id="gemini-1.5-flash",
+        label="Gemini 1.5 Flash",
+        input_per_m_usd=0.075,
+        output_per_m_usd=0.30,
+        cache_hit_per_m_usd=0.01875,
     ),
 }
 GOOGLE_CLOUD_PRICING: dict[str, dict[str, float]] = {
-    "gemini-3.1-pro-preview": {"in_miss": 5.00, "in_hit": 2.50, "out": 20.00},
-    "gemini-3-flash-preview": {"in_miss": 0.15, "in_hit": 0.075, "out": 0.60},
-    "gemini-3.1-flash-lite": {"in_miss": 0.075, "in_hit": 0.0375, "out": 0.30},
-    "gemini-2.5-pro": {"in_miss": 1.25, "in_hit": 0.625, "out": 10.00},
-    "gemini-2.5-flash": {"in_miss": 0.15, "in_hit": 0.075, "out": 0.60},
-    "gemini-2.5-flash-lite": {"in_miss": 0.075, "in_hit": 0.0375, "out": 0.30},
+    "gemini-2.5-pro": {"in_miss": 1.25, "in_hit": 0.3125, "out": 5.00},
+    "gemini-2.5-flash": {"in_miss": 0.075, "in_hit": 0.01875, "out": 0.30},
+    "gemini-2.0-flash": {"in_miss": 0.10, "in_hit": 0.025, "out": 0.40},
+    "gemini-1.5-pro": {"in_miss": 1.25, "in_hit": 0.3125, "out": 5.00},
+    "gemini-1.5-flash": {"in_miss": 0.075, "in_hit": 0.01875, "out": 0.30},
 }
 
 # ---------------------------------------------------------------------------
@@ -268,23 +260,6 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "default_thinking": "off",
         "models": GOOGLE_CLOUD_MODELS,
         "pricing": GOOGLE_CLOUD_PRICING,
-    },
-    "gemini_cli": {
-        "label": "Gemini CLI",
-        "base_url": "",
-        "env_key": "",
-        "default_model": "gemini-cli",
-        "default_thinking": "off",
-        "models": {
-            "gemini-cli": ModelInfo(
-                id="gemini-cli",
-                label="Gemini CLI Agent",
-                input_per_m_usd=0.0,
-                output_per_m_usd=0.0,
-                cache_hit_per_m_usd=0.0,
-            )
-        },
-        "pricing": {},
     },
     "claude_code": {
         "label": "Claude Code",

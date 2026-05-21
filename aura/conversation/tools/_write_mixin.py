@@ -588,6 +588,9 @@ class WriteHandlersMixin:
         target.parent.mkdir(parents=True, exist_ok=True)
         backup_path = _reg.backup_existing(self._root, target)
         target.write_text(req.new_content, encoding="utf-8")
+
+        if compiler_service is not None:
+            compiler_service.invalidate_workspace_index(self._root)
         rel_backup = (
             safe_relative_to(backup_path, self._root).as_posix() if backup_path is not None else None
         )
