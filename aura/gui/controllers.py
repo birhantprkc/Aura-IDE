@@ -132,11 +132,11 @@ class ToolStreamController(QObject):
                 if self._tool_name == "run_research" and content != self._goal:
                     self.goal_updated.emit(content)
 
-            # Update tasks for update_todo_list
-            if self._tool_name == "update_todo_list":
-                tasks = parsed.get("tasks")
-                if isinstance(tasks, list):
-                    self.todo_updated.emit(tasks)
+            # Update tasks for update_todo_list (Disabled: final-result-only stabilization)
+            # if self._tool_name == "update_todo_list":
+            #     tasks = parsed.get("tasks")
+            #     if isinstance(tasks, list):
+            #         self.todo_updated.emit(tasks)
 
         except json.JSONDecodeError:
             # Buffer is still incomplete JSON — emit raw buffer for now
@@ -169,14 +169,14 @@ class ToolStreamController(QObject):
                     self._last_content = content
                     self.content_updated.emit(content)
 
-            # Partial task extraction for update_todo_list
-            if self._tool_name == "update_todo_list":
-                now = time.monotonic()
-                if now - self._last_todo_emit >= self._TODO_THROTTLE:
-                    tasks = self._extract_partial_tasks()
-                    if tasks is not None:
-                        self._last_todo_emit = now
-                        self.todo_updated.emit(tasks)
+            # Partial task extraction for update_todo_list (Disabled: final-result-only stabilization)
+            # if self._tool_name == "update_todo_list":
+            #     now = time.monotonic()
+            #     if now - self._last_todo_emit >= self._TODO_THROTTLE:
+            #         tasks = self._extract_partial_tasks()
+            #         if tasks is not None:
+            #             self._last_todo_emit = now
+            #             self.todo_updated.emit(tasks)
 
     def _extract_partial_string(self, key: str) -> str | None:
         """Surgically extract a JSON string value from the buffer, handling escapes."""

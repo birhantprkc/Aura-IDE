@@ -113,13 +113,17 @@ class WorkerEventRelay(QObject):
             self.toolResult.emit(
                 tool_call_id, ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {}
             )
-            if ev.name == "update_todo_list":
-                tasks = (ev.extras or {}).get("tasks", [])
-                self.todoListUpdated.emit(tool_call_id, tasks)
             try:
                 parsed = json.loads(ev.result)
             except (json.JSONDecodeError, TypeError):
                 parsed = {}
+            if ev.name == "update_todo_list":
+                tasks = (ev.extras or {}).get("tasks")
+                if not tasks and isinstance(parsed, dict):
+                    tasks = parsed.get("tasks")
+                if not isinstance(tasks, list):
+                    tasks = []
+                self.todoListUpdated.emit(tool_call_id, tasks)
             if (
                 isinstance(parsed, dict)
                 and parsed.get("recoverable")
