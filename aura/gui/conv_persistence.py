@@ -41,6 +41,8 @@ class ConversationPersistence(QObject):
     save_failed = Signal(str)
     # Emitted after apply_loaded finishes so the UI can refresh status.
     needs_status_refresh = Signal()
+    # Emitted after project thread metadata is updated by auto-save.
+    project_thread_updated = Signal()
 
     def __init__(
         self,
@@ -121,6 +123,7 @@ class ConversationPersistence(QObject):
             store.save_thread(project, thread)
             project.last_thread_id = thread.id
             store.save_project(project)
+            self.project_thread_updated.emit()
         except Exception:
             logging.exception("Failed to update project thread metadata")
 
@@ -224,6 +227,11 @@ class ConversationPersistence(QObject):
             return None
         self.apply_loaded(loaded)
         return loaded
+        
+    def load_and_apply(self, path: Path) -> None:
+        """Load a conversation from a file path and apply it to the live bridge/view."""
+        loaded = load_conversation(path)
+        self.apply_loaded(loaded)
 
     def restore_last(self, workspace_root) -> None:
         """Restore the most recently saved conversation, if any.
