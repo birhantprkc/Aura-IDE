@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from aura.projects.store import ProjectStore
+from aura.projects.store import ProjectStore, _clean_thread_title, _full_clean_thread_title
 
 
 def test_create_or_update_project_creates_metadata(tmp_path):
@@ -128,3 +128,90 @@ def test_touch_thread_updates_conversation_path(tmp_path):
     loaded = store.load_thread(project, thread.id)
     assert loaded is not None
     assert loaded.conversation_path == conv_path
+
+
+def test_clean_thread_title_normal():
+    assert _clean_thread_title("Hello world") == "Hello world"
+
+
+def test_clean_thread_title_bullet():
+    assert _clean_thread_title("- implement feature") == "implement feature"
+    assert _clean_thread_title("* implement feature") == "implement feature"
+    assert _clean_thread_title("• implement feature") == "implement feature"
+
+
+def test_clean_thread_title_numbered():
+    assert _clean_thread_title("1. first item") == "first item"
+    assert _clean_thread_title("12) first item") == "first item"
+
+
+def test_clean_thread_title_markdown_bold():
+    assert _clean_thread_title("**important** task") == "important task"
+
+
+def test_clean_thread_title_fence():
+    assert _clean_thread_title("```\ncode block\n```") == "Conversation"
+
+
+def test_clean_thread_title_multiline_code_first():
+    assert _clean_thread_title("```python\nprint('hi')\n```\nActual question?") == "Actual question?"
+
+
+def test_clean_thread_title_log_lines():
+    assert _clean_thread_title("[ERROR] something broke\nWhat happened?") == "What happened?"
+
+
+def test_clean_thread_title_pytest_summary():
+    assert _clean_thread_title("42 passed / 3 failed\nFixed the bug") == "Fixed the bug"
+
+
+def test_clean_thread_title_long():
+    text = "This is a very long text that will definitely exceed the standard character limit of seventy-two characters"
+    cleaned = _clean_thread_title(text, 72)
+    assert len(cleaned) <= 75  # 72 + '...'
+    assert cleaned.endswith("...")
+
+
+def test_clean_thread_title_long_word_boundary():
+    # word boundary space is before 50% (36), so it does a hard break at 72 with ...
+    text = "ThisIsAVeryLongWordWithNoSpacesUntilVeryLateInTheSentenceSoThereIsNoSpac OfTheMaxLen"
+    cleaned = _clean_thread_title(text, 72)
+    assert len(cleaned) == 75
+    assert cleaned.startswith("ThisIsAVeryLongWordWithNoSpacesUntilVeryLateInTheSentenceSoThereIsNoSpac")
+
+
+def test_clean_thread_title_empty():
+    assert _clean_thread_title("") == "Conversation"
+
+
+def test_clean_thread_title_whitespace_only():
+    assert _clean_thread_title("   ") == "Conversation"
+
+
+def test_clean_thread_title_excessive_punct():
+    assert _clean_thread_title("Hello world!!!") == "Hello world"
+
+
+def test_clean_thread_title_file_path():
+    assert _clean_thread_title("/home/user/file.py error occurred") == "error occurred"
+    assert _clean_thread_title("C:\\Users\\file.py error occurred") == "error occurred"
+
+
+def test_clean_thread_title_checkbox():
+    assert _clean_thread_title("- [x] done task") == "done task"
+    assert _clean_thread_title("- [X] done task") == "done task"
+
+
+def test_clean_thread_title_stem_fallback():
+    assert _clean_thread_title("```\n```") == "Conversation"
+
+
+def test_clean_thread_title_multi_sentence():
+    assert _clean_thread_title("First line here.\nSecond line here.") == "First line here."
+
+
+def test_full_clean_thread_title():
+    # Verify _full_clean_thread_title does not truncate
+    text = "This is a very long text that will definitely exceed the standard character limit of seventy-two characters"
+    cleaned = _full_clean_thread_title(text)
+    assert cleaned == "This is a very long text that will definitely exceed the standard character limit of seventy-two characters"

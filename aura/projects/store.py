@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -17,24 +18,96 @@ def _new_id() -> str:
     return uuid4().hex[:12]
 
 
-def _clean_thread_title(text: str, max_len: int = 120) -> str:
-    """Clean a thread title for display in the sidebar.
-
-    Strips whitespace, collapses newlines/multi-spaces into single spaces,
-    and caps at *max_len* with an ellipsis.  Ensures sidebar titles are
-    never multi-line blobs of pasted test output or logs.
-    """
+def _full_clean_thread_title(text: str) -> str:
     if not text:
         return "Conversation"
-    cleaned = " ".join(text.strip().split())
-    if not cleaned:
+
+    # Step 1: Splitting text into lines
+    lines = text.splitlines()
+
+    # Regex patterns
+    timestamp_pattern = re.compile(r'^\d{4}[-/]\d{2}[-/]\d{2}')
+    log_level_pattern = re.compile(r'\b(ERROR|WARN|INFO|DEBUG)\b')
+    pytest_pattern = re.compile(r'\b\d+\s+(?:passed|failed|error|errors|skipped)\b')
+    bullet_pattern = re.compile(r'^(?:[-*•]\s+|\[[xX]\]\s+|\d+[\.)]\s+)')
+
+    cleaned_line = None
+    in_fence = False
+    for line in lines:
+        stripped = line.strip()
+        if "```" in stripped or "~~~" in stripped:
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+
+        if stripped.startswith("/") or re.match(r'^[a-zA-Z]:[/\\]', stripped):
+            parts = stripped.split(maxsplit=1)
+            stripped = parts[1].strip() if len(parts) > 1 else ""
+
+        if not stripped:
+            continue
+
+        # Noise checks:
+        # Date-prefixed timestamps
+        if timestamp_pattern.search(stripped):
+            continue
+
+        # Log levels
+        if log_level_pattern.search(stripped):
+            continue
+
+        # Pytest summary lines
+        if pytest_pattern.search(stripped):
+            continue
+
+        # <30% alphabetic chars
+        alpha_count = sum(c.isalpha() for c in stripped)
+        if (alpha_count / len(stripped)) < 0.3:
+            continue
+
+        # Found our line!
+        cleaned_line = stripped
+        break
+
+    if cleaned_line is None:
         return "Conversation"
+
+    # Step 4: Stripping leading bullets/numbering repeatedly
+    while True:
+        new_stripped = bullet_pattern.sub('', cleaned_line)
+        if new_stripped == cleaned_line:
+            break
+        cleaned_line = new_stripped
+
+    # Step 5: Stripping markdown bold/italic markers
+    cleaned_line = re.sub(r'\*\*(.*?)\*\*', r'\1', cleaned_line)
+    cleaned_line = re.sub(r'\*(.*?)\*', r'\1', cleaned_line)
+
+    # Step 6: Stripping leading # markers
+    cleaned_line = re.sub(r'^#+\s*', '', cleaned_line)
+
+    # Step 7: Collapsing whitespace
+    cleaned_line = " ".join(cleaned_line.split())
+
+    # Step 8: Stripping excessive trailing punctuation
+    cleaned_line = re.sub(r'[.,!?;:]{2,}$', '', cleaned_line)
+
+    # Step 9: If nothing remains
+    if not cleaned_line:
+        return "Conversation"
+
+    return cleaned_line
+
+
+def _clean_thread_title(text: str, max_len: int = 72) -> str:
+    cleaned = _full_clean_thread_title(text)
     if len(cleaned) <= max_len:
         return cleaned
-    # Truncate at a word boundary when reasonable
+
     truncated = cleaned[:max_len]
     last_space = truncated.rfind(" ")
-    if last_space > max_len * 0.6:
+    if last_space > max_len * 0.5:
         truncated = truncated[:last_space]
     return truncated.rstrip() + "..."
 
@@ -45,7 +118,7 @@ class ProjectStore:
         self._index_path: Path = self._data_dir / "index.json"
 
     @staticmethod
-    def clean_thread_title(text: str, max_len: int = 120) -> str:
+    def clean_thread_title(text: str, max_len: int = 72) -> str:
         return _clean_thread_title(text, max_len)
 
     def _load_index(self) -> dict:
@@ -183,7 +256,7 @@ class ProjectStore:
         self.save_thread(project, thread)
 
     def backfill_threads_from_conversations(
-        self, project: ProjectSpace, max_title_length: int = 200
+        self, project: ProjectSpace, max_title_length: int = 72
     ) -> list[ProjectThread]:
         """
         Scan .aura/conversations/*.json files and create ProjectThread entries
@@ -212,12 +285,13 @@ class ProjectStore:
                 continue
 
             # Derive title from first user message or filename
-            title = self._derive_title_from_conversation(conv_file, max_title_length)
+            display_title, full_title = self._derive_title_from_conversation(conv_file, max_title_length)
 
             thread = ProjectThread(
                 id=_new_id(),
                 project_id=project.id,
-                title=title,
+                title=display_title,
+                summary=full_title,
                 conversation_path=resolved,
                 created_at=_utc_iso(),
                 updated_at=_utc_iso(),
@@ -233,14 +307,14 @@ class ProjectStore:
         return new_threads
 
     @staticmethod
-    def _derive_title_from_conversation(path: Path, max_len: int = 120) -> str:
+    def _derive_title_from_conversation(path: Path, max_len: int = 72) -> tuple[str, str]:
         """Read a conversation JSON file and extract a clean title from the first user message."""
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return _clean_thread_title(path.stem, max_len)
+            return _clean_thread_title(path.stem, max_len), _full_clean_thread_title(path.stem)
         if not isinstance(data, dict):
-            return _clean_thread_title(path.stem, max_len)
+            return _clean_thread_title(path.stem, max_len), _full_clean_thread_title(path.stem)
 
         msgs = data.get("messages", [])
         for msg in msgs:
@@ -250,15 +324,15 @@ class ProjectStore:
                 continue
             content = msg.get("content")
             if isinstance(content, str) and content.strip():
-                return _clean_thread_title(content, max_len)
+                return _clean_thread_title(content, max_len), _full_clean_thread_title(content)
             if isinstance(content, list):
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
                         text = part.get("text", "")
                         if text.strip():
-                            return _clean_thread_title(text, max_len)
+                            return _clean_thread_title(text, max_len), _full_clean_thread_title(text)
         # Fallback: use filename stem
-        return _clean_thread_title(path.stem, max_len)
+        return _clean_thread_title(path.stem, max_len), _full_clean_thread_title(path.stem)
 
     @staticmethod
     def _load_project_from_root(root_path: Path) -> ProjectSpace | None:

@@ -83,6 +83,8 @@ class _ThreadRow(QFrame):
         layout.setSpacing(4)
 
         self.title_label = QLabel(thread.title)
+        tooltip = thread.summary if thread.summary else thread.title
+        self.title_label.setToolTip(tooltip)
         self.title_label.setStyleSheet(f"color: {FG_DIM}; font-size: 12px;")
         layout.addWidget(self.title_label, 1)
 
