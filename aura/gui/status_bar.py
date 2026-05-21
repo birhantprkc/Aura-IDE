@@ -73,7 +73,7 @@ class AuraStatusBar(QStatusBar):
 
         total_models = len(session_usage)
         if total_models == 0:
-            self._status_cost.setText("$0.0000")
+            self._status_cost.setText("$—")
             self._status_cost.setToolTip("")
         elif unknown_count == total_models:
             self._status_cost.setText("$?.????")
