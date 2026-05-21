@@ -10,9 +10,7 @@ import pytest
 from aura.gui.conv_persistence import ConversationPersistence
 
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -91,9 +89,7 @@ def mock_loaded():
     return loaded
 
 
-# ---------------------------------------------------------------------------
 # Test 1: new_conversation resets state
-# ---------------------------------------------------------------------------
 
 
 def test_new_conversation_resets_state(persistence, mock_bridge, mock_chat,
@@ -111,9 +107,7 @@ def test_new_conversation_resets_state(persistence, mock_bridge, mock_chat,
     assert persistence._active_replay_id == 8
 
 
-# ---------------------------------------------------------------------------
 # Test 2: auto_save spawns a daemon thread
-# ---------------------------------------------------------------------------
 
 
 @patch("aura.gui.conv_persistence.threading.Thread")
@@ -140,9 +134,7 @@ def test_auto_save_spawns_thread(mock_thread, persistence):
     mock_thread_instance.start.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
 # Test 3: auto_save skipped when no messages
-# ---------------------------------------------------------------------------
 
 
 @patch("aura.gui.conv_persistence.threading.Thread")
@@ -165,9 +157,7 @@ def test_auto_save_skipped_when_no_messages(mock_thread, persistence,
     mock_thread.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
 # Test 4: apply_loaded sets history and path
-# ---------------------------------------------------------------------------
 
 
 def test_apply_loaded_sets_history(persistence, mock_bridge, mock_loaded):
@@ -178,9 +168,7 @@ def test_apply_loaded_sets_history(persistence, mock_bridge, mock_loaded):
     assert persistence.current_conversation_path == mock_loaded.path
 
 
-# ---------------------------------------------------------------------------
 # Test 5: apply_loaded replays history
-# ---------------------------------------------------------------------------
 
 
 def test_apply_loaded_replays_history(persistence, mock_bridge, mock_chat,
@@ -204,9 +192,7 @@ def test_apply_loaded_replays_history(persistence, mock_bridge, mock_chat,
     mock_chat.add_user.assert_called_with("Hello")
 
 
-# ---------------------------------------------------------------------------
 # Test 6: apply_loaded switches provider if different
-# ---------------------------------------------------------------------------
 
 
 def test_apply_loaded_switches_provider_if_different(persistence, mock_bridge,
@@ -227,9 +213,7 @@ def test_apply_loaded_switches_provider_if_different(persistence, mock_bridge,
     assert mock_settings.provider == "openai"
 
 
-# ---------------------------------------------------------------------------
 # Test 7: restore_last noop when no conversation
-# ---------------------------------------------------------------------------
 
 
 @patch("aura.gui.conv_persistence.most_recent_conversation")
@@ -242,9 +226,7 @@ def test_restore_last_noop_when_no_conversation(mock_mrc, persistence):
         mock_apply.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
 # Test 8: restore_last loads conversation
-# ---------------------------------------------------------------------------
 
 
 @patch("aura.gui.conv_persistence.load_conversation")
@@ -260,9 +242,7 @@ def test_restore_last_loads_conversation(mock_mrc, mock_load, persistence):
         mock_apply.assert_called_once_with(mock_loaded)
 
 
-# ---------------------------------------------------------------------------
 # Test 9: save_succeeded updates path
-# ---------------------------------------------------------------------------
 
 
 def test_save_succeeded_updates_path(persistence):
@@ -277,9 +257,7 @@ def test_save_succeeded_updates_path(persistence):
     assert persistence.current_conversation_path == Path("/some/path.json")
 
 
-# ---------------------------------------------------------------------------
 # Test 10: stale save_succeeded after new_conversation is ignored
-# ---------------------------------------------------------------------------
 
 
 def test_stale_save_succeeded_after_new_conversation_keeps_path_none(
@@ -296,9 +274,7 @@ def test_stale_save_succeeded_after_new_conversation_keeps_path_none(
     assert persistence.current_conversation_path is None
 
 
-# ---------------------------------------------------------------------------
 # Test 11: open_conversation shows error on fail
-# ---------------------------------------------------------------------------
 
 
 @patch("aura.gui.conv_persistence.QFileDialog.getOpenFileName")
@@ -319,3 +295,68 @@ def test_open_conversation_shows_error_on_fail(mock_warning, mock_load,
 
     mock_warning.assert_called_once()
     assert result is None
+
+
+# Test 12: auto_save_creates_project_and_thread
+
+import copy
+import json
+from aura.conversation.persistence import save_conversation
+
+def test_update_project_thread_creates_project_and_thread(tmp_path, persistence, mock_bridge):
+    """_update_project_thread creates .aura/project.json and a thread file."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    h = copy.deepcopy(mock_bridge.history)
+    # Save a conversation first to get a real path
+    path = save_conversation(h, ws, model="m1", thinking="high", provider="deepseek")
+    
+    persistence._update_project_thread(ws, path, h)
+    
+    project_json = ws / ".aura" / "project.json"
+    assert project_json.exists()
+    threads_dir = ws / ".aura" / "threads"
+    assert threads_dir.is_dir()
+    thread_files = list(threads_dir.glob("*.json"))
+    assert len(thread_files) == 1
+    thread_data = json.loads(thread_files[0].read_text(encoding="utf-8"))
+    assert thread_data["conversation_path"] == path.as_posix()
+
+
+# Test 13: update_project_thread_reuses_existing_thread
+
+def test_update_project_thread_reuses_existing_thread(tmp_path, persistence, mock_bridge):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    h = copy.deepcopy(mock_bridge.history)
+    path = save_conversation(h, ws, model="m1", thinking="high", provider="deepseek")
+
+    persistence._update_project_thread(ws, path, h)
+    
+    threads_dir = ws / ".aura" / "threads"
+    thread_files_before = list(threads_dir.glob("*.json"))
+    assert len(thread_files_before) == 1
+    
+    # Call again
+    persistence._update_project_thread(ws, path, h)
+    
+    thread_files_after = list(threads_dir.glob("*.json"))
+    assert len(thread_files_after) == 1
+    assert thread_files_after[0].name == thread_files_before[0].name
+
+
+# Test 14: update_project_thread_does_not_break_on_error
+
+@patch("aura.gui.conv_persistence.ProjectStore")
+def test_update_project_thread_does_not_break_on_error(mock_project_store_class, tmp_path, persistence, mock_bridge):
+    mock_store_instance = MagicMock()
+    mock_store_instance.create_or_update_project.side_effect = Exception("Disk error")
+    mock_project_store_class.return_value = mock_store_instance
+    
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    h = mock_bridge.history
+    path = ws / ".aura" / "conversations" / "test.json"
+    
+    # Should silently handle exception and return
+    persistence._update_project_thread(ws, path, h)

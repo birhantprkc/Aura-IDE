@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import threading
 from pathlib import Path
 
@@ -15,12 +16,15 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from aura.config import APP_NAME
 from aura.settings import AppSettings
+from aura.conversation.history import History
 from aura.conversation.persistence import (
     LoadedConversation,
+    _first_user_text,
     load_conversation,
     most_recent_conversation,
     save_conversation,
 )
+from aura.projects.store import ProjectStore
 
 
 class ConversationPersistence(QObject):
@@ -87,6 +91,39 @@ class ConversationPersistence(QObject):
 
     # ---- auto-save ---------------------------------------------------------
 
+    def _update_project_thread(
+        self, workspace_root: Path, conversation_path: Path, history: History
+    ) -> None:
+        """Ensure workspace has a ProjectSpace and conversation has a thread.
+
+        Creates `.aura/project.json` if missing. Looks up an existing thread
+        by matching `conversation_path` against all threads in the project.
+        Creates a new thread on first save. Updates thread metadata and
+        `ProjectSpace.last_thread_id` on every save.  Silently catches all
+        exceptions so thread-metadata failures never break the conversation save.
+        """
+        try:
+            store = ProjectStore()
+            project = store.create_or_update_project(workspace_root)
+
+            # Find existing thread for this conversation path
+            thread = None
+            for t in store.list_threads(project, include_archived=True):
+                if t.conversation_path == conversation_path:
+                    thread = t
+                    break
+
+            if thread is None:
+                title = (_first_user_text(history) or "Conversation")[:200]
+                thread = store.create_thread(project, title=title)
+
+            thread.conversation_path = conversation_path
+            store.save_thread(project, thread)
+            project.last_thread_id = thread.id
+            store.save_project(project)
+        except Exception:
+            logging.exception("Failed to update project thread metadata")
+
     def auto_save(
         self,
         workspace_root,
@@ -134,6 +171,7 @@ class ConversationPersistence(QObject):
                     planner_provider=planner_provider,
                     worker_provider=worker_provider,
                 )
+                self._update_project_thread(workspace_root, path, history_copy)
                 self.save_succeeded.emit(path, generation)
             except OSError as exc:
                 self.save_failed.emit(str(exc))
