@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
+    QScrollArea,
+    QWidget,
 )
 
 from aura.config import (
@@ -22,23 +23,137 @@ from aura.config import (
     ThinkingMode,
 )
 from aura.providers.registry import provider_registry
-from aura.gui.theme import BORDER, FG_DIM
+from aura.gui.theme import BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM, FG_MUTED, ACCENT
 from aura.gui.workspace_tree import WorkspaceTree
 from aura.projects.store import ProjectStore
 
 
+class _ProjectRow(QFrame):
+    clicked = Signal(Path)
+
+    def __init__(self, project, is_active: bool, parent=None) -> None:
+        super().__init__(parent)
+        self.project = project
+        self.is_active = is_active
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(32)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(4)
+
+        self.name_label = QLabel(project.name)
+        self.name_label.setStyleSheet(
+            f"color: {FG if is_active else FG_DIM}; "
+            f"font-weight: {'bold' if is_active else 'normal'};"
+        )
+        layout.addWidget(self.name_label, 1)
+
+        border_left_style = f"3px solid {ACCENT}" if is_active else "3px solid transparent"
+        bg_style = BG_ALT if is_active else "transparent"
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {bg_style};
+                border-left: {border_left_style};
+            }}
+            QFrame:hover {{
+                background-color: {BG_RAISED};
+            }}
+        """)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.project.root_path)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+
+class _ThreadRow(QFrame):
+    clicked = Signal(Path)
+
+    def __init__(self, thread, parent=None) -> None:
+        super().__init__(parent)
+        self.thread = thread
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(28)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(24, 0, 8, 0)
+        layout.setSpacing(4)
+
+        self.title_label = QLabel(thread.title)
+        self.title_label.setStyleSheet(f"color: {FG_DIM}; font-size: 12px;")
+        layout.addWidget(self.title_label, 1)
+
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: transparent;
+            }}
+            QFrame:hover {{
+                background-color: {BG_RAISED};
+            }}
+        """)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.thread.conversation_path:
+                self.clicked.emit(Path(self.thread.conversation_path))
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+
+class _ShowMoreRow(QFrame):
+    clicked = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(28)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(24, 0, 8, 0)
+        layout.setSpacing(4)
+
+        label = QLabel("Show more...")
+        label.setStyleSheet(f"color: {FG_MUTED}; font-size: 12px; font-style: italic;")
+        layout.addWidget(label, 1)
+
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: transparent;
+            }}
+            QFrame:hover {{
+                background-color: {BG_RAISED};
+            }}
+        """)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+
 class LeftPane(QFrame):
     change_root_requested = Signal()
+    project_selected = Signal(Path)
+    thread_selected = Signal(Path)  # conversation_path
+    new_project_requested = Signal()
     planner_model_changed = Signal(str)
     planner_thinking_changed = Signal(str)
     worker_model_changed = Signal(str)
     worker_thinking_changed = Signal(str)
-    thread_selected = Signal(Path)  # conversation_path
 
     def __init__(self, workspace_root: Path | None, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("leftPane")
         self.setMinimumWidth(160)
+
+        self._last_workspace_root = workspace_root
+        self._show_all_active_threads = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 8, 0, 8)
@@ -70,20 +185,39 @@ class LeftPane(QFrame):
         projects_title.setObjectName("paneTitle")
         layout.addWidget(projects_title)
 
-        self._project_name_label = QLabel("")
-        self._project_name_label.setObjectName("projectNameLabel")
-        self._project_name_label.setWordWrap(True)
-        self._project_name_label.setVisible(False)
-        layout.addWidget(self._project_name_label)
+        new_project_row = QHBoxLayout()
+        new_project_row.setContentsMargins(8, 0, 8, 6)
+        self._new_project_btn = QPushButton("＋ New Project")
+        self._new_project_btn.clicked.connect(self.new_project_requested.emit)
+        new_project_row.addWidget(self._new_project_btn)
+        layout.addLayout(new_project_row)
 
-        self._thread_list = QListWidget()
-        self._thread_list.setVisible(False)
-        self._thread_list.setMaximumHeight(200)
-        self._thread_list.itemClicked.connect(self._on_thread_clicked)
-        layout.addWidget(self._thread_list)
+        self._projects_scroll = QScrollArea()
+        self._projects_scroll.setWidgetResizable(True)
+        self._projects_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._projects_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._projects_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        self._projects_container = QWidget()
+        self._projects_layout = QVBoxLayout(self._projects_container)
+        self._projects_layout.setContentsMargins(0, 0, 0, 0)
+        self._projects_layout.setSpacing(2)
+
+        self._projects_scroll.setWidget(self._projects_container)
+        layout.addWidget(self._projects_scroll, 1)
+
+        # --- Files section ---
+        files_sep = QFrame()
+        files_sep.setFrameShape(QFrame.Shape.HLine)
+        files_sep.setStyleSheet(f"QFrame {{ color: {BORDER}; }}")
+        layout.addWidget(files_sep)
+
+        files_title = QLabel("Files")
+        files_title.setObjectName("paneTitle")
+        layout.addWidget(files_title)
 
         self._tree = WorkspaceTree(workspace_root)
-        layout.addWidget(self._tree, 1)
+        layout.addWidget(self._tree, 2)
 
         # --- Model Config section ---
         self._model_config_footer = QFrame()
@@ -227,38 +361,70 @@ class LeftPane(QFrame):
         self._worker_thinking_label.setVisible(enabled)
         self._worker_thinking_combo.setVisible(enabled)
 
+    def _clear_projects_layout(self) -> None:
+        while self._projects_layout.count():
+            item = self._projects_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
     def refresh_projects(self, workspace_root: Path | None) -> None:
-        """Update the project name and thread list for the given workspace root."""
-        if workspace_root is None:
-            self._project_name_label.setVisible(False)
-            self._thread_list.setVisible(False)
-            return
+        """Update the projects list and show threads for the active project."""
+        if workspace_root != self._last_workspace_root:
+            self._show_all_active_threads = False
+            self._last_workspace_root = workspace_root
+
+        self._clear_projects_layout()
 
         try:
             store = ProjectStore()
-            project = store.create_or_update_project(workspace_root)
+            projects = store.list_projects()
         except Exception:
-            self._project_name_label.setVisible(False)
-            self._thread_list.setVisible(False)
+            logging.warning("Failed to list projects")
+            self._projects_layout.addStretch(1)
             return
 
-        self._project_name_label.setText(project.name)
-        self._project_name_label.setVisible(True)
+        for project in projects:
+            try:
+                store.backfill_threads_from_conversations(project)
+            except Exception:
+                logging.warning("Failed to backfill threads")
 
-        threads = store.list_threads(project, include_archived=False)
-        self._thread_list.clear()
-        for t in threads:
-            item = QListWidgetItem(t.title)
-            item.setData(Qt.UserRole, str(t.conversation_path) if t.conversation_path else "")
-            self._thread_list.addItem(item)
+            is_active = (workspace_root is not None and project.root_path.resolve() == workspace_root.resolve())
 
-        self._thread_list.setVisible(len(threads) > 0)
+            row = _ProjectRow(project, is_active, parent=self._projects_container)
+            row.clicked.connect(self.project_selected.emit)
+            self._projects_layout.addWidget(row)
 
-    def _on_thread_clicked(self, item: QListWidgetItem) -> None:
-        """Emit the conversation_path for the clicked thread."""
-        path_str = item.data(Qt.UserRole)
-        if path_str:
-            self.thread_selected.emit(Path(path_str))
+            if is_active:
+                try:
+                    threads = store.list_threads(project, include_archived=False)
+                except Exception:
+                    logging.warning("Failed to list threads")
+                    threads = []
+
+                INITIAL_VISIBLE_THREADS = 10
+                visible_threads = threads
+                has_more = False
+
+                if len(threads) > INITIAL_VISIBLE_THREADS and not self._show_all_active_threads:
+                    visible_threads = threads[:INITIAL_VISIBLE_THREADS]
+                    has_more = True
+
+                for t in visible_threads:
+                    t_row = _ThreadRow(t, parent=self._projects_container)
+                    t_row.clicked.connect(self.thread_selected.emit)
+                    self._projects_layout.addWidget(t_row)
+
+                if has_more:
+                    more_row = _ShowMoreRow(parent=self._projects_container)
+                    more_row.clicked.connect(self._on_show_more_clicked)
+                    self._projects_layout.addWidget(more_row)
+
+        self._projects_layout.addStretch(1)
+
+    def _on_show_more_clicked(self) -> None:
+        self._show_all_active_threads = True
+        self.refresh_projects(self._last_workspace_root)
 
 
 def _models_with_default(provider: ProviderId) -> dict[str, ModelInfo]:
@@ -272,7 +438,6 @@ def _models_with_default(provider: ProviderId) -> dict[str, ModelInfo]:
             output_per_m_usd=0.0,
             cache_hit_per_m_usd=0.0,
         )
-    # For DeepSeek, ensure deepseek-v4-pro is always present
     if provider == "deepseek":
         from aura.providers.catalog import DEFAULT_WORKER_MODEL
 

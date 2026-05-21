@@ -115,6 +115,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._left_pane = LeftPane(self._workspace_root, parent=self)
         self._left_pane.populate_models(self._settings.planner_provider, self._settings.worker_provider)
         self._left_pane.change_root_requested.connect(self._on_change_root)
+        self._left_pane.project_selected.connect(self._on_project_selected)
+        self._left_pane.new_project_requested.connect(self._on_new_project)
         self._left_pane.planner_model_changed.connect(lambda: self._refresh_status_bar())
         self._left_pane.planner_thinking_changed.connect(lambda: self._refresh_status_bar())
         self._left_pane.worker_model_changed.connect(self._on_sidebar_worker_model_changed)
@@ -477,19 +479,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if not chosen:
             return
         path = Path(chosen)
-        self._workspace_root = path
-        self._checkpoint_dialog = None
-        self._bridge.set_workspace_root(path)
-        self._input.set_workspace_root(path)
-        self._send_handler.set_workspace_root(path)
-        self._playground.set_workspace_root(path)
-        self._tree.set_root(path)
-        save_workspace_root(path)
-        # New workspace — drop any current conversation pointer (different .aura/).
-        self._persistence._current_conversation_path = None
-        self._update_workspace_label()
-        self._left_pane.refresh_projects(self._workspace_root)
-        self._refresh_status_bar()
+        self._on_project_selected(path)
 
         # Offer to initialize git if the workspace is not a git repo.
         if not is_git_repo(path):
@@ -512,6 +502,31 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                     QMessageBox.warning(
                         self, "Git Init Failed", msg
                     )
+
+    def _on_project_selected(self, root_path: Path) -> None:
+        self._workspace_root = root_path
+        self._checkpoint_dialog = None
+        self._bridge.set_workspace_root(root_path)
+        self._input.set_workspace_root(root_path)
+        self._send_handler.set_workspace_root(root_path)
+        self._playground.set_workspace_root(root_path)
+        self._tree.set_root(root_path)
+        save_workspace_root(root_path)
+        # New workspace — drop any current conversation pointer (different .aura/).
+        self._persistence._current_conversation_path = None
+        self._update_workspace_label()
+        self._left_pane.refresh_projects(self._workspace_root)
+        self._refresh_status_bar()
+
+    def _on_new_project(self) -> None:
+        start = str(self._workspace_root) if self._workspace_root else str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(self, "Choose or Create Workspace Directory", start)
+        if not chosen:
+            return
+        chosen_path = Path(chosen)
+        from aura.projects.store import ProjectStore
+        ProjectStore().create_or_update_project(chosen_path)
+        self._on_project_selected(chosen_path)
 
     def _update_workspace_label(self) -> None:
         self._left_pane.update_workspace_label(self._workspace_root)
@@ -716,6 +731,20 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_tool_result(self, tool_id: str, name: str, ok: bool, result: str, extras: dict) -> None:
         self._chat.set_tool_result(tool_id, ok, result)
+
+        if ok and name in ("read_file", "read_files"):
+            try:
+                import json
+                from pathlib import Path
+                res_dict = json.loads(result)
+                if isinstance(res_dict, dict):
+                    if name == "read_file" and "path" in res_dict:
+                        self._playground.open_file(Path(self._workspace_root) / res_dict["path"])
+                    elif name == "read_files" and "files" in res_dict:
+                        for p in res_dict["files"].keys():
+                            self._playground.open_file(Path(self._workspace_root) / p)
+            except Exception:
+                pass
 
         # Terminal dispatches don't trigger _on_stream_done, so we must auto-save here
         # to ensure the worker's result is persisted before the app is closed.
