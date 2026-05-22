@@ -252,6 +252,8 @@ def create_nuitka_command(
         "--clean-cache=all",
         "--assume-yes-for-downloads",
         "--python-flag=-m",
+        "--nofollow-import-to=google.genai",
+        "--lto=no",
     ]
     if low_memory:
         cmd.append("--low-memory")
@@ -340,6 +342,21 @@ def build(
     # 5. Package & Deploy
     dist_dir = find_created_dist_dir(root)
     final_dist_dir = normalize_dist_dir(root, dist_dir)
+
+    # Copy google-genai as pure Python files to avoid Nuitka compilation hang/crash
+    try:
+        import google.genai
+        google_genai_path: Path = Path(google.genai.__file__).resolve().parent
+        if google_genai_path.exists():
+            target_google_dir: Path = final_dist_dir / "google"
+            target_genai_dir: Path = target_google_dir / "genai"
+            print(f"Bundling google-genai as raw source: {google_genai_path} -> {target_genai_dir}")
+            if target_genai_dir.exists():
+                shutil.rmtree(target_genai_dir)
+            shutil.copytree(google_genai_path, target_genai_dir)
+    except ImportError:
+        print("Warning: google-genai is not installed in the environment, skipping manual bundle.")
+
     zip_path = zip_distribution(root, final_dist_dir)
     if copy_desktop:
         copy_to_desktop(zip_path)
