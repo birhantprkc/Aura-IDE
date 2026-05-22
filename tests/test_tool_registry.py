@@ -20,9 +20,7 @@ from aura.conversation.tools.registry import (
     ToolRegistry,
 )
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -47,9 +45,7 @@ def _handler(name: str):
     return TOOL_HANDLERS[name]
 
 
-# ===================================================================
 # read_file
-# ===================================================================
 
 
 class TestReadFile:
@@ -82,9 +78,7 @@ class TestReadFile:
         assert result.ok is False
 
 
-# ===================================================================
 # read_files
-# ===================================================================
 
 
 class TestReadFiles:
@@ -151,9 +145,7 @@ class TestReadFiles:
         assert "not allowed" in error or "escap" in error
 
 
-# ===================================================================
 # list_directory
-# ===================================================================
 
 
 class TestListDirectory:
@@ -179,9 +171,7 @@ class TestListDirectory:
         mock_ld.assert_called_once()
 
 
-# ===================================================================
 # glob
-# ===================================================================
 
 
 class TestGlob:
@@ -213,9 +203,7 @@ class TestGlob:
         assert result.ok is False
 
 
-# ===================================================================
 # read_file_outline
-# ===================================================================
 
 
 class TestReadFileOutline:
@@ -237,9 +225,7 @@ class TestReadFileOutline:
         assert result.ok is False
 
 
-# ===================================================================
 # grep_search
-# ===================================================================
 
 
 class TestGrepSearch:
@@ -295,9 +281,7 @@ class TestGrepSearch:
         assert result.payload["error"] == "boom"
 
 
-# ===================================================================
 # find_usages
-# ===================================================================
 
 
 class TestFindUsages:
@@ -336,9 +320,7 @@ class TestFindUsages:
         assert result.ok is False
 
 
-# ===================================================================
 # search_codebase
-# ===================================================================
 
 
 class TestSearchCodebase:
@@ -378,9 +360,7 @@ class TestSearchCodebase:
         assert result.ok is False
 
 
-# ===================================================================
 # git tools
-# ===================================================================
 
 
 class TestGitStatus:
@@ -560,9 +540,7 @@ class TestGitStashShow:
         assert result.ok is False
 
 
-# ===================================================================
 # web tools
-# ===================================================================
 
 
 class TestWebSearch:
@@ -615,9 +593,7 @@ class TestWebFetch:
         mock_wf.assert_called_once_with("")
 
 
-# ===================================================================
 # write_file
-# ===================================================================
 
 
 class TestWriteFile:
@@ -699,20 +675,15 @@ class TestWriteFile:
         assert mock_pw.call_args[0][2] == ""
 
 
-# ===================================================================
 # write_file — humanizer integration
-# ===================================================================
 
 
 class TestWriteFileHumanizer:
     """Tests for the humanizer integration in write_file proposals."""
 
     RAW_PYTHON = """```python
-# Initialize the list
 items = []
-# Loop through items
 for i in items:
-    # Process each item
     print(i)
 ```"""
 
@@ -862,9 +833,7 @@ for i in items:
         assert req.new_content == self.RAW_PYTHON
         mock_hp_cls.assert_not_called()
 
-    # ------------------------------------------------------------------
     # edit_symbol humanizer integration
-    # ------------------------------------------------------------------
 
     def test_edit_symbol_replacement_enabled(
         self, registry: ToolRegistry, approve_cb: MagicMock
@@ -991,9 +960,7 @@ for i in items:
         req = approve_cb.call_args[0][0]
         assert req.new_content == "new content"
 
-    # ------------------------------------------------------------------
     # edit_file humanizer gate integration
-    # ------------------------------------------------------------------
 
     def test_edit_file_humanizer_gated_by_env_var_disabled(
         self, registry: ToolRegistry, approve_cb: MagicMock
@@ -1106,9 +1073,7 @@ for i in items:
         mock_hp.humanize_code.assert_called_once()
 
 
-# ===================================================================
 # edit_file
-# ===================================================================
 
 
 class TestEditFile:
@@ -1170,9 +1135,7 @@ class TestEditFile:
         assert "string" in str(result.payload).lower()
 
 
-# ===================================================================
 # edit_symbol
-# ===================================================================
 
 
 class TestEditSymbol:
@@ -1258,9 +1221,7 @@ class TestEditSymbol:
         assert result.ok is False
 
 
-# ===================================================================
 # update_todo_list
-# ===================================================================
 
 
 class TestUpdateTodoList:
@@ -1318,9 +1279,7 @@ class TestUpdateTodoList:
         assert "invalid status" in str(result.payload).lower()
 
 
-# ===================================================================
 # execute — unknown tool
-# ===================================================================
 
 
 class TestExecuteUnknown:
@@ -1339,15 +1298,13 @@ class TestExecuteUnknown:
         assert result.ok is False
 
 
-# ===================================================================
 # Handler registration verification
-# ===================================================================
 
 
 class TestHandlerRegistration:
     """Verify that all expected tools are registered and callable."""
 
-    # The 22 tools registered in TOOL_HANDLERS
+    # The 26 tools registered in TOOL_HANDLERS
     EXPECTED_TOOLS = {
         "read_file",
         "read_files",
@@ -1373,6 +1330,8 @@ class TestHandlerRegistration:
         "update_todo_list",
         "search_project_memory",
         "save_to_project_memory",
+        "run_diagnostic_command",
+        "get_workspace_snapshot",
     }
 
     def test_all_expected_tools_present(self):
@@ -1426,6 +1385,8 @@ class TestModeToolSurfaces:
             "git_log_file",
             "dispatch_to_worker",
             "run_research",
+            "run_diagnostic_command",
+            "get_workspace_snapshot",
         }
         assert "write_file" not in tool_names
         assert "edit_file" not in tool_names

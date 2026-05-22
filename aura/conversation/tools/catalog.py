@@ -15,6 +15,7 @@ from aura.conversation.tools._schemas import (
     WORKER_TODO_TOOL_DEF,
     WRITE_TOOL_DEFS,
     DIAGNOSTIC_TOOL_DEF,
+    WORKSPACE_SNAPSHOT_TOOL_DEF,
 )
 
 PLANNER_TOOL_NAMES = {
@@ -84,6 +85,7 @@ class ToolCatalog:
                 + [dict(DISPATCH_TOOL_DEF)]
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
+                + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
             )
         elif mode == "worker":
             tools = (

@@ -29,6 +29,7 @@ from aura.conversation.tools._web_mixin import WebHandlersMixin
 from aura.conversation.tools._write_mixin import WriteHandlersMixin
 from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
+from aura.conversation.tools._planner_mixin import PlannerHandlersMixin
 
 # Imports kept for test-patch compatibility (patching
 # aura.conversation.tools.registry.<name> in test_tool_registry.py).
@@ -66,6 +67,7 @@ class ToolRegistry(
     WriteHandlersMixin,
     MemoryHandlersMixin,
     DiagnosticHandlersMixin,
+    PlannerHandlersMixin,
 ):
     """Workspace-jailed tool dispatcher.
 
@@ -225,3 +227,4 @@ TOOL_HANDLERS["update_todo_list"] = ToolRegistry._handle_update_todo_list
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory
 TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory
 TOOL_HANDLERS["run_diagnostic_command"] = ToolRegistry._handle_run_diagnostic_command
+TOOL_HANDLERS["get_workspace_snapshot"] = ToolRegistry._handle_get_workspace_snapshot

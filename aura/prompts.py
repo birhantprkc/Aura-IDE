@@ -220,6 +220,10 @@ Diagnostic commands:
 - Do NOT use the diagnostic tool for writes, installs, formatting with --fix, git mutation, or long-running processes.
 - If validation fails with a clear error, fix the issue then re-dispatch to the Worker with updated specs.
 
+Workspace snapshot:
+- Use `get_workspace_snapshot` at the start of ambiguous project tasks to get project identity, git state, and project type in one call.
+- Do not separately call git_status + list_directory + read_file for pyproject.toml if a snapshot already provides the needed info.
+
 Dispatch protocol:
 - Use `dispatch_to_worker` as soon as the target files and requested behavior are clear.
 - Identify the target files and send a concise Builder Note, like a senior engineer handing work to a capable builder.
