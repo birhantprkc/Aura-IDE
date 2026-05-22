@@ -27,13 +27,22 @@ from aura.gui.theme import (
 
 class GlassSwitch(QWidget):
     """Custom toggle switch that fits the Aura glass theme."""
+
     toggled = Signal(bool)
 
-    def __init__(self, label: str, checked: bool = False, vertical: bool = False, parent: QWidget | None = None):
+    def __init__(
+        self,
+        label: str,
+        checked: bool = False,
+        vertical: bool = False,
+        parent: QWidget | None = None,
+        accent_color: str | None = None,
+    ):
         super().__init__(parent)
         self._checked = checked
         self._label_text = label
         self._label: QLabel | None = None
+        self._accent_color = accent_color if accent_color else ACCENT
 
         if vertical:
             layout = QVBoxLayout(self)
@@ -54,9 +63,7 @@ class GlassSwitch(QWidget):
         self._thumb = QFrame(self._track)
         self._thumb.setFixedSize(10, 10)
         self._thumb.move(3 if not checked else 19, 3)
-        self._thumb.setStyleSheet(
-            f"background: {FG}; border-radius: 5px;"
-        )
+        self._thumb.setStyleSheet(f"background: {FG}; border-radius: 5px;")
         self._thumb.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         layout.addWidget(self._track, 0, Qt.AlignmentFlag.AlignCenter)
@@ -78,18 +85,16 @@ class GlassSwitch(QWidget):
         return super().eventFilter(watched, event)
 
     def _get_track_style(self) -> str:
-        bg = ACCENT if self._checked else BG_RAISED
-        border = ACCENT if self._checked else BORDER
+        bg = self._accent_color if self._checked else BG_RAISED
+        border = self._accent_color if self._checked else BORDER
         return f"background: {bg}; border: 1px solid {border}; border-radius: 8px;"
 
     def _refresh_label_style(self) -> None:
         if self._label is None:
             return
-        color = ACCENT if self._checked else FG_DIM
+        color = self._accent_color if self._checked else FG_DIM
         weight = 700 if self._checked else 600
-        self._label.setStyleSheet(
-            f"color: {color}; font-size: 10px; font-weight: {weight};"
-        )
+        self._label.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: {weight};")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
@@ -22,7 +21,7 @@ class ToolStreamController(QObject):
     goal_resolved = Signal(str)
     # Emitted once when "command" is found (for run_terminal_command)
     command_resolved = Signal(str)
-    # Emitted when "tasks" is found or updated (for update_todo_list)
+    # Kept for compatibility; TODO updates are emitted from final ToolResult.
     todo_updated = Signal(list)
     # Emitted whenever the "content" or "new_str" field grows
     content_updated = Signal(str)
@@ -45,10 +44,6 @@ class ToolStreamController(QObject):
         self._last_content: str = ""
         self._last_goal_stream: str = ""
         self._state = "running"
-
-        # Partial TODO extraction throttle
-        self._last_todo_emit: float = 0.0
-        self._TODO_THROTTLE = 0.05  # 50ms
 
         # Regex for early extraction from partial JSON
         self._path_re = re.compile(r'"path"\s*:\s*"([^"]+)"')
@@ -132,12 +127,6 @@ class ToolStreamController(QObject):
                 if self._tool_name == "run_research" and content != self._goal:
                     self.goal_updated.emit(content)
 
-            # Update tasks for update_todo_list
-            if self._tool_name == "update_todo_list":
-                tasks = parsed.get("tasks")
-                if isinstance(tasks, list):
-                    self.todo_updated.emit(tasks)
-
         except json.JSONDecodeError:
             # Buffer is still incomplete JSON — emit raw buffer for now
             self.args_updated.emit(self._buffer)
@@ -168,15 +157,6 @@ class ToolStreamController(QObject):
                 if content is not None and content != self._last_content:
                     self._last_content = content
                     self.content_updated.emit(content)
-
-            # Partial task extraction for update_todo_list
-            if self._tool_name == "update_todo_list":
-                now = time.monotonic()
-                if now - self._last_todo_emit >= self._TODO_THROTTLE:
-                    tasks = self._extract_partial_tasks()
-                    if tasks is not None:
-                        self._last_todo_emit = now
-                        self.todo_updated.emit(tasks)
 
     def _extract_partial_string(self, key: str) -> str | None:
         """Surgically extract a JSON string value from the buffer, handling escapes."""
@@ -217,93 +197,6 @@ class ToolStreamController(QObject):
         
         # Still open
         return "".join(content_chars)
-
-    def _extract_partial_tasks(self) -> list[dict] | None:
-        """Extract complete task objects from a partially-streamed JSON buffer.
-
-        Searches for ``"tasks" : [``, then walks forward tracking brace depth
-        and string-escape state to find complete ``{...}`` objects.  Returns
-        ``None`` when no ``"tasks"`` key is found or no complete objects can
-        be parsed.
-        """
-        m = re.search(r'"tasks"\s*:\s*\[', self._buffer)
-        if not m:
-            return None
-
-        pos = m.end()  # right after '['
-        tasks: list[dict] = []
-        depth = 0
-        in_string = False
-        escaped = False
-        obj_start: int | None = None
-
-        while pos < len(self._buffer):
-            ch = self._buffer[pos]
-            pos += 1
-
-            if escaped:
-                escaped = False
-                continue
-
-            if ch == '\\':
-                escaped = True
-                continue
-
-            if ch == '"':
-                in_string = not in_string
-                continue
-
-            if in_string:
-                continue
-
-            if ch == '{':
-                if depth == 0:
-                    obj_start = pos - 1
-                depth += 1
-            elif ch == '}':
-                depth -= 1
-                if depth == 0 and obj_start is not None:
-                    candidate = self._buffer[obj_start:pos]
-                    try:
-                        obj = json.loads(candidate)
-                        if isinstance(obj, dict):
-                            tasks.append(obj)
-                    except json.JSONDecodeError:
-                        pass
-                    obj_start = None
-            elif ch == ']':
-                # We reached the end of the array, but check depth to be safe
-                if depth == 0:
-                    break
-
-        # If we have an open object, try to extract its partial description
-        if depth > 0 and obj_start is not None:
-            partial_obj = self._buffer[obj_start:]
-            for key in ("description", "content", "text", "task"):
-                m_key = re.search(r'"' + key + r'"\s*:\s*"', partial_obj)
-                if m_key:
-                    start_idx = m_key.end()
-                    raw_tail = partial_obj[start_idx:]
-                    content_chars = []
-                    esc = False
-                    for c in raw_tail:
-                        if esc:
-                            if c == 'n': content_chars.append('\n')
-                            elif c == 't': content_chars.append('\t')
-                            elif c == 'r': content_chars.append('\r')
-                            else: content_chars.append(c)
-                            esc = False
-                        elif c == '\\':
-                            esc = True
-                        elif c == '"':
-                            break
-                        else:
-                            content_chars.append(c)
-                    tasks.append({"description": "".join(content_chars), "status": "pending"})
-                    break
-
-        return tasks if tasks else None
-
 
     def finalize(self, ok: bool, result_text: str) -> None:
         """Finalize the tool call with the result."""

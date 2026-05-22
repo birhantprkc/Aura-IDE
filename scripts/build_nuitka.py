@@ -10,7 +10,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -21,6 +20,7 @@ PACKAGE_NAME = "aura"
 ICON_PATH = "media/AurA.ico"
 MEDIA_DIR = "media"
 OUTPUT_DIR = "build"
+DEFAULT_NUITKA_JOBS = 1
 
 FINAL_DIST_NAME = f"{APP_NAME}.dist"
 FINAL_EXE_NAME = f"{APP_NAME}.exe"
@@ -227,6 +227,45 @@ def copy_to_desktop(zip_path: Path) -> None:
         print("Could not find Desktop folder to copy the release ZIP.")
 
 
+def create_nuitka_command(
+    *,
+    low_memory: bool = True,
+    jobs: int = DEFAULT_NUITKA_JOBS,
+) -> list[str]:
+    """Create the Nuitka command used for release builds."""
+    if jobs == 0:
+        raise SystemExit("--jobs cannot be 0.")
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "nuitka",
+        "--standalone",
+        "--enable-plugin=pyside6",
+        "--windows-console-mode=disable",
+        f"--windows-icon-from-ico={ICON_PATH}",
+        f"--include-data-dir={MEDIA_DIR}={MEDIA_DIR}",
+        "--include-package=aura",
+        f"--include-data-file={UPDATER_HELPER_SOURCE}={UPDATER_HELPER_DIST_NAME}",
+        f"--output-dir={OUTPUT_DIR}",
+        f"--output-filename={APP_NAME}",
+        "--clean-cache=all",
+        "--assume-yes-for-downloads",
+        "--python-flag=-m",
+    ]
+    if low_memory:
+        cmd.append("--low-memory")
+    cmd.append(f"--jobs={jobs}")
+
+    if SIGN_CERT:
+        cmd.append(f"--windows-sign-certificate={SIGN_CERT}")
+        if SIGN_PASS:
+            cmd.append(f"--windows-sign-certificate-password={SIGN_PASS}")
+
+    cmd.append(PACKAGE_NAME)
+    return cmd
+
+
 # ---------------------------------------------------------------------------
 # Main Build Flow
 # ---------------------------------------------------------------------------
@@ -270,6 +309,8 @@ def build(
     *,
     skip_version_update: bool = False,
     copy_desktop: bool = True,
+    low_memory: bool = True,
+    jobs: int = DEFAULT_NUITKA_JOBS,
 ) -> None:
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
@@ -286,18 +327,7 @@ def build(
     clean_previous_dist_dirs(root)
 
     # 3. Nuitka Command
-    cmd = [
-        sys.executable, "-m", "nuitka", "--standalone", "--enable-plugin=pyside6",
-        "--windows-console-mode=disable", f"--windows-icon-from-ico={ICON_PATH}",
-        f"--include-data-dir={MEDIA_DIR}={MEDIA_DIR}", "--include-package=aura",
-        f"--include-data-file={UPDATER_HELPER_SOURCE}={UPDATER_HELPER_DIST_NAME}",
-        f"--output-dir={OUTPUT_DIR}", f"--output-filename={APP_NAME}",
-        "--clean-cache=all", "--assume-yes-for-downloads", "--python-flag=-m", PACKAGE_NAME,
-    ]
-    if SIGN_CERT:
-        cmd.extend([f"--windows-sign-certificate={SIGN_CERT}"])
-        if SIGN_PASS:
-            cmd.extend([f"--windows-sign-certificate-password={SIGN_PASS}"])
+    cmd = create_nuitka_command(low_memory=low_memory, jobs=jobs)
 
     # 4. Run Build
     print(f"\nStarting Nuitka build for version {new_version}...")
@@ -335,6 +365,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Do not copy the release ZIP to the Desktop after packaging.",
     )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=DEFAULT_NUITKA_JOBS,
+        help=(
+            "Number of parallel C compiler jobs for Nuitka. Defaults to 1 to "
+            "avoid MSVC heap exhaustion on large generated modules."
+        ),
+    )
+    parser.add_argument(
+        "--no-low-memory",
+        action="store_true",
+        help="Disable Nuitka low-memory mode. This may be faster but can trigger MSVC heap exhaustion.",
+    )
     return parser.parse_args(argv)
 
 
@@ -345,5 +389,7 @@ if __name__ == "__main__":
         args.version,
         skip_version_update=args.skip_version_update,
         copy_desktop=not args.no_copy_desktop,
+        low_memory=not args.no_low_memory,
+        jobs=args.jobs,
     )
 

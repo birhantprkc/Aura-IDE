@@ -8,11 +8,14 @@ from pathlib import Path
 import pytest
 
 from scripts.build_nuitka import (
+    DEFAULT_NUITKA_JOBS,
     FINAL_DIST_NAME,
     OUTPUT_DIR,
+    PACKAGE_NAME,
     REQUIRED_MEDIA_FILES,
     UPDATER_HELPER_DIST_NAME,
     UPDATER_HELPER_SOURCE,
+    create_nuitka_command,
     normalize_version,
     parse_args,
     read_current_version,
@@ -44,10 +47,39 @@ def test_read_current_version_extracts_string_literal(tmp_path: Path) -> None:
 
 
 def test_parse_args_supports_noninteractive_flags() -> None:
-    args = parse_args(["--skip-version-update", "--no-copy-desktop"])
+    args = parse_args(["--skip-version-update", "--no-copy-desktop", "--jobs", "2", "--no-low-memory"])
 
     assert args.skip_version_update is True
     assert args.no_copy_desktop is True
+    assert args.jobs == 2
+    assert args.no_low_memory is True
+
+
+def test_parse_args_defaults_to_low_memory_single_job() -> None:
+    args = parse_args([])
+
+    assert args.jobs == DEFAULT_NUITKA_JOBS
+    assert args.no_low_memory is False
+
+
+def test_create_nuitka_command_defaults_to_low_memory_single_job() -> None:
+    cmd = create_nuitka_command()
+
+    assert "--low-memory" in cmd
+    assert f"--jobs={DEFAULT_NUITKA_JOBS}" in cmd
+    assert cmd[-1] == PACKAGE_NAME
+
+
+def test_create_nuitka_command_can_disable_low_memory() -> None:
+    cmd = create_nuitka_command(low_memory=False, jobs=3)
+
+    assert "--low-memory" not in cmd
+    assert "--jobs=3" in cmd
+
+
+def test_create_nuitka_command_rejects_zero_jobs() -> None:
+    with pytest.raises(SystemExit, match="--jobs cannot be 0"):
+        create_nuitka_command(jobs=0)
 
 
 def test_validate_project_paths_requires_all_media_files(tmp_path: Path) -> None:

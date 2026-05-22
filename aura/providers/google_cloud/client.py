@@ -135,6 +135,9 @@ class GoogleCloudClient:
             config_kwargs["system_instruction"] = system_instruction
         if google_tools:
             config_kwargs["tools"] = [{"function_declarations": google_tools}]
+        thinking_config = _google_thinking_config(genai.types, model, thinking)
+        if thinking_config is not None:
+            config_kwargs["thinking_config"] = thinking_config
         if thinking == "off":
             config_kwargs["temperature"] = temperature
 
@@ -244,17 +247,7 @@ class GoogleCloudClient:
 
                         yield ToolCallStart(index=idx, id=tc["id"], name=name)
                         
-                        if name == "update_todo_list":
-                            # Simulate streaming for the TODO list to give the user 
-                            # the same visual "typing out" feedback as other models.
-                            import time
-                            chunk_size = 5
-                            for i in range(0, len(args_str), chunk_size):
-                                yield ToolCallArgsDelta(index=idx, args_chunk=args_str[i:i+chunk_size])
-                                time.sleep(0.01)
-                        else:
-                            yield ToolCallArgsDelta(index=idx, args_chunk=args_str)
-                            
+                        yield ToolCallArgsDelta(index=idx, args_chunk=args_str)
                         yield ToolCallEnd(index=idx)
                         continue
 
@@ -288,6 +281,34 @@ class GoogleCloudClient:
                         pass
 
         yield Done(finish_reason=finish_reason, full_message=full_message)
+
+
+def _google_thinking_config(types_module: Any, model: str, thinking: str) -> Any | None:
+    """Map Aura thinking modes to Gemini thinking config where supported."""
+    model_l = model.lower()
+    if "gemini-2.5" not in model_l:
+        return None
+
+    is_pro = "pro" in model_l
+    if thinking == "off":
+        # Gemini 2.5 Flash supports budget 0. Pro cannot disable thinking, so
+        # use its documented minimum budget to keep latency as low as possible.
+        budget = 128 if is_pro else 0
+        return types_module.ThinkingConfig(
+            thinking_budget=budget,
+            include_thoughts=False,
+        )
+    if thinking == "high":
+        return types_module.ThinkingConfig(
+            thinking_budget=8192,
+            include_thoughts=True,
+        )
+    if thinking == "max":
+        return types_module.ThinkingConfig(
+            thinking_budget=32768 if is_pro else 24576,
+            include_thoughts=True,
+        )
+    return None
 
 
 def _to_api_error(exc: Exception, cooldown: CooldownManager) -> ApiError:

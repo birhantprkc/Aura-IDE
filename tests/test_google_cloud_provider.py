@@ -729,6 +729,85 @@ def test_stream_emits_tool_call_args_delta():
     assert len(done.full_message["tool_calls"]) == 1
 
 
+def test_stream_todo_tool_args_are_not_artificially_delayed(monkeypatch):
+    import time
+    from unittest.mock import MagicMock, patch
+
+    from aura.client.events import ToolCallArgsDelta
+    from aura.providers.google_cloud.client import GoogleCloudClient
+
+    fc_mock = MagicMock()
+    fc_mock.name = "update_todo_list"
+    fc_mock.args = {
+        "tasks": [
+            {"description": f"Task {idx}", "status": "pending"}
+            for idx in range(20)
+        ]
+    }
+    fc_mock.id = "call_todo"
+
+    part_mock = MagicMock()
+    part_mock.text = None
+    part_mock.thought = None
+    part_mock.function_call = fc_mock
+
+    candidate_mock = MagicMock()
+    candidate_mock.finish_reason = None
+    candidate_mock.content.parts = [part_mock]
+
+    chunk = MagicMock()
+    chunk.candidates = [candidate_mock]
+    chunk.usage_metadata = None
+
+    fake_client_mock = MagicMock()
+    fake_client_mock.models.generate_content_stream.return_value = [chunk]
+
+    sleep_calls = []
+    monkeypatch.setattr(time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    client = GoogleCloudClient(project="test")
+
+    with patch.object(client, "_get_client", return_value=fake_client_mock):
+        events = list(
+            client.stream(
+                messages=[{"role": "user", "content": "do the task"}],
+                tools=None,
+                model="gemini-2.5-flash",
+                thinking="off",
+            )
+        )
+
+    args_deltas = [ev for ev in events if isinstance(ev, ToolCallArgsDelta)]
+    assert sleep_calls == []
+    assert len(args_deltas) == 1
+    assert args_deltas[0].args_chunk == json.dumps(fc_mock.args)
+
+
+def test_stream_gemini_flash_off_disables_thinking():
+    from unittest.mock import MagicMock, patch
+
+    from aura.providers.google_cloud.client import GoogleCloudClient
+
+    fake_client_mock = MagicMock()
+    fake_client_mock.models.generate_content_stream.return_value = []
+
+    client = GoogleCloudClient(project="test")
+
+    with patch.object(client, "_get_client", return_value=fake_client_mock):
+        list(
+            client.stream(
+                messages=[{"role": "user", "content": "quick change"}],
+                tools=None,
+                model="gemini-2.5-flash",
+                thinking="off",
+            )
+        )
+
+    config = fake_client_mock.models.generate_content_stream.call_args.kwargs["config"]
+    assert config.thinking_config.thinking_budget == 0
+    assert config.thinking_config.include_thoughts is False
+
+
 def test_stream_preserves_google_tool_call_signature_for_replay():
     from unittest.mock import MagicMock, patch
 
