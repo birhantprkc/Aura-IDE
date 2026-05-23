@@ -18,6 +18,8 @@ class WorkerLogCard(QFrame):
     backward compatibility with any external importers.
     """
 
+    _REVEAL_CHUNK = 16
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("workerLogCard")
@@ -46,8 +48,9 @@ class WorkerLogCard(QFrame):
         if len(self._visible) >= len(self._full):
             self._timer.stop()
             return
-        self._visible += self._full[len(self._visible):len(self._visible) + 2]
-        self._content_view.setPlainText(self._visible)
+        delta = self._full[len(self._visible):len(self._visible) + self._REVEAL_CHUNK]
+        self._visible += delta
+        self._content_view.insertPlainText(delta)
         h = self._content_view.document().size().height() + 15
         self._content_view.setFixedHeight(int(max(120, min(h, 600))))
         # Auto-scroll to bottom

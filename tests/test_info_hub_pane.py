@@ -30,7 +30,7 @@ def test_worker_log_appends_incrementally(qapp) -> None:
     # Append more text
     pane.append_content(" World")
     assert pane._log_buffer == "Hello World"
-    
+
     pane._on_log_tick()
     assert pane._log_visible == "Hello World"
     assert pane._log_view.toPlainText() == "Hello World"
@@ -43,3 +43,29 @@ def test_worker_log_flush(qapp) -> None:
     pane._flush_log()
     assert pane._log_visible == "A very long string that should not be fully revealed in one tick"
     assert pane._log_view.toPlainText() == "A very long string that should not be fully revealed in one tick"
+
+
+def test_worker_log_reveals_in_chunks(qapp) -> None:
+    pane = InfoHubPane()
+    # Feed text longer than one reveal chunk (16 chars)
+    long_text = "Hello World, this is a very long text that should span multiple ticks."
+    assert len(long_text) > 16
+    pane.append_content(long_text)
+
+    # After first tick, only first 16 chars should be visible
+    pane._on_log_tick()
+    expected_first = long_text[:16]
+    assert pane._log_visible == expected_first, f"Expected '{expected_first}', got '{pane._log_visible}'"
+    assert pane._log_view.toPlainText() == expected_first
+
+    # After second tick, next chunk appended, previous text preserved
+    pane._on_log_tick()
+    expected_second = long_text[:32]
+    assert pane._log_visible == expected_second, f"Expected '{expected_second}', got '{pane._log_visible}'"
+    assert pane._log_view.toPlainText() == expected_second
+
+    # After enough ticks, full text is revealed
+    while pane._log_visible != long_text:
+        pane._on_log_tick()
+    assert pane._log_visible == long_text
+    assert pane._log_view.toPlainText() == long_text

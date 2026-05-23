@@ -31,6 +31,8 @@ class InfoHubPane(QWidget):
         clear() -> None
     """
 
+    _LOG_REVEAL_CHARS_PER_TICK = 16
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumSize(0, 0)
@@ -84,11 +86,9 @@ class InfoHubPane(QWidget):
         self._log_visible = ""
         self._log_timer = QTimer(self)
         self._log_timer.timeout.connect(self._on_log_tick)
-        self._log_timer.setInterval(20)  # 2 chars per tick
+        self._log_timer.setInterval(20)  # reveal N chars per tick (see _LOG_REVEAL_CHARS_PER_TICK)
 
-    # ------------------------------------------------------------------
     # Public API — Worker Log
-    # ------------------------------------------------------------------
 
     def append_reasoning(self, text: str) -> None:
         """Append text to the Worker Log buffer with typewriter effect."""
@@ -154,9 +154,6 @@ class InfoHubPane(QWidget):
             if item and item.widget():
                 item.widget().deleteLater()
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _on_log_tick(self) -> None:
         """Reveal more characters of the log buffer."""
@@ -164,7 +161,7 @@ class InfoHubPane(QWidget):
             self._log_timer.stop()
             return
             
-        chunk_size = 16
+        chunk_size = self._LOG_REVEAL_CHARS_PER_TICK
         next_chunk = self._log_buffer[len(self._log_visible):len(self._log_visible) + chunk_size]
         self._log_visible += next_chunk
         
@@ -192,9 +189,7 @@ class InfoHubPane(QWidget):
         sb = self._log_view.verticalScrollBar()
         sb.setValue(sb.maximum())
 
-    # ------------------------------------------------------------------
     # Styling
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _tab_widget_style() -> str:
