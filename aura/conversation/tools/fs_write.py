@@ -163,16 +163,12 @@ def propose_edit(
         return result
 
     # ---- Tier 3: Whitespace-agnostic fuzzy line matching ----
-    if len(old_lines) > len(file_lines):
-        best_ratio = 0.0
-    else:
-        # Normalize old_lines once (strip leading/trailing whitespace from each line)
-        # for the comparison, while keeping the original block structure.
+    candidates: list[tuple[int, float]] = []
+    best_ratio = 0.0
+
+    if len(old_lines) <= len(file_lines):
         normalized_old = [line.strip() for line in old_lines]
         normalized_old_block = "\n".join(normalized_old)
-
-        best_ratio = 0.0
-        best_start = -1
 
         for i in range(len(file_lines) - len(old_lines) + 1):
             window = file_lines[i:i + len(old_lines)]
@@ -183,24 +179,62 @@ def propose_edit(
             ).ratio()
             if ratio > best_ratio:
                 best_ratio = ratio
-                best_start = i
+            if ratio >= 0.75:
+                candidates.append((i, ratio))
 
-        if best_ratio >= 0.75:
+    if len(candidates) == 1:
+        start_idx = candidates[0][0]
+        proposed = replace_line_range(
+            original, lines_with_nl, start_idx, start_idx + len(old_lines), new_str
+        )
+        result: dict[str, Any] = {
+            "ok": True,
+            "rel_path": rel,
+            "old_content": original,
+            "new_content": proposed,
+            "is_new_file": False,
+            "match_tier": "fuzzy",
+            "fuzzy_ratio": round(candidates[0][1], 3),
+        }
+        if sanitized:
+            result["sanitized"] = True
+        return result
+
+    if len(candidates) > 1:
+        max_ratio = max(r for _, r in candidates)
+        top_candidates = [(i, r) for i, r in candidates if max_ratio - r < 0.001]
+        if len(top_candidates) == 1:
+            start_idx = top_candidates[0][0]
             proposed = replace_line_range(
-                original, lines_with_nl, best_start, best_start + len(old_lines), new_str
+                original, lines_with_nl, start_idx, start_idx + len(old_lines), new_str
             )
-            result = {
+            result: dict[str, Any] = {
                 "ok": True,
                 "rel_path": rel,
                 "old_content": original,
                 "new_content": proposed,
                 "is_new_file": False,
                 "match_tier": "fuzzy",
-                "fuzzy_ratio": round(best_ratio, 3),
+                "fuzzy_ratio": round(max_ratio, 3),
             }
             if sanitized:
                 result["sanitized"] = True
             return result
+
+        # Multiple top candidates — ambiguous
+        line_count = len(old_lines)
+        lines_detail = "\n".join(
+            f"  Candidate {j+1}: lines {start+1}-{start+line_count}"
+            for j, (start, _) in enumerate(top_candidates)
+        )
+        error_msg = (
+            f"ambiguous: old_str matches {len(top_candidates)} blocks "
+            f"in the file (best ratio: {max_ratio:.3f}).\n"
+            f"{lines_detail}\n"
+            f"old_str does not uniquely identify the target. "
+            f"Add more surrounding context lines to disambiguate."
+        )
+        return {"ok": False, "error": error_msg}
 
     # ---- All tiers failed ----
     error_msg = (

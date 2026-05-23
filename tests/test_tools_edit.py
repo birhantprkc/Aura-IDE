@@ -7,9 +7,7 @@ from aura.conversation.tools.fs_edit_structured import propose_edit_symbol
 from aura.conversation.tools.fs_write import propose_write, propose_edit, replace_line_range, _sanitize_edit_strings
 
 
-# ---------------------------------------------------------------------------
 # replace_line_range
-# ---------------------------------------------------------------------------
 
 def test_replace_line_range_single_line():
     original = "line0\nline1\nline2\n"
@@ -46,9 +44,7 @@ def test_replace_line_range_no_trailing_newline():
     result = replace_line_range(original, lines_with_nl, 1, 2, "CHANGED\n")
     assert result == "line0\nCHANGED\nline2"
 
-# ---------------------------------------------------------------------------
 # propose_write
-# ---------------------------------------------------------------------------
 
 def test_propose_write_new_file(tmp_workspace: Path):
     target = tmp_workspace / "new_file.py"
@@ -77,9 +73,7 @@ def test_propose_write_binary_file(tmp_workspace: Path):
     assert "not valid UTF-8" in result["error"]
 
 
-# ---------------------------------------------------------------------------
 # propose_edit — Tier 1: Exact string match
-# ---------------------------------------------------------------------------
 
 def test_edit_exact_match_unique(sample_py_file: Path, tmp_workspace: Path):
     """Single occurrence — should replace via exact match."""
@@ -90,15 +84,15 @@ def test_edit_exact_match_unique(sample_py_file: Path, tmp_workspace: Path):
     assert "hello world" not in result["new_content"]
 
 
-def test_edit_exact_match_multiple_occurrences_falls_through(tmp_workspace: Path):
-    """When old_str appears multiple times, exact match should fall through to
-    line-exact or fuzzy matching."""
+def test_edit_exact_duplicate_falls_through_to_ambiguous(tmp_workspace: Path):
+    """When old_str appears multiple times, exact match falls through to fuzzy
+    and should reject as ambiguous."""
     f = tmp_workspace / "dup.py"
     f.write_text("DUPLICATE\nmiddle\nDUPLICATE\n")
     result = propose_edit(tmp_workspace, f, "DUPLICATE", "REPLACED")
-    # Two exact occurrences — should try line-exact or fuzzy
-    assert result["ok"] is True
-    assert result["match_tier"] in ("line_exact", "fuzzy")
+    # Two exact occurrences — line-exact finds 2 matches, fuzzy finds 2 at ratio 1.0
+    assert result["ok"] is False
+    assert "ambiguous" in result["error"]
 
 
 def test_edit_file_not_found(tmp_workspace: Path):
@@ -107,9 +101,7 @@ def test_edit_file_not_found(tmp_workspace: Path):
     assert "file not found" in result["error"]
 
 
-# ---------------------------------------------------------------------------
 # propose_edit — Tier 2: Line-exact match
-# ---------------------------------------------------------------------------
 
 def test_edit_line_exact_match(sample_py_file: Path, tmp_workspace: Path):
     """Replace a full line block — matches exactly since it's a unique substring."""
@@ -125,13 +117,14 @@ def test_edit_line_exact_match(sample_py_file: Path, tmp_workspace: Path):
 
 def test_edit_line_exact_multiple_identical_lines(tmp_workspace: Path):
     """If a line block appears multiple times, line-exact returns ambiguous —
-    should fall through to fuzzy."""
+    fuzzy should reject as ambiguous."""
     f = tmp_workspace / "repeat.py"
     f.write_text("---\nblock\n---\nblock\n---\n")
     result = propose_edit(tmp_workspace, f, "block", "REPLACED")
-    # The line "block" appears twice — line-exact finds 2 matches, falls to fuzzy
-    assert result["ok"] is True
-    assert result["match_tier"] == "fuzzy"
+    # The line "block" appears twice — line-exact finds 2 matches, fuzzy finds 2
+    # at ratio 1.0 → ambiguous
+    assert result["ok"] is False
+    assert "ambiguous" in result["error"]
 
 
 def test_edit_line_exact_single_line(sample_py_file: Path, tmp_workspace: Path):
@@ -144,9 +137,7 @@ def test_edit_line_exact_single_line(sample_py_file: Path, tmp_workspace: Path):
     assert result["match_tier"] == "exact"
 
 
-# ---------------------------------------------------------------------------
 # propose_edit — Tier 3: Fuzzy whitespace-agnostic match
-# ---------------------------------------------------------------------------
 
 def test_edit_fuzzy_indentation_change(tmp_workspace: Path):
     """Fuzzy matching should handle indentation differences."""
@@ -185,6 +176,45 @@ def test_edit_fuzzy_below_threshold_fails(tmp_workspace: Path):
     assert "not found" in result["error"]
 
 
+def test_edit_fuzzy_unique_with_competitor(tmp_workspace: Path):
+    """Two blocks both match old_str above threshold, but one is clearly better."""
+    f = tmp_workspace / "competitor.py"
+    f.write_text(
+        "def foo():\n"
+        "  return 1\n"
+        "\n"
+        "def bar():\n"
+        "    return 1\n"
+    )
+    old_str = "def foo():\n    return 1"
+    new_str = "def foo():\n    return 2"
+    result = propose_edit(tmp_workspace, f, old_str, new_str)
+    assert result["ok"] is True
+    assert result["match_tier"] == "fuzzy"
+    assert "return 2" in result["new_content"]
+
+
+def test_edit_fuzzy_ambiguous_two_blocks(tmp_workspace: Path):
+    """Two blocks with identical normalized content — ambiguous fuzzy match."""
+    f = tmp_workspace / "ambiguous2.py"
+    f.write_text("common\nother\ncommon\n")
+    old_str = "common"
+    result = propose_edit(tmp_workspace, f, old_str, "REPLACED")
+    assert result["ok"] is False
+    assert "ambiguous" in result["error"]
+
+
+def test_edit_fuzzy_ambiguous_three_blocks(tmp_workspace: Path):
+    """Three blocks with identical normalized content — ambiguous fuzzy match."""
+    f = tmp_workspace / "ambiguous3.py"
+    f.write_text("a\nb\na\nb\na\n")
+    old_str = "a"
+    result = propose_edit(tmp_workspace, f, old_str, "REPLACED")
+    assert result["ok"] is False
+    assert "ambiguous" in result["error"]
+    assert "3 blocks" in result["error"]
+
+
 def test_edit_empty_old_str(tmp_workspace: Path):
     """Empty old_str should fail cleanly."""
     f = tmp_workspace / "content.py"
@@ -193,9 +223,7 @@ def test_edit_empty_old_str(tmp_workspace: Path):
     assert result["ok"] is False
 
 
-# ---------------------------------------------------------------------------
 # propose_edit — edge cases
-# ---------------------------------------------------------------------------
 
 def test_edit_old_str_longer_than_file(tmp_workspace: Path):
     """If old_str has more lines than the file, fuzzy matching handles it gracefully."""
@@ -217,9 +245,7 @@ def test_edit_replacement_is_exact(tmp_workspace: Path):
     assert result["new_content"] == "first\n2nd\n3rd\nfourth\n"
 
 
-# ---------------------------------------------------------------------------
 # _sanitize_edit_strings (tested via propose_edit)
-# ---------------------------------------------------------------------------
 
 
 def test_edit_strips_markdown_fence_python(sample_py_file: Path, tmp_workspace: Path):
@@ -264,9 +290,7 @@ def test_edit_fence_with_trailing_newlines(tmp_workspace: Path):
     assert result.get("sanitized") is True
 
 
-# ---------------------------------------------------------------------------
 # propose_edit_symbol
-# ---------------------------------------------------------------------------
 
 
 def test_edit_symbol_replace_function(sample_py_file: Path, tmp_workspace: Path):
@@ -344,3 +368,19 @@ def test_edit_symbol_function_as_method_with_class_name(sample_py_file: Path, tm
     assert result["ok"] is True
     assert result["match_tier"] == "symbol"
     assert "Yo" in result["new_content"]
+
+
+def test_edit_symbol_invalid_replacement_returns_ok_false(sample_py_file: Path, tmp_workspace: Path):
+    """Syntax-invalid replacement body should return ok=False with a clear error."""
+    # '1+' is an incomplete expression — SyntaxError at parse time
+    result = propose_edit_symbol(
+        tmp_workspace, sample_py_file, "function", "hello",
+        "def hello():\n    1+",
+    )
+    assert result["ok"] is False
+    # Error message should mention the proposed replacement made the file invalid
+    # and include the syntax error detail
+    assert "invalid" in result["error"].lower() or "syntax" in result["error"].lower()
+    assert result["new_content"] == ""
+    # Original content is preserved in old_content
+    assert "hello world" in result["old_content"]
