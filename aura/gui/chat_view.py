@@ -455,9 +455,24 @@ class ChatView(QScrollArea):
             if controller.tool_name == "dispatch_to_worker":
                 try:
                     data = json.loads(result_text)
-                    summary = data.get("summary", "")
-                    if summary:
-                        self.add_worker_summary(tool_call_id, controller.goal or "", ok, summary)
+                    extras = data.get("extras", {})
+                    dispatch_not_started = extras.get("dispatch_not_started", False)
+
+                    if dispatch_not_started:
+                        # Worker never started — update SpecCard, do NOT create WorkerSummaryCard
+                        spec_card = self._spec_cards.get(tool_call_id)
+                        if spec_card:
+                            if extras.get("dispatch_approval_timeout"):
+                                spec_card.mark_dispatch_expired()
+                            elif extras.get("dispatch_cancelled"):
+                                spec_card.mark_cancelled()
+                            else:
+                                spec_card.mark_stale()
+                    else:
+                        # Worker actually started and finished (or errored during run)
+                        summary = data.get("summary", "")
+                        if summary:
+                            self.add_worker_summary(tool_call_id, controller.goal or "", ok, summary)
                 except Exception:
                     pass
             elif controller.tool_name == "run_research":

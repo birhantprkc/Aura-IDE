@@ -323,8 +323,10 @@ def test_dispatch_proxy_timeout():
         res = proxy.request_dispatch("test_call_id", req)
         assert res.ok is False
         assert res.recoverable is True
-        assert "timed out" in res.summary
+        assert "Plan expired" in res.summary
         assert "UI signal" not in res.summary
+        assert res.extras.get("dispatch_not_started") is True
+        assert res.extras.get("dispatch_approval_timeout") is True
     finally:
         aura.bridge.dispatch.DISPATCH_TIMEOUT = orig_timeout
 
@@ -392,7 +394,9 @@ def test_dispatch_proxy_cancel_all_unblocks_and_cancels_active_dialog():
     assert len(results) == 1
     assert results[0].ok is False
     assert results[0].cancelled is True
-    assert "user cancelled" in results[0].summary
+    assert results[0].summary == "Cancelled"
+    assert results[0].extras.get("dispatch_not_started") is True
+    assert results[0].extras.get("dispatch_cancelled") is True
 
 
 def test_approval_proxy_active_dialog_cancellation():
@@ -430,4 +434,50 @@ def test_approval_proxy_active_dialog_cancellation():
 
         # After execution completes, active_dialog should be None again
         assert proxy._active_dialog is None
+
+
+def test_dispatch_proxy_cancelled_before_start():
+    from unittest.mock import Mock
+    import threading
+    import time
+    from aura.bridge.dispatch import _DispatchProxy, DISPATCH_TIMEOUT
+    from aura.conversation.dispatch import WorkerDispatchRequest
+
+    approval = Mock()
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=Mock(),
+        approval_proxy=approval,
+    )
+
+    req = WorkerDispatchRequest(
+        goal="Test goal",
+        files=["test.py"],
+        spec="test spec",
+        acceptance="test acceptance",
+    )
+
+    results = []
+
+    def runner():
+        res = proxy.request_dispatch("test_call_id", req)
+        results.append(res)
+
+    t = threading.Thread(target=runner)
+    t.start()
+
+    # Wait briefly for the thread to start waiting on decision_event
+    time.sleep(0.05)
+
+    # Simulate user cancelling before timeout
+    proxy.user_cancelled("test_call_id")
+    t.join(timeout=DISPATCH_TIMEOUT + 1)
+
+    assert len(results) == 1
+    res = results[0]
+    assert res.ok is False
+    assert res.cancelled is True
+    assert res.summary == "Cancelled"
+    assert res.extras.get("dispatch_not_started") is True
+    assert res.extras.get("dispatch_cancelled") is True
 

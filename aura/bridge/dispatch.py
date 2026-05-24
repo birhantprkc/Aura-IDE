@@ -175,7 +175,8 @@ class _DispatchProxy(QObject):
             return WorkerDispatchResult(
                 ok=False,
                 recoverable=True,
-                summary="Dispatch approval timed out — no decision was made.",
+                summary="Plan expired — click Dispatch again or Cancel",
+                extras={"dispatch_not_started": True, "dispatch_approval_timeout": True},
             )
 
         if pending.cancelled:
@@ -183,8 +184,9 @@ class _DispatchProxy(QObject):
                 self._pending.pop(tool_call_id, None)
             return WorkerDispatchResult(
                 ok=False,
-                summary="user cancelled dispatch",
+                summary="Cancelled",
                 cancelled=True,
+                extras={"dispatch_not_started": True, "dispatch_cancelled": True},
             )
 
         edited = pending.edited_request or req
