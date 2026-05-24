@@ -190,7 +190,7 @@ class ConversationManager:
                     # Standard APIs REQUIRE 'content' (string) or 'tool_calls' (list).
                     content = full_message.get("content")
                     reasoning = full_message.get("reasoning_content")
-                    
+
                     has_any_text = bool(content or reasoning)
                     if has_any_text:
                         full_message.pop("tool_calls", None)
@@ -481,7 +481,7 @@ class ConversationManager:
                     approval_cb=approval_cb,
                     reject_all=False,
                 )
-                
+
                 # Check rejection state after execute (approval_cb could set it)
                 if exec_result.extras.get("approval") == "reject_all":
                     reject_all_for_turn = True
@@ -510,7 +510,7 @@ class ConversationManager:
                 )
                 tool_msg_content = loop_result["content"]
                 loop_info = loop_result["info"]
-                
+
                 if self._is_recoverable_phase_boundary(loop_info):
                     _worker_phase_boundary_info = loop_info
 
@@ -528,17 +528,17 @@ class ConversationManager:
 
             # Only parallelize read-only tools to avoid race conditions.
             read_only_tools = {"read_file", "read_file_outline", "list_directory", "grep_search", "glob"}
-            
+
             # Execute tasks
             results_to_append = []
-            
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 # We can map read tasks, and sequentialize others.
                 futures = {}
                 for task in tasks:
                     if cancel_event.is_set():
                         break
-                    
+
                     if task["name"] in read_only_tools:
                         futures[executor.submit(process_task, task)] = task
                     else:
@@ -546,28 +546,28 @@ class ConversationManager:
                         for fut in concurrent.futures.as_completed(futures):
                             results_to_append.append(fut.result())
                         futures.clear()
-                        
+
                         if cancel_event.is_set():
                             break
-                            
+
                         results_to_append.append(process_task(task))
-                        
+
                 # Wait for any remaining reads
                 for fut in concurrent.futures.as_completed(futures):
                     results_to_append.append(fut.result())
 
             # History is not thread-safe. Reorder results by original tool_call_id order and append.
             results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
-            
+
             for task in tasks:
                 if cancel_event.is_set():
                     self._cleanup_cancelled(on_event)
                     return
-                    
+
                 res = results_by_id.get(task["id"])
                 if not res:
                     continue
-                    
+
                 if res.get("blocker"):
                     self._append_dispatch_blocker_message(
                         res["result"], str(res.get("blocker_reason", "")), on_event
@@ -575,7 +575,7 @@ class ConversationManager:
                     return
                 if res.get("skip"):
                     continue
-                    
+
                 if "result_payload" in res:
                     self._history.append_tool_result(task["id"], res["result_payload"])
                     on_event(res["event"])
@@ -967,12 +967,19 @@ class ConversationManager:
     def _py_compile_targets(command: str) -> list[str]:
         if "py_compile" not in command:
             return []
-        matches = re.findall(r"(?<![\w.-])([A-Za-z0-9_./\\:\-]+\.py)(?![\w.-])", command)
-        return [m.replace("\\", "/").lstrip("./") for m in matches if not m.endswith("py_compile.py")]
+        matches = re.findall(r"(?<![\\w.-])([A-Za-z0-9_./\\\\:\\-]+\.py)(?![\\w.-])", command)
+        return [_normalize_py_compile_path(m) for m in matches if not m.endswith("py_compile.py")]
+
+    @staticmethod
+    def _normalize_py_compile_path(raw: str) -> str:
+        p = raw.strip().replace("\\", "/")
+        if p.startswith("./"):
+            p = p[2:]
+        return p
 
     @staticmethod
     def _is_python_path(path: str) -> bool:
-        return path.replace("\\", "/").endswith(".py")
+        return path.replace("\\\\", "/").endswith(".py")
 
     @staticmethod
     def _tool_path(name: str, args: dict[str, Any], parsed: Any = None) -> str:

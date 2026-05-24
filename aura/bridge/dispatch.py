@@ -779,9 +779,15 @@ def _later_py_compile_passes(results: list[dict[str, Any]], targets: set[str]) -
 def _py_compile_targets(command: str) -> list[str]:
     if "py_compile" not in command:
         return []
-    matches = re.findall(r"(?<![\w.-])([A-Za-z0-9_./\\:\-]+\.py)(?![\w.-])", command)
-    return [m.replace("\\", "/").lstrip("./") for m in matches if not m.endswith("py_compile.py")]
+    matches = re.findall(r"(?<![\\w.-])([A-Za-z0-9_./\\\\:\\-]+\.py)(?![\\w.-])", command)
+    return [_normalize_py_compile_path(m) for m in matches if not m.endswith("py_compile.py")]
 
+
+def _normalize_py_compile_path(raw: str) -> str:
+    p = raw.strip().replace("\\", "/")
+    if p.startswith("./"):
+        p = p[2:]
+    return p
 
 def _build_worker_summary(
     req: WorkerDispatchRequest,
