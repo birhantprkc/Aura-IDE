@@ -12,9 +12,7 @@ import pytest
 from aura.gui.worker_handler import WorkerEventHandler
 
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
@@ -85,9 +83,7 @@ def handler(
     )
 
 
-# ---------------------------------------------------------------------------
 # Worker lifecycle delegation
-# ---------------------------------------------------------------------------
 
 
 class TestWorkerLifecycle:
@@ -121,9 +117,7 @@ class TestWorkerLifecycle:
         playground.worker_cancelled.assert_called_once_with()
 
 
-# ---------------------------------------------------------------------------
 # Worker content / reasoning
-# ---------------------------------------------------------------------------
 
 
 class TestWorkerContent:
@@ -142,9 +136,7 @@ class TestWorkerContent:
         playground.append_content.assert_called_once_with("some code")
 
 
-# ---------------------------------------------------------------------------
 # Worker tool call flow
-# ---------------------------------------------------------------------------
 
 
 class TestWorkerToolCalls:
@@ -166,9 +158,7 @@ class TestWorkerToolCalls:
         playground.set_tool_result.assert_called_once_with("wt1", True, "content")
 
 
-# ---------------------------------------------------------------------------
 # Worker diff / error / view
-# ---------------------------------------------------------------------------
 
 
 class TestWorkerDiffError:
@@ -204,9 +194,7 @@ class TestWorkerDiffError:
         handler._on_view_worker_clicked("tc1")
 
 
-# ---------------------------------------------------------------------------
 # Usage accumulation
-# ---------------------------------------------------------------------------
 
 
 class TestWorkerUsage:
@@ -256,9 +244,7 @@ class TestWorkerUsage:
         assert callback.call_count == 2
 
 
-# ---------------------------------------------------------------------------
 # Dispatch paths
-# ---------------------------------------------------------------------------
 
 
 class TestDispatch:
@@ -268,65 +254,46 @@ class TestDispatch:
         self, handler: WorkerEventHandler, bridge: Mock,
     ) -> None:
         bridge.auto_dispatch = True
-
-        with patch("aura.gui.spec_edit_dialog.SpecApprovalDialog") as mock_dlg:
-            handler._on_worker_dispatch_requested(
-                "tc1", "goal text", ["f.py"], "spec text", "acc text", "",
-            )
-
+        handler._on_worker_dispatch_requested(
+            "tc1", "goal text", ["f.py"], "spec text", "acc text", "",
+        )
         bridge.user_dispatched.assert_called_once_with(
             "tc1", "goal text", ["f.py"], "spec text", "acc text", "",
         )
-        mock_dlg.assert_not_called()
 
-    def test_dialog_dispatch_path_accepted(
-        self, handler: WorkerEventHandler, bridge: Mock,
+    def test_non_auto_dispatch_shows_card_and_waits(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
     ) -> None:
         bridge.auto_dispatch = False
-
-        with patch("aura.gui.spec_edit_dialog.SpecApprovalDialog") as mock_dlg:
-            dlg_instance = mock_dlg.return_value
-            from PySide6.QtWidgets import QDialog
-            dlg_instance.exec.return_value = QDialog.DialogCode.Accepted
-
-            dlg_instance.goal.return_value = "edited goal"
-            dlg_instance.files.return_value = ["f1.py", "f2.py"]
-            dlg_instance.spec.return_value = "edited spec"
-            dlg_instance.acceptance.return_value = "edited acceptance"
-            dlg_instance.summary.return_value = ""
-
-            handler._on_worker_dispatch_requested(
-                "tc1", "goal text", ["f.py"], "spec text", "acc text", "",
-            )
-
-        mock_dlg.assert_called_once_with(
-            "goal text", ["f.py"], "spec text", "acc text", "", parent=handler.parent(),
+        handler._on_worker_dispatch_requested(
+            "tc1", "goal", ["f.py"], "spec", "acc", "",
         )
-        bridge.user_dispatched.assert_called_once_with(
-            "tc1", "edited goal", ["f1.py", "f2.py"], "edited spec", "edited acceptance", "",
+        chat.add_spec_card.assert_called_once_with(
+            "tc1", "goal", ["f.py"], "spec", "acc", "",
         )
+        bridge.user_dispatched.assert_not_called()
         bridge.user_cancelled_dispatch.assert_not_called()
 
-    def test_dialog_dispatch_path_rejected(
+    def test_non_auto_dispatch_then_dispatch_clicked(
+        self, handler: WorkerEventHandler, chat: Mock, bridge: Mock,
+    ) -> None:
+        card = Mock()
+        card.current_spec.return_value = ("goal", ["f.py"], "spec", "acc", "")
+        chat.get_spec_card.return_value = card
+        handler._on_dispatch_clicked("tc1")
+        chat.get_spec_card.assert_called_once_with("tc1")
+        bridge.user_dispatched.assert_called_once_with(
+            "tc1", "goal", ["f.py"], "spec", "acc", "",
+        )
+
+    def test_non_auto_dispatch_then_cancel_clicked(
         self, handler: WorkerEventHandler, bridge: Mock,
     ) -> None:
-        bridge.auto_dispatch = False
-
-        with patch("aura.gui.spec_edit_dialog.SpecApprovalDialog") as mock_dlg:
-            dlg_instance = mock_dlg.return_value
-            dlg_instance.exec.return_value = 0  # Rejected
-
-            handler._on_worker_dispatch_requested(
-                "tc1", "goal text", ["f.py"], "spec text", "acc text", "",
-            )
-
-        bridge.user_dispatched.assert_not_called()
+        handler._on_cancel_dispatch_clicked("tc1")
         bridge.user_cancelled_dispatch.assert_called_once_with("tc1")
 
 
-# ---------------------------------------------------------------------------
 # Signal wiring
-# ---------------------------------------------------------------------------
 
 
 class TestBridgeWiring:
@@ -363,9 +330,7 @@ class TestBridgeWiring:
             sig.connect.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
 # Terminal output routing
-# ---------------------------------------------------------------------------
 
 
 class TestTerminalOutput:
@@ -395,9 +360,7 @@ class TestTerminalOutput:
         playground.finish_terminal_process.assert_called_once_with("proc1", 0)
 
 
-# ---------------------------------------------------------------------------
 # Dispatch click / edit / cancel
-# ---------------------------------------------------------------------------
 
 
 class TestDispatchActions:
