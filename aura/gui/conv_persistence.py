@@ -228,7 +228,14 @@ class ConversationPersistence(QObject):
         if not chosen:
             return None
         try:
-            loaded = load_conversation(Path(chosen))
+            return self.load_and_apply(Path(chosen))
+        except ValueError:
+            QMessageBox.warning(
+                parent_widget,
+                APP_NAME,
+                "That conversation belongs to another workspace.",
+            )
+            return None
         except Exception as exc:
             QMessageBox.warning(
                 parent_widget,
@@ -236,10 +243,8 @@ class ConversationPersistence(QObject):
                 f"Could not open conversation:\n{exc}",
             )
             return None
-        self.apply_loaded(loaded)
-        return loaded
         
-    def load_and_apply(self, path: Path) -> None:
+    def load_and_apply(self, path: Path) -> LoadedConversation:
         """Load a conversation from a file path and apply it to the live bridge/view.
 
         Raises ValueError if the path lies outside the active workspace's
@@ -258,6 +263,7 @@ class ConversationPersistence(QObject):
                 )
         loaded = load_conversation(path)
         self.apply_loaded(loaded)
+        return loaded
 
     def restore_last(self, workspace_root) -> None:
         """Restore the most recently saved conversation, if any.

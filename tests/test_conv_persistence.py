@@ -278,22 +278,46 @@ def test_stale_save_succeeded_after_new_conversation_keeps_path_none(
 
 
 @patch("aura.gui.conv_persistence.QFileDialog.getOpenFileName")
-@patch("aura.gui.conv_persistence.load_conversation")
 @patch("aura.gui.conv_persistence.QMessageBox.warning")
-def test_open_conversation_shows_error_on_fail(mock_warning, mock_load,
-                                                mock_file_dialog,
-                                                persistence):
-    """When load_conversation raises, a warning is shown and None returned."""
-    # Simulate the user picking a file
+def test_open_conversation_shows_error_on_load_failure(mock_warning,
+                                                       mock_file_dialog,
+                                                       persistence):
+    """When load_and_apply raises Exception, a warning is shown and None returned."""
     mock_file_dialog.return_value = ("/ws/.aura/conversations/test.json", "")
-    mock_load.side_effect = ValueError("Corrupted file")
+    with patch.object(persistence, "load_and_apply") as mock_laa:
+        mock_laa.side_effect = Exception("Corrupted file")
 
-    result = persistence.open_conversation(
-        workspace_root=Path("/ws"),
-        parent_widget=MagicMock(),
-    )
+        result = persistence.open_conversation(
+            workspace_root=Path("/ws"),
+            parent_widget=MagicMock(),
+        )
 
     mock_warning.assert_called_once()
+    args, _ = mock_warning.call_args
+    assert "Could not open conversation" in args[2]
+    assert result is None
+
+
+@patch("aura.gui.conv_persistence.QFileDialog.getOpenFileName")
+@patch("aura.gui.conv_persistence.QMessageBox.warning")
+def test_open_conversation_refuses_cross_project_path(mock_warning,
+                                                       mock_file_dialog,
+                                                       persistence):
+    """When load_and_apply raises ValueError, cross-project message shown."""
+    mock_file_dialog.return_value = ("/ws/.aura/conversations/test.json", "")
+    with patch.object(persistence, "load_and_apply") as mock_laa:
+        mock_laa.side_effect = ValueError(
+            "Path is outside the active workspace"
+        )
+
+        result = persistence.open_conversation(
+            workspace_root=Path("/ws"),
+            parent_widget=MagicMock(),
+        )
+
+    mock_warning.assert_called_once()
+    args, _ = mock_warning.call_args
+    assert "belongs to another workspace" in args[2]
     assert result is None
 
 
