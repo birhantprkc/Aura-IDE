@@ -272,6 +272,12 @@ class ConversationPersistence(QObject):
         """
         if workspace_root is None:
             return
+        # Guard: no-op if the active workspace has changed since this was scheduled
+        bridge_ws = self._bridge.registry.workspace_root
+        if bridge_ws is not None:
+            from aura.paths import safe_is_relative_to
+            if not safe_is_relative_to(workspace_root, bridge_ws):
+                return
         path = most_recent_conversation(workspace_root)
         if path is None:
             return

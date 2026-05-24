@@ -20,6 +20,9 @@ def mock_bridge():
     b.history.system_prompt = "Be helpful."
     b.planner_worker_mode = False
     b.dispatch_records = []
+    # Guard in restore_last checks bridge.registry.workspace_root; wire it to
+    # None explicitly so the guard is transparent by default in existing tests.
+    b.registry.workspace_root = None
     return b
 
 
@@ -242,7 +245,29 @@ def test_restore_last_loads_conversation(mock_mrc, mock_load, persistence):
         mock_apply.assert_called_once_with(mock_loaded)
 
 
-# Test 9: save_succeeded updates path
+# Test 9: restore_last noop on stale workspace
+
+
+@patch("aura.gui.conv_persistence.most_recent_conversation")
+@patch("aura.gui.conv_persistence.load_conversation")
+def test_restore_last_noop_on_stale_workspace(
+    mock_load, mock_mrc, persistence
+):
+    """restore_last returns early when workspace_root doesn't match active bridge workspace."""
+    # most_recent_conversation returns a path — guard is the only blocker
+    mock_mrc.return_value = Path("/workspace_a/.aura/conversations/latest.json")
+
+    # Active bridge workspace is different
+    persistence._bridge.registry.workspace_root = Path("/workspace_b")
+
+    with patch.object(persistence, "apply_loaded") as mock_apply:
+        persistence.restore_last(Path("/workspace_a"))
+        mock_apply.assert_not_called()
+
+    mock_load.assert_not_called()
+
+
+# Test 10: save_succeeded updates path
 
 
 def test_save_succeeded_updates_path(persistence):
@@ -257,7 +282,7 @@ def test_save_succeeded_updates_path(persistence):
     assert persistence.current_conversation_path == Path("/some/path.json")
 
 
-# Test 10: stale save_succeeded after new_conversation is ignored
+# Test 11: stale save_succeeded after new_conversation is ignored
 
 
 def test_stale_save_succeeded_after_new_conversation_keeps_path_none(
@@ -274,7 +299,7 @@ def test_stale_save_succeeded_after_new_conversation_keeps_path_none(
     assert persistence.current_conversation_path is None
 
 
-# Test 11: open_conversation shows error on fail
+# Test 12: open_conversation shows error on fail
 
 
 @patch("aura.gui.conv_persistence.QFileDialog.getOpenFileName")
@@ -321,7 +346,7 @@ def test_open_conversation_refuses_cross_project_path(mock_warning,
     assert result is None
 
 
-# Test 12: auto_save_creates_project_and_thread
+# Test 13: auto_save_creates_project_and_thread
 
 import copy
 import json
@@ -347,7 +372,7 @@ def test_update_project_thread_creates_project_and_thread(tmp_path, persistence,
     assert thread_data["conversation_path"] == path.as_posix()
 
 
-# Test 13: update_project_thread_reuses_existing_thread
+# Test 14: update_project_thread_reuses_existing_thread
 
 def test_update_project_thread_reuses_existing_thread(tmp_path, persistence, mock_bridge):
     ws = tmp_path / "workspace"
@@ -369,7 +394,7 @@ def test_update_project_thread_reuses_existing_thread(tmp_path, persistence, moc
     assert thread_files_after[0].name == thread_files_before[0].name
 
 
-# Test 14: update_project_thread_does_not_break_on_error
+# Test 15: update_project_thread_does_not_break_on_error
 
 @patch("aura.gui.conv_persistence.ProjectStore")
 def test_update_project_thread_does_not_break_on_error(mock_project_store_class, tmp_path, persistence, mock_bridge):
@@ -386,7 +411,7 @@ def test_update_project_thread_does_not_break_on_error(mock_project_store_class,
     persistence._update_project_thread(ws, path, h)
 
 
-# Test 15: auto_save ignores cross-project existing_path
+# Test 16: auto_save ignores cross-project existing_path
 
 
 def test_auto_save_ignores_cross_project_existing_path(tmp_path, persistence, mock_bridge):

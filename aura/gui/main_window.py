@@ -281,7 +281,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Restore most recent conversation if enabled.
         if self._settings.restore_last_conversation:
             # Defer restoration so the UI paints and becomes interactive first.
-            QTimer.singleShot(100, lambda: self._persistence.restore_last(self._workspace_root))
+            initial_root = self._workspace_root
+            QTimer.singleShot(100, lambda: self._persistence.restore_last(initial_root))
 
         # Check for updates in the background.
         QTimer.singleShot(2000, self._check_for_updates)
@@ -528,7 +529,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Optionally restore last conversation from the new workspace
         if self._settings.restore_last_conversation:
-            QTimer.singleShot(0, lambda: self._persistence.restore_last(self._workspace_root))
+            QTimer.singleShot(0, lambda: self._persistence.restore_last(root_path))
 
     def _on_new_project(self) -> None:
         start = str(self._workspace_root) if self._workspace_root else str(Path.home())
