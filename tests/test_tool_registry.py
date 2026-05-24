@@ -20,6 +20,7 @@ from aura.conversation.tools.registry import (
     ToolRegistry,
 )
 
+from aura.conversation.tools.fs_write import propose_line_range_edit
 # Fixtures
 
 
@@ -1327,6 +1328,7 @@ class TestHandlerRegistration:
         "write_file",
         "edit_file",
         "edit_symbol",
+        "edit_line_range",
         "update_todo_list",
         "search_project_memory",
         "save_to_project_memory",
@@ -1425,6 +1427,7 @@ class TestModeToolSurfaces:
 
         assert "write_file" in tool_names
         assert "edit_file" in tool_names
+        assert "edit_line_range" in tool_names
         assert "update_todo_list" in tool_names
         assert "run_terminal_command" in tool_names
         assert "run_research" in tool_names  # Added!
@@ -1442,6 +1445,66 @@ class TestModeToolSurfaces:
 
         assert "write_file" in tool_names
         assert "edit_file" in tool_names
+        assert "edit_line_range" in tool_names
         assert "run_terminal_command" in tool_names
         assert "run_research" in tool_names  # Added!
         assert "dispatch_to_worker" not in tool_names
+
+class TestProposeLineRangeEdit:
+    """Tests for propose_line_range_edit from fs_write.py."""
+
+    def test_edit_line_range_replace_middle(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        target = ws / "test.txt"
+        target.write_text("line1\nline2\nline3\nline4\nline5\n")
+        result = propose_line_range_edit(ws, target, 2, 4, "REPLACED\n")
+        assert result["ok"] is True
+        assert result["new_content"] == "line1\nREPLACED\nline4\nline5\n"
+
+    def test_edit_line_range_insert_before_first_line(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        target = ws / "test.txt"
+        target.write_text("line1\nline2\nline3\n")
+        result = propose_line_range_edit(ws, target, 1, 1, "inserted\n")
+        assert result["ok"] is True
+        assert result["new_content"] == "inserted\nline1\nline2\nline3\n"
+
+    def test_edit_line_range_insert_in_middle(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        target = ws / "test.txt"
+        target.write_text("line1\nline2\nline3\n")
+        result = propose_line_range_edit(ws, target, 2, 2, "inserted\n")
+        assert result["ok"] is True
+        assert result["new_content"] == "line1\ninserted\nline2\nline3\n"
+
+    def test_edit_line_range_append_at_eof(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        target = ws / "test.txt"
+        target.write_text("line1\nline2\nline3\n")
+        result = propose_line_range_edit(ws, target, 4, 4, "appended\n")
+        assert result["ok"] is True
+        assert result["new_content"] == "line1\nline2\nline3\nappended\n"
+
+    def test_edit_line_range_append_at_eof_single_line_file(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        target = ws / "test.txt"
+        target.write_text("only line\n")
+        result = propose_line_range_edit(ws, target, 2, 2, "appended\n")
+        assert result["ok"] is True
+        assert result["new_content"] == "only line\nappended\n"
+
+    def test_edit_line_range_stale_bounds_structured_payload(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        target = ws / "test.txt"
+        target.write_text("line1\nline2\n")
+        result = propose_line_range_edit(ws, target, 5, 6, "x")
+        assert result["ok"] is False
+        assert "failure_class" in result
+        assert result["failure_class"] == "edit_mechanics_stale_line_range"
+        assert "suggested_next_action" in result

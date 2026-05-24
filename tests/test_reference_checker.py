@@ -140,3 +140,64 @@ def test_invalidate_workspace_index_clears_cache(tmp_workspace: Path):
     assert rc._workspace_symbols is None
     assert rc._workspace_modules is None
     assert rc._workspace_root is None
+
+
+def test_exception_handler_alias_counts_as_local_definition(tmp_workspace: Path):
+    rc = ReferenceChecker()
+    code = "try:\n    risky()\nexcept ValueError as url_err:\n    print(url_err)\n"
+
+    issues = rc.check(MockCapsule(proposed_code=code), workspace_root=tmp_workspace)
+
+    assert not any(issue.code == "undefined-name" and "url_err" in issue.message for issue in issues)
+
+
+def test_exception_alias_defined_locally(tmp_workspace: Path):
+    rc = ReferenceChecker()
+    code = (
+        "import urllib.error\n"
+        "import socket\n"
+        "def test():\n"
+        "    try:\n"
+        "        pass\n"
+        "    except urllib.error.URLError as exc:\n"
+        "        if isinstance(exc.reason, socket.timeout):\n"
+        '            return "timeout"\n'
+        '    return "ok"\n'
+    )
+    issues = rc.check(MockCapsule(proposed_code=code), workspace_root=tmp_workspace)
+    assert not any(i.code == "undefined-name" for i in issues)
+
+
+def test_multiple_exception_aliases(tmp_workspace: Path):
+    rc = ReferenceChecker()
+    code = (
+        "try:\n"
+        "    pass\n"
+        "except ValueError as url_err:\n"
+        "    print(url_err)\n"
+        "except KeyError as http_err:\n"
+        "    print(http_err)\n"
+    )
+    issues = rc.check(MockCapsule(proposed_code=code), workspace_root=tmp_workspace)
+    assert not any(
+        issue.code == "undefined-name" and name in issue.message for issue in issues for name in ("url_err", "http_err")
+    )
+
+
+def test_nested_try_except_aliases(tmp_workspace: Path):
+    rc = ReferenceChecker()
+    code = (
+        "try:\n"
+        "    try:\n"
+        "        pass\n"
+        "    except ValueError as inner_err:\n"
+        "        print(inner_err)\n"
+        "except KeyError as outer_err:\n"
+        "    print(outer_err)\n"
+    )
+    issues = rc.check(MockCapsule(proposed_code=code), workspace_root=tmp_workspace)
+    assert not any(
+        issue.code == "undefined-name" and name in issue.message
+        for issue in issues
+        for name in ("inner_err", "outer_err")
+    )
