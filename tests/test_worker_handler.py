@@ -292,6 +292,36 @@ class TestDispatch:
         handler._on_cancel_dispatch_clicked("tc1")
         bridge.user_cancelled_dispatch.assert_called_once_with("tc1")
 
+    def test_spec_card_render_failure_unblocks_auto_dispatch(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.auto_dispatch = True
+        chat.add_spec_card.side_effect = RuntimeError("bad markdown")
+
+        handler._on_worker_dispatch_requested(
+            "tc1", "goal", ["f.py"], "spec", "acc", "summary",
+        )
+
+        chat.add_error.assert_called_once()
+        bridge.user_dispatched.assert_called_once_with(
+            "tc1", "goal", ["f.py"], "spec", "acc", "summary",
+        )
+        bridge.user_cancelled_dispatch.assert_not_called()
+
+    def test_spec_card_render_failure_cancels_manual_dispatch(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.auto_dispatch = False
+        chat.add_spec_card.side_effect = RuntimeError("bad markdown")
+
+        handler._on_worker_dispatch_requested(
+            "tc1", "goal", ["f.py"], "spec", "acc", "summary",
+        )
+
+        chat.add_error.assert_called_once()
+        bridge.user_dispatched.assert_not_called()
+        bridge.user_cancelled_dispatch.assert_called_once_with("tc1")
+
 
 # Signal wiring
 

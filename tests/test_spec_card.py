@@ -129,6 +129,19 @@ class TestFullSpecCollapsed:
         assert spec_card._raw_spec_section._open is False
         assert not spec_card._spec_body_label.isVisible()
 
+    def test_full_spec_renders_regex_backslashes_in_code_fences(self, qapp):
+        spec = (
+            "Update regex handling.\n\n"
+            "```python\n"
+            "import re\n"
+            "pattern = re.compile(r\"\\s+\")\n"
+            "```\n"
+        )
+
+        card = SpecCard("tid", "goal", ["f.py"], spec, "acc", summary="")
+
+        assert card.current_spec()[2] == spec
+
 
 class TestToolCallId:
     def test_tool_call_id(self, spec_card):

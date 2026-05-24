@@ -60,5 +60,13 @@ class ToolExecutor:
             return ToolExecResult(
                 ok=False, payload={"ok": False, "error": f"unknown tool: {name}"}
             )
-        except (ValueError, OSError) as exc:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": str(exc)})
+        except ValueError as exc:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": str(exc), "failure_class": "path_error"},
+            )
+        except OSError as exc:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": str(exc), "failure_class": "internal_error"},
+            )

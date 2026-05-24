@@ -6,8 +6,52 @@ import re
 from pathlib import Path
 from typing import Any
 
-from aura.ast_utils import parse_python_ast
 from aura.paths import safe_is_relative_to, safe_relative_to
+
+
+def _rel_path(workspace_root: Path, target: Path) -> str:
+    if safe_is_relative_to(target, workspace_root):
+        return safe_relative_to(target, workspace_root).as_posix()
+    return str(target)
+
+
+def _failure_payload(
+    workspace_root: Path,
+    target: Path,
+    error: str,
+    failure_class: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    rel = _rel_path(workspace_root, target)
+    payload: dict[str, Any] = {
+        "ok": False,
+        "path": rel,
+        "rel_path": rel,
+        "error": error,
+        "failure_class": failure_class,
+    }
+    payload.update(extra)
+    return payload
+
+
+def _stale_line_range_payload(
+    workspace_root: Path,
+    target: Path,
+    error: str,
+    start_line: int,
+    end_line: int,
+) -> dict[str, Any]:
+    return _failure_payload(
+        workspace_root,
+        target,
+        error,
+        "edit_mechanics_stale_line_range",
+        suggested_tool="read_file",
+        suggested_next_tool="read_file",
+        suggested_next_action="Re-read the file, then retry edit_line_range with corrected line numbers.",
+        start_line=start_line,
+        end_line=end_line,
+    )
 
 
 def _sanitize_edit_strings(old_str: str, new_str: str) -> tuple[str, str, bool]:
@@ -55,23 +99,26 @@ def _sanitize_edit_strings(old_str: str, new_str: str) -> tuple[str, str, bool]:
 
 
 def propose_write(workspace_root: Path, target: Path, content: str) -> dict[str, Any]:
-    rel = safe_relative_to(target, workspace_root).as_posix() if safe_is_relative_to(target, workspace_root) else str(target)
+    rel = _rel_path(workspace_root, target)
     if target.exists() and target.is_file():
         try:
             old_content = target.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             return {
                 "ok": False,
+                "path": rel,
                 "rel_path": rel,
                 "old_content": "",
                 "new_content": content,
                 "is_new_file": False,
                 "error": "file is not valid UTF-8 text",
+                "failure_class": "internal_error",
             }
     else:
         old_content = ""
     return {
         "ok": True,
+        "path": rel,
         "rel_path": rel,
         "old_content": old_content,
         "new_content": content,
@@ -85,35 +132,45 @@ def propose_line_range_edit(
     """Propose replacing an exact line range in a file.
 
     1-based, inclusive start_line, exclusive end_line (replaces lines
-    [start_line, end_line)). Requires the file to already exist.
+    [start_line, end_line)). When start_line == end_line, inserts before
+    that line. start_line == end_line == num_lines + 1 appends at EOF.
+    Requires the file to already exist.
     """
     if not target.exists():
-        rel = safe_relative_to(target, workspace_root).as_posix() if safe_is_relative_to(target, workspace_root) else str(target)
-        return {"ok": False, "error": f"file not found: {rel}", "rel_path": rel, "suggested_tool": "write_file"}
+        rel = _rel_path(workspace_root, target)
+        return _failure_payload(
+            workspace_root,
+            target,
+            f"file not found: {rel}",
+            "path_error",
+            suggested_tool="write_file",
+            suggested_next_tool="write_file",
+            suggested_next_action="Use write_file if this file should be created.",
+        )
     if not target.is_file():
-        rel = safe_relative_to(target, workspace_root).as_posix() if safe_is_relative_to(target, workspace_root) else str(target)
-        return {"ok": False, "error": f"not a regular file: {rel}", "rel_path": rel}
+        rel = _rel_path(workspace_root, target)
+        return _failure_payload(workspace_root, target, f"not a regular file: {rel}", "path_error")
 
     try:
         original = target.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        return {"ok": False, "error": "file is not valid UTF-8 text"}
+        return _failure_payload(workspace_root, target, "file is not valid UTF-8 text", "internal_error")
     except OSError:
-        return {"ok": False, "error": "failed to read file"}
+        return _failure_payload(workspace_root, target, "failed to read file", "internal_error")
 
-    rel = safe_relative_to(target, workspace_root).as_posix()
+    rel = _rel_path(workspace_root, target)
     lines_with_nl = original.splitlines(keepends=True)
     num_lines = len(lines_with_nl)
 
     # Validate line numbers
     if start_line < 1:
-        return {"ok": False, "error": f"start_line must be >= 1, got {start_line}", "rel_path": rel}
-    if end_line <= start_line:
-        return {"ok": False, "error": f"end_line ({end_line}) must be > start_line ({start_line})", "rel_path": rel}
-    if start_line > num_lines:
-        return {"ok": False, "error": f"start_line ({start_line}) exceeds file length ({num_lines} lines)", "rel_path": rel}
+        return _stale_line_range_payload(workspace_root, target, f"start_line must be >= 1, got {start_line}", start_line, end_line)
+    if end_line < start_line:
+        return _stale_line_range_payload(workspace_root, target, f"end_line ({end_line}) must be >= start_line ({start_line})", start_line, end_line)
+    if start_line > num_lines + 1:
+        return _stale_line_range_payload(workspace_root, target, f"start_line ({start_line}) exceeds file length+1 ({num_lines + 1})", start_line, end_line)
     if end_line > num_lines + 1:
-        return {"ok": False, "error": f"end_line ({end_line}) exceeds file length+1 ({num_lines + 1})", "rel_path": rel}
+        return _stale_line_range_payload(workspace_root, target, f"end_line ({end_line}) exceeds file length+1 ({num_lines + 1})", start_line, end_line)
 
     # Convert to 0-based for replace_line_range
     start_idx = start_line - 1
@@ -124,20 +181,28 @@ def propose_line_range_edit(
     if target.suffix == ".py":
         try:
             compile(new_content, target.name, "exec")
-        except SyntaxError:
-            return {
-                "ok": False,
-                "error": "replacement produces invalid Python",
-                "rel_path": rel,
-                "suggested_tool": "write_file",
-            }
+        except SyntaxError as exc:
+            return _failure_payload(
+                workspace_root,
+                target,
+                f"replacement produces invalid Python: {exc}",
+                "syntax_invalid",
+                suggested_tool="edit_line_range",
+                suggested_next_tool="edit_line_range",
+                suggested_next_action="Repair the Python syntax in this file before any unrelated tool call.",
+                start_line=start_line,
+                end_line=end_line,
+            )
 
     return {
         "ok": True,
+        "path": rel,
         "rel_path": rel,
         "old_content": original,
         "new_content": new_content,
         "is_new_file": False,
+        "start_line": start_line,
+        "end_line": end_line,
     }
 
 
@@ -157,16 +222,15 @@ def replace_line_range(
 def propose_edit(
     workspace_root: Path, target: Path, old_str: str, new_str: str
 ) -> dict[str, Any]:
+    rel = _rel_path(workspace_root, target)
     if not target.exists():
-        return {"ok": False, "error": f"file not found: {safe_relative_to(target, workspace_root)}"}
+        return _failure_payload(workspace_root, target, f"file not found: {rel}", "path_error")
     if not target.is_file():
-        return {"ok": False, "error": f"not a regular file: {safe_relative_to(target, workspace_root)}"}
+        return _failure_payload(workspace_root, target, f"not a regular file: {rel}", "path_error")
     try:
         original = target.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        return {"ok": False, "error": "file is not valid UTF-8 text"}
-
-    rel = safe_relative_to(target, workspace_root).as_posix()
+        return _failure_payload(workspace_root, target, "file is not valid UTF-8 text", "internal_error")
 
     # Sanitize inputs: strip markdown fences, normalize whitespace.
     old_str, new_str, sanitized = _sanitize_edit_strings(old_str, new_str)
@@ -177,6 +241,7 @@ def propose_edit(
         proposed = original.replace(old_str, new_str, 1)
         result: dict[str, Any] = {
             "ok": True,
+            "path": rel,
             "rel_path": rel,
             "old_content": original,
             "new_content": proposed,
@@ -196,10 +261,13 @@ def propose_edit(
         # empty old_str after splitting — fall through to error below
         return {
             "ok": False,
+            "path": rel,
+            "rel_path": rel,
             "error": (
                 "old_str not found in file. Best fuzzy match ratio: 0.000 "
                 "(threshold: 0.75). Tried exact, line-exact, and fuzzy matching."
             ),
+            "failure_class": "edit_mechanics_old_str_not_found",
             "edit_file_failure": True,
             "suggested_tool": "edit_line_range",
             "suggested_next_tool": "edit_line_range",
@@ -219,6 +287,7 @@ def propose_edit(
         proposed = replace_line_range(original, lines_with_nl, start_idx, start_idx + window_len, new_str)
         result = {
             "ok": True,
+            "path": rel,
             "rel_path": rel,
             "old_content": original,
             "new_content": proposed,
@@ -278,6 +347,7 @@ def propose_edit(
         )
         result: dict[str, Any] = {
             "ok": True,
+            "path": rel,
             "rel_path": rel,
             "old_content": original,
             "new_content": proposed,
@@ -299,6 +369,7 @@ def propose_edit(
             )
             result: dict[str, Any] = {
                 "ok": True,
+                "path": rel,
                 "rel_path": rel,
                 "old_content": original,
                 "new_content": proposed,
@@ -325,7 +396,10 @@ def propose_edit(
         )
         return {
             "ok": False,
+            "path": rel,
+            "rel_path": rel,
             "error": error_msg,
+            "failure_class": "edit_mechanics_ambiguous_match",
             "edit_file_failure": True,
             "suggested_tool": "edit_line_range",
             "suggested_next_tool": "edit_line_range",
@@ -341,7 +415,10 @@ def propose_edit(
     )
     return {
         "ok": False,
+        "path": rel,
+        "rel_path": rel,
         "error": error_msg,
+        "failure_class": "edit_mechanics_old_str_not_found",
         "edit_file_failure": True,
         "suggested_tool": "edit_line_range",
         "suggested_next_tool": "edit_line_range",

@@ -286,7 +286,7 @@ class ToolRunner:
                     result=payload,
                 )
             )
-            return None
+            return {"_terminal_payload": {"ok": False, "error": "command is required", "command": ""}}
 
         timeout = int(args.get("timeout", 120))
 
@@ -322,15 +322,13 @@ class ToolRunner:
         if not ok and result.stderr and "Docker is not available" in result.stderr:
             full_output = f"[SANDBOX ERROR] {result.stderr}"
 
-        payload = json.dumps(
-            {
-                "ok": ok,
-                "exit_code": exit_code,
-                "output": full_output,
-                "command": command,
-            },
-            ensure_ascii=False,
-        )
+        payload_dict = {
+            "ok": ok,
+            "exit_code": exit_code,
+            "output": full_output,
+            "command": command,
+        }
+        payload = json.dumps(payload_dict, ensure_ascii=False)
 
         observed = self._loop_detector.observe(
             mode=mode,
@@ -351,4 +349,7 @@ class ToolRunner:
                 result=payload,
             )
         )
+        if loop_info is None:
+            loop_info = {}
+        loop_info["_terminal_payload"] = payload_dict
         return loop_info

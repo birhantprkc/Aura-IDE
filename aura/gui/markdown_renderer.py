@@ -131,7 +131,7 @@ def _render_markdown_with_code(text: str, color: str | None = None, italic: bool
         token = f"AURACODEPLACEHOLDER{i}ENDAURA"
         wrapped = re.compile(r"<p[^>]*>\s*" + re.escape(token) + r"\s*</p>")
         if wrapped.search(html):
-            html = wrapped.sub(block, html, count=1)
+            html = wrapped.sub(lambda _match, block=block: block, html, count=1)
         else:
             html = html.replace(token, block, 1)
 

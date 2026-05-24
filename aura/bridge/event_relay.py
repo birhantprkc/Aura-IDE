@@ -149,13 +149,18 @@ class WorkerEventRelay(QObject):
                 and isinstance(parsed, dict)
                 and parsed.get("ok")
             ):
-                self.write_results.append(
-                    {
-                        "tool": ev.name,
-                        "path": parsed.get("path"),
-                        "is_new_file": parsed.get("is_new_file", False),
-                    }
-                )
+                write_record = {
+                    "tool": ev.name,
+                    "path": parsed.get("path"),
+                    "is_new_file": parsed.get("is_new_file", False),
+                    "applied": parsed.get("applied"),
+                    "backup": parsed.get("backup"),
+                }
+                if "start_line" in parsed:
+                    write_record["start_line"] = parsed.get("start_line")
+                if "end_line" in parsed:
+                    write_record["end_line"] = parsed.get("end_line")
+                self.write_results.append(write_record)
                 path = parsed.get("path")
                 if isinstance(path, str) and path:
                     self.touched_files.add(path)
@@ -182,11 +187,7 @@ class WorkerEventRelay(QObject):
             if ev.ok and ev.name == "update_todo_list":
                 self.todo_used = True
             # Track all tool results
-            tr = {
-                "name": ev.name,
-                "ok": ev.ok,
-                "result_preview": (ev.result or "")[:200],
-            }
+            tr = self._tool_result_record(ev, parsed)
             self.tool_results.append(tr)
             if not ev.ok:
                 self.failed_tool_results.append(tr)
@@ -234,3 +235,51 @@ class WorkerEventRelay(QObject):
         self.edited_existing_files.clear()
         self.todo_used = False
         self.final_report_text = ""
+
+    def _tool_result_record(self, ev: ToolResult, parsed: Any) -> dict[str, Any]:
+        record: dict[str, Any] = {
+            "name": ev.name,
+            "ok": ev.ok,
+            "result_preview": (ev.result or "")[:200],
+        }
+        if not isinstance(parsed, dict):
+            if not ev.ok:
+                record["error"] = (ev.result or "")[:500]
+            return record
+
+        fields = (
+            "path",
+            "rel_path",
+            "error",
+            "suggested_tool",
+            "suggested_next_tool",
+            "suggested_next_action",
+            "nearest_candidates",
+            "best_fuzzy_ratio",
+            "available_symbols",
+            "symbol_type",
+            "symbol_name",
+            "class_name",
+            "failure_class",
+            "internal_recovery_steer",
+            "bounce",
+            "reject",
+            "craft_issues",
+            "applied",
+            "is_new_file",
+            "start_line",
+            "end_line",
+            "backup",
+        )
+        for key in fields:
+            if key in parsed:
+                record[key] = parsed[key]
+
+        if "path" not in record and isinstance(record.get("rel_path"), str):
+            record["path"] = record["rel_path"]
+        if "path" not in record and isinstance((ev.extras or {}).get("rel_path"), str):
+            record["path"] = (ev.extras or {}).get("rel_path")
+        if "error" not in record and not ev.ok:
+            record["error"] = (ev.result or "")[:500]
+        record["payload"] = parsed
+        return record

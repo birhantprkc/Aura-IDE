@@ -7,7 +7,7 @@ contract and that required sections are present.
 from __future__ import annotations
 
 from aura.prompts import PLANNER_SYSTEM_PROMPT, SINGLE_SYSTEM_PROMPT, WORKER_SYSTEM_PROMPT
-from aura.conversation.tools._schemas import DISPATCH_TOOL_DEF
+from aura.conversation.tools._schemas import DIAGNOSTIC_TOOL_DEF, DISPATCH_TOOL_DEF
 
 
 def test_planner_worker_contract_consistency():
@@ -88,3 +88,14 @@ def test_code_taste_block_present():
     assert marker in WORKER_SYSTEM_PROMPT
     assert marker in SINGLE_SYSTEM_PROMPT
     assert marker not in PLANNER_SYSTEM_PROMPT
+
+
+def test_validation_guidance_is_windows_safe():
+    """Worker/Planner validation guidance should avoid Unix-only grep failures."""
+    assert "Do not use bare `grep`" in WORKER_SYSTEM_PROMPT
+    assert "exits 0 when the pattern is absent" in WORKER_SYSTEM_PROMPT
+    assert "Avoid bare `grep`" in PLANNER_SYSTEM_PROMPT
+
+    command_desc = DIAGNOSTIC_TOOL_DEF["function"]["parameters"]["properties"]["command"]["description"]
+    assert "Avoid bare grep" in command_desc
+    assert "exit 0 when the pattern is absent" in command_desc

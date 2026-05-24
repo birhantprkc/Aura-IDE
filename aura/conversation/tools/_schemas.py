@@ -602,7 +602,8 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                 "Provide a Search Block (the code to replace plus a few lines of surrounding context "
                 "for uniqueness). The matching is fuzzy — minor whitespace, indentation, or newline "
                 "differences are tolerated. The user reviews and approves the diff before it's "
-                "applied. Backed up first."
+                "applied. Backed up first. If matching fails, read nearest_candidates and switch "
+                "to edit_line_range or write_file instead of retrying the same old_str."
             ),
             "parameters": {
                 "type": "object",
@@ -635,7 +636,9 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                 "or class name — it avoids indentation and whitespace matching issues. "
                 "You must include all original decorators in your new_definition, as the replacement will overwrite "
                 "the existing decorators. "
-                "For non-Python files or partial replacements within a function, use edit_file instead."
+                "For non-Python files or partial replacements within a function, use edit_file instead. "
+                "If the symbol is not found, inspect available_symbols and switch to edit_line_range "
+                "or write_file instead of retrying the same symbol shape."
             ),
             "parameters": {
                 "type": "object",
@@ -670,7 +673,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "edit_line_range",
-            "description": "Replace an exact line range in a file. Use after reading the file when you know the exact start and end line numbers. 1-based, inclusive start_line, exclusive end_line (like Python list slicing — replaces lines [start_line, end_line)). Requires preceding read_file or read_files on this path.",
+            "description": "Replace or insert at an exact line range in a file. Use after reading the file when you know the exact start and end line numbers. 1-based, inclusive start_line, exclusive end_line (like Python list slicing — replaces lines [start_line, end_line)). start_line == end_line inserts before that line; start_line == end_line == num_lines + 1 appends at EOF. Requires preceding read_file or read_files on this path.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -684,7 +687,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                     },
                     "end_line": {
                         "type": "integer",
-                        "description": "Line after the last line to replace (1-based, exclusive). Replaces lines [start_line, end_line)."
+                        "description": "Line after the last line to replace (1-based, exclusive). Replaces lines [start_line, end_line). Equal to start_line for insertion."
                     },
                     "new_str": {
                         "type": "string",

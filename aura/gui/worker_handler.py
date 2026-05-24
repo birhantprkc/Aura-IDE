@@ -7,6 +7,7 @@ MainWindow can react to state changes (status bar refresh, input streaming).
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal
@@ -105,7 +106,24 @@ class WorkerEventHandler(QObject):
     ) -> None:
         """Always show the SpecCard; auto-dispatch or wait for card interaction."""
         file_list = list(files)
-        card = self._chat.add_spec_card(tool_call_id, goal, file_list, spec, acceptance, summary)
+        try:
+            card = self._chat.add_spec_card(tool_call_id, goal, file_list, spec, acceptance, summary)
+        except Exception as exc:
+            logging.exception("Failed to render worker dispatch spec card")
+            try:
+                self._chat.add_error(
+                    "Dispatch UI Error",
+                    f"Could not render the dispatch card: {type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                logging.exception("Failed to show dispatch UI error")
+            if self._bridge.auto_dispatch:
+                self._bridge.user_dispatched(
+                    tool_call_id, goal, file_list, spec, acceptance, summary
+                )
+            else:
+                self._bridge.user_cancelled_dispatch(tool_call_id)
+            return
         card.dispatch_clicked.connect(self._on_dispatch_clicked)
         card.edit_clicked.connect(self._on_edit_spec_clicked)
         card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)

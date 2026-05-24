@@ -209,6 +209,7 @@ def _humanizer_gate_error(rel_path: str, result, blocking_issues: list) -> ToolE
         payload={
             "ok": False,
             "error": "Aura humanizer rejected generated Python before approval.",
+            "failure_class": "compiler_rejected",
             "humanizer_gate": True,
             "path": rel_path,
             "slop_score": getattr(report, "score", 0.0) if report else 0.0,
@@ -380,8 +381,15 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
                     "ok": False,
                     "error": result.repair_instructions,
                     "path": rel_path,
-                    "bounce": True
-                }
+                    "failure_class": "compiler_rejected",
+                    "bounce": True,
+                    "is_new_file": is_new_file,
+                    "craft_issues": [_craft_issue_payload(issue) for issue in result.issues],
+                    "suggested_next_action": (
+                        "Repair the proposed code once using the checker error, then "
+                        "retry with a different write tactic."
+                    ),
+                },
             )
             
         if isinstance(result, CompilerReject):
@@ -392,8 +400,11 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
                     "ok": False,
                     "error": result.reason,
                     "path": rel_path,
-                    "reject": True
-                }
+                    "failure_class": "compiler_rejected",
+                    "reject": True,
+                    "is_new_file": is_new_file,
+                    "craft_issues": [_craft_issue_payload(issue) for issue in result.issues],
+                },
             )
             
         return None
@@ -402,12 +413,33 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
         return None
 
 
+def _craft_issue_payload(issue) -> dict:
+    severity = getattr(issue, "severity", "")
+    return {
+        "line": getattr(issue, "line", None),
+        "column": getattr(issue, "column", None),
+        "code": getattr(issue, "code", ""),
+        "message": getattr(issue, "message", ""),
+        "suggestion": getattr(issue, "suggestion", ""),
+        "severity": getattr(severity, "value", str(severity)),
+    }
+
+
+def _is_new_root_validation_scratch(root: Path, target: Path) -> bool:
+    return (
+        target.parent == root
+        and not target.exists()
+        and target.name.startswith("_check")
+        and target.suffix == ".py"
+    )
+
+
 class WriteHandlersMixin:
     """Handlers for write tools — guards + approval + backup."""
 
     def _handle_write_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled."})
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
         if self._mode == "planner":
             return ToolExecResult(
                 ok=False,
@@ -418,13 +450,14 @@ class WriteHandlersMixin:
                         "You must use the 'dispatch_to_worker' tool to specify code changes. "
                         "Include your intended edits in the 'spec' field of the dispatch."
                     ),
+                    "failure_class": "internal_error",
                 },
             )
         return self._handle_write("write_file", args, approval_cb, reject_all)
 
     def _handle_edit_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled."})
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
         if self._mode == "planner":
             return ToolExecResult(
                 ok=False,
@@ -435,13 +468,14 @@ class WriteHandlersMixin:
                         "You must use the 'dispatch_to_worker' tool to specify code changes. "
                         "Include your intended edits in the 'spec' field of the dispatch."
                     ),
+                    "failure_class": "internal_error",
                 },
             )
         return self._handle_write("edit_file", args, approval_cb, reject_all)
 
     def _handle_edit_symbol(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled."})
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
         if self._mode == "planner":
             return ToolExecResult(
                 ok=False,
@@ -452,13 +486,14 @@ class WriteHandlersMixin:
                         "You must use the 'dispatch_to_worker' tool to specify code changes. "
                         "Include your intended edits in the 'spec' field of the dispatch."
                     ),
+                    "failure_class": "internal_error",
                 },
             )
         return self._handle_write("edit_symbol", args, approval_cb, reject_all)
 
     def _handle_edit_line_range(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled."})
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
         if self._mode == "planner":
             return ToolExecResult(
                 ok=False,
@@ -469,6 +504,7 @@ class WriteHandlersMixin:
                         "You must use the 'dispatch_to_worker' tool to specify code changes. "
                         "Include your intended edits in the 'spec' field of the dispatch."
                     ),
+                    "failure_class": "internal_error",
                 },
             )
         return self._handle_write("edit_line_range", args, approval_cb, reject_all)
@@ -483,18 +519,35 @@ class WriteHandlersMixin:
         if reject_all:
             return ToolExecResult(
                 ok=False,
-                payload={"ok": False, "error": "User rejected all writes in this turn."},
+                payload={"ok": False, "error": "User rejected all writes in this turn.", "failure_class": "approval_rejected"},
                 extras={"rejected_all": True},
             )
 
         path_arg = args.get("path", "")
         target = self._resolve_in_root(path_arg)
+        if name == "write_file" and _is_new_root_validation_scratch(self._root, target):
+            rel_path = safe_relative_to(target, self._root).as_posix()
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "path": rel_path,
+                    "rel_path": rel_path,
+                    "error": "Root-level _check*.py validation scratch files are not allowed.",
+                    "failure_class": "validation_scratch_banned",
+                    "suggested_next_tool": "run_terminal_command",
+                    "suggested_next_action": (
+                        "Use python -c, an existing focused test, or .aura/tmp "
+                        "with cleanup."
+                    ),
+                },
+            )
 
         if name == "write_file":
             content = args.get("content", "")
             if not isinstance(content, str):
                 return ToolExecResult(
-                    ok=False, payload={"ok": False, "error": "content must be a string"}
+                    ok=False, payload={"ok": False, "error": "content must be a string", "failure_class": "internal_error"}
                 )
             proposal = _reg.propose_write(self._root, target, content)
             if not proposal.get("ok", False):
@@ -523,7 +576,7 @@ class WriteHandlersMixin:
             if not isinstance(old_str, str) or not isinstance(new_str, str):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "old_str and new_str must be strings"},
+                    payload={"ok": False, "error": "old_str and new_str must be strings", "failure_class": "internal_error"},
                 )
             proposal = _reg.propose_edit(self._root, target, old_str, new_str)
             if not proposal.get("ok", False):
@@ -550,11 +603,16 @@ class WriteHandlersMixin:
             if not isinstance(start_line, int) or not isinstance(end_line, int) or not isinstance(new_str, str):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "start_line and end_line must be integers, new_str must be a string"},
+                    payload={"ok": False, "error": "start_line and end_line must be integers, new_str must be a string", "failure_class": "internal_error"},
                 )
             proposal = _reg.propose_line_range_edit(self._root, target, start_line, end_line, new_str)
             if not proposal.get("ok", False):
                 return ToolExecResult(ok=False, payload=proposal)
+
+            _maybe_observe_humanizer(proposal)
+            craft_error = _run_compiler_pipeline(proposal, "edit_line_range", contract=self.get_contract(), workspace_root=self._root)
+            if craft_error is not None:
+                return craft_error
 
             req = ApprovalRequest(
                 tool_name="edit_line_range",
@@ -571,7 +629,7 @@ class WriteHandlersMixin:
             if not isinstance(symbol_type, str) or not isinstance(symbol_name, str) or not isinstance(new_definition, str):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "symbol_type, symbol_name, and new_definition must be strings"},
+                    payload={"ok": False, "error": "symbol_type, symbol_name, and new_definition must be strings", "failure_class": "internal_error"},
                 )
             proposal = _reg.propose_edit_symbol(
                 self._root, target, symbol_type, symbol_name, new_definition, class_name
@@ -600,7 +658,7 @@ class WriteHandlersMixin:
         if decision.action == "reject":
             return ToolExecResult(
                 ok=False,
-                payload={"ok": False, "error": "User rejected this change."},
+                payload={"ok": False, "error": "User rejected this change.", "path": req.rel_path, "failure_class": "approval_rejected"},
                 extras={
                     "approval": "reject",
                     "rel_path": req.rel_path,
@@ -613,6 +671,8 @@ class WriteHandlersMixin:
                 payload={
                     "ok": False,
                     "error": "User rejected this change and all further writes in this turn.",
+                    "path": req.rel_path,
+                    "failure_class": "approval_rejected",
                 },
                 extras={
                     "approval": "reject_all",
@@ -631,15 +691,19 @@ class WriteHandlersMixin:
         rel_backup = (
             safe_relative_to(backup_path, self._root).as_posix() if backup_path is not None else None
         )
+        payload = {
+            "ok": True,
+            "path": req.rel_path,
+            "applied": name,
+            "is_new_file": req.is_new_file,
+            "backup": rel_backup,
+        }
+        if name == "edit_line_range":
+            payload["start_line"] = proposal.get("start_line")
+            payload["end_line"] = proposal.get("end_line")
         return ToolExecResult(
             ok=True,
-            payload={
-                "ok": True,
-                "path": req.rel_path,
-                "applied": name,
-                "is_new_file": req.is_new_file,
-                "backup": rel_backup,
-            },
+            payload=payload,
             extras={
                 "approval": "approve",
                 "rel_path": req.rel_path,

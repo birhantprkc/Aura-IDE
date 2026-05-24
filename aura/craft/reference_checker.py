@@ -232,6 +232,8 @@ class ReferenceChecker:
                 local_defs.add(node.id)
             elif isinstance(node, ast.arg):
                 local_defs.add(node.arg)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                local_defs.add(node.name)
 
         imported_names: dict[str, str] = {}
         import_sources: list[tuple[str, ast.AST, str | None]] = []

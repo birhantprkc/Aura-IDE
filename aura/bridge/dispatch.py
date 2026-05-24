@@ -7,6 +7,7 @@ the worker manager when the user clicks Dispatch.
 from __future__ import annotations
 
 import logging
+import json
 import re
 import threading
 from dataclasses import replace
@@ -54,6 +55,14 @@ __all__ = [
 ]
 
 DISPATCH_TIMEOUT = 300.0
+
+RECOVERABLE_WORKER_WRITE_FAILURE_CLASSES = {
+    "edit_mechanics_symbol_not_found",
+    "edit_mechanics_old_str_not_found",
+    "edit_mechanics_ambiguous_match",
+    "edit_mechanics_stale_line_range",
+    "syntax_invalid",
+}
 
 
 class _DispatchPending:
@@ -311,6 +320,7 @@ class _DispatchProxy(QObject):
         relay.agentProcessFinished.connect(self.workerAgentProcessFinished)
 
         internal_error: str | None = None
+        scratch_before = _root_check_files(self._workspace_root) if self._workspace_root is not None else set()
         try:
             worker_manager.send(
                 on_event=lambda ev: relay.relay(tool_call_id, ev),
@@ -331,14 +341,35 @@ class _DispatchProxy(QObject):
         if cancel_event.is_set():
             worker_history.pop_if_empty_assistant_message()
 
+        cleaned_scratch_files: list[str] = []
+        if self._workspace_root is not None and not _request_allows_root_check_files(req):
+            cleaned_scratch_files = _cleanup_new_root_check_files(self._workspace_root, scratch_before)
+            if cleaned_scratch_files:
+                cleaned_set = set(cleaned_scratch_files)
+                relay.write_results = [
+                    item for item in relay.write_results if item.get("path") not in cleaned_set
+                ]
+                relay.touched_files.difference_update(cleaned_set)
+                relay.wrote_new_files = [path for path in relay.wrote_new_files if path not in cleaned_set]
+                relay.edited_existing_files = [
+                    path for path in relay.edited_existing_files if path not in cleaned_set
+                ]
+
         final_report = _last_assistant_content(worker_history)
         continuation = _parse_continuation_report(final_report)
         is_partial = bool(continuation.get("status") == "needs_followup" or continuation.get("remaining"))
         claimed_validation = _final_report_claims_validation(final_report) or bool(continuation.get("validation_text"))
 
         has_writes = bool(relay.write_results)
-        failed_write_tools = [r for r in relay.failed_tool_results if r["name"] in WRITE_TOOLS]
-        failed_validation = [v for v in relay.validation_results if not v["ok"]]
+        internal_recovery_steers = [
+            r for r in relay.failed_tool_results if r.get("internal_recovery_steer")
+        ]
+        write_failures = [
+            r
+            for r in relay.failed_tool_results
+            if r["name"] in WRITE_TOOLS and not r.get("internal_recovery_steer")
+        ]
+        failed_validation = _unrecovered_validation_failures(relay.validation_results)
         validation_ran = bool(relay.validation_results)
         missing_validation_after_writes = has_writes and not validation_ran
 
@@ -353,16 +384,26 @@ class _DispatchProxy(QObject):
         if internal_error:
             result_errors.insert(0, "Worker failed due to an internal error.")
 
-        # Failed write tools are hard errors
+        structured_failure = _parse_structured_worker_failure(final_report)
+        if structured_failure:
+            result_errors.append(_format_structured_worker_failure(structured_failure))
+
+        recoverable_write_failures = [
+            r for r in write_failures if _is_recoverable_worker_write_failure(r)
+        ]
+        failed_write_tools = [
+            r for r in write_failures if not _is_recoverable_worker_write_failure(r)
+        ]
         for r in failed_write_tools:
-            result_errors.append(f"Worker write tool '{r['name']}' reported failure.")
+            result_errors.append(_format_worker_write_failure(r))
 
-        # Failed validation commands are hard errors
-        for v in failed_validation:
-            cmd = v["command"][:80]
-            result_errors.append(f"Validation command failed (exit code {v['exit_code']}): {cmd}")
+        if not structured_failure:
+            # Failed validation commands are hard errors
+            for v in failed_validation:
+                cmd = v["command"][:80]
+                result_errors.append(f"Validation command failed (exit code {v['exit_code']}): {cmd}")
 
-        if _final_report_claims_failure(final_report):
+        if not structured_failure and _final_report_claims_failure(final_report):
             result_errors.append(
                 "Worker final report claims a blocker, failed validation, failed acceptance, "
                 "or unverified acceptance."
@@ -379,6 +420,15 @@ class _DispatchProxy(QObject):
             )
 
         result_caveats: list[str] = []
+
+        if recoverable_write_failures and not relay.write_results and not structured_failure:
+            result_caveats.append(_format_recoverable_write_failure(recoverable_write_failures[0]))
+
+        if cleaned_scratch_files:
+            result_caveats.append(
+                "Cleaned Worker-created root validation scratch file(s): "
+                + ", ".join(cleaned_scratch_files[:5])
+            )
 
         if missing_validation_after_writes:
             result_caveats.append("Worker modified files but ran no validation command.")
@@ -398,6 +448,7 @@ class _DispatchProxy(QObject):
 
         # Severity-based classification
         has_hard_failure = bool(result_errors)
+        has_recoverable_edit_blocker = bool(recoverable_write_failures) and not relay.write_results
         has_no_work = not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors
         has_no_validation_after_writes = missing_validation_after_writes
         has_unverified_acceptance = acceptance_unverified
@@ -411,6 +462,10 @@ class _DispatchProxy(QObject):
             ok = False
             needs_followup = False
             recoverable = False
+        elif has_recoverable_edit_blocker:
+            ok = False
+            needs_followup = True
+            recoverable = True
         elif has_no_work and is_implementation:
             ok = False
             needs_followup = True
@@ -430,12 +485,20 @@ class _DispatchProxy(QObject):
             needs_followup = False
             recoverable = False
 
+        summary_continuation = dict(continuation)
+        if has_recoverable_edit_blocker:
+            if not summary_continuation.get("status"):
+                summary_continuation["status"] = "needs_followup"
+            if result_caveats:
+                if not summary_continuation.get("reason"):
+                    summary_continuation["reason"] = result_caveats[0]
+
         summary = _build_worker_summary(
             req,
             worker_history,
             relay.write_results,
             result_errors,
-            continuation,
+            summary_continuation,
             result_caveats,
         )
         modified_files = continuation.get("modified_files") or [
@@ -493,6 +556,9 @@ class _DispatchProxy(QObject):
             suggested_next_spec=continuation.get("recommended_next_step"),
             extras={
                 "writes": relay.write_results,
+                "failed_write_tools": failed_write_tools,
+                "internal_recovery_steers": internal_recovery_steers,
+                "recoverable_write_failures": recoverable_write_failures,
                 "errors": result_errors,
                 "caveats": result_caveats,
                 "worker_internal_error": bool(internal_error),
@@ -563,7 +629,7 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
         "- Do not hide failure behind success-looking output.",
         "- Do not satisfy acceptance with placeholder behavior.",
         "- If a requested responsibility does not belong in a listed file, inspect and choose the smallest correct neighboring module, or report the mismatch.",
-        "- Start with a TODO list and keep it updated.",
+        "- Use update_todo_list for broad or risky work; small localized tasks may proceed directly after reading.",
         "- Build the smallest complete implementation.",
         "- Own exact edits, validation, and code-quality decisions.",
         "- Code must work and be easy to work on.",
@@ -636,6 +702,85 @@ def _final_report_claims_validation(content: str) -> bool:
             "exits 0",
         )
     )
+
+
+def _parse_structured_worker_failure(content: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    if parsed.get("ok") is not False:
+        return {}
+    failure_class = parsed.get("failure_class")
+    error = parsed.get("error")
+    if not failure_class or not error:
+        return {}
+    return parsed
+
+
+def _format_structured_worker_failure(result: dict[str, Any]) -> str:
+    error = str(result.get("error") or "Worker failed.")
+    failure_class = str(result.get("failure_class") or "worker_failed")
+    return f"{error} ({failure_class})."
+
+
+def _is_recoverable_worker_write_failure(result: dict[str, Any]) -> bool:
+    if result.get("internal_recovery_steer"):
+        return True
+    failure_class = str(result.get("failure_class") or "")
+    if failure_class == "syntax_invalid" and result.get("recoverable") is False:
+        return False
+    return failure_class in RECOVERABLE_WORKER_WRITE_FAILURE_CLASSES
+
+
+def _format_worker_write_failure(result: dict[str, Any]) -> str:
+    name = str(result.get("name") or "write_tool")
+    path = str(result.get("path") or "")
+    error = str(result.get("error") or result.get("result_preview") or "unknown error")
+    failure_class = str(result.get("failure_class") or "internal_error")
+    target = f" on {path}" if path else ""
+    return f"Worker write tool '{name}' failed{target}: {error} ({failure_class})."
+
+
+def _format_recoverable_write_failure(result: dict[str, Any]) -> str:
+    name = str(result.get("name") or "write_tool")
+    path = str(result.get("path") or "")
+    error = str(result.get("error") or result.get("result_preview") or "recoverable edit mechanics failure")
+    suggested = str(result.get("suggested_next_tool") or result.get("suggested_tool") or "edit_line_range")
+    target = f" on {path}" if path else ""
+    return f"Recoverable edit mechanics failure from {name}{target}: {error}. Next tactic: {suggested}."
+
+
+def _unrecovered_validation_failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+    for index, result in enumerate(results):
+        if result.get("ok"):
+            continue
+        command = str(result.get("command", ""))
+        targets = set(_py_compile_targets(command))
+        if targets and _later_py_compile_passes(results[index + 1:], targets):
+            continue
+        failures.append(result)
+    return failures
+
+
+def _later_py_compile_passes(results: list[dict[str, Any]], targets: set[str]) -> bool:
+    for result in results:
+        if not result.get("ok"):
+            continue
+        later_targets = set(_py_compile_targets(str(result.get("command", ""))))
+        if targets and targets.issubset(later_targets):
+            return True
+    return False
+
+
+def _py_compile_targets(command: str) -> list[str]:
+    if "py_compile" not in command:
+        return []
+    matches = re.findall(r"(?<![\w.-])([A-Za-z0-9_./\\:\-]+\.py)(?![\w.-])", command)
+    return [m.replace("\\", "/").lstrip("./") for m in matches if not m.endswith("py_compile.py")]
 
 
 def _build_worker_summary(
@@ -725,6 +870,39 @@ def _check_read_before_edit(
         p for p in edited_existing_files
         if p not in all_read and file_exists(p)
     ]
+
+
+def _root_check_files(root: Path | None) -> set[Path]:
+    if root is None:
+        return set()
+    try:
+        return {path.resolve() for path in root.glob("_check*.py") if path.is_file()}
+    except OSError:
+        return set()
+
+
+def _request_allows_root_check_files(req: WorkerDispatchRequest) -> bool:
+    text = " ".join([req.goal, req.spec, req.acceptance, req.summary]).lower()
+    if "_check" in text:
+        return True
+    return any(Path(path).name.startswith("_check") for path in req.files)
+
+
+def _cleanup_new_root_check_files(root: Path, before: set[Path]) -> list[str]:
+    cleaned: list[str] = []
+    for path in _root_check_files(root):
+        if path in before:
+            continue
+        try:
+            rel = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        try:
+            path.unlink()
+            cleaned.append(rel)
+        except OSError:
+            continue
+    return cleaned
 
 
 def _parse_continuation_report(content: str) -> dict[str, Any]:

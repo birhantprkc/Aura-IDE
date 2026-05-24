@@ -14,6 +14,19 @@ from aura.conversation.tools.fs_write import replace_line_range
 from aura.paths import safe_relative_to
 
 
+def _collect_available_symbols(tree: ast.AST) -> dict[str, list[str]]:
+    available: dict[str, list[str]] = {"functions": [], "classes": [], "methods": []}
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            available["functions"].append(node.name)
+        elif isinstance(node, ast.ClassDef):
+            available["classes"].append(node.name)
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    available["methods"].append(f"{node.name}.{child.name}")
+    return available
+
+
 def find_symbol_range(
     source: str,
     symbol_type: str,
@@ -50,8 +63,7 @@ def find_symbol_range(
     if symbol_type == "function" and class_name:
         effective_type = "method"
 
-    # Collect available top-level names for error reporting.
-    available: dict[str, list[str]] = {"functions": [], "classes": [], "methods": []}
+    available = _collect_available_symbols(tree)
 
     if effective_type == "method":
         if not class_name:
@@ -85,14 +97,12 @@ def find_symbol_range(
     found = None
     for node in ast.iter_child_nodes(tree):
         if effective_type == "function" and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            available["functions"].append(node.name)
             if node.name == symbol_name:
                 if found is not None:
                     warning = f"Multiple symbols named '{symbol_name}' found; using first occurrence"
                 if found is None:
                     found = node
         elif effective_type == "class" and isinstance(node, ast.ClassDef):
-            available["classes"].append(node.name)
             if node.name == symbol_name:
                 if found is not None:
                     warning = f"Multiple symbols named '{symbol_name}' found; using first occurrence"
@@ -105,13 +115,6 @@ def find_symbol_range(
             start = found.decorator_list[0].lineno - 1
         end = found.end_lineno  # end_lineno is 1-indexed inclusive
         return (start, end, {"warning": warning})
-
-    # Collect method names from all classes for error completeness.
-    for node in ast.iter_child_nodes(tree):
-        if isinstance(node, ast.ClassDef):
-            for child in ast.iter_child_nodes(node):
-                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    available["methods"].append(f"{node.name}.{child.name}")
 
     return (-1, -1, {
         "error": (
@@ -160,31 +163,37 @@ def propose_edit_symbol(
         rel = _rel_path(workspace_root, target)
         return {
             "ok": False,
+            "path": rel,
             "rel_path": rel,
             "old_content": "",
             "new_content": "",
             "is_new_file": False,
             "error": f"file not found: {rel}",
+            "failure_class": "path_error",
         }
     if not target.is_file():
         rel = _rel_path(workspace_root, target)
         return {
             "ok": False,
+            "path": rel,
             "rel_path": rel,
             "old_content": "",
             "new_content": "",
             "is_new_file": False,
             "error": f"not a regular file: {rel}",
+            "failure_class": "path_error",
         }
     if target.suffix != ".py":
         rel = _rel_path(workspace_root, target)
         return {
             "ok": False,
+            "path": rel,
             "rel_path": rel,
             "old_content": "",
             "new_content": "",
             "is_new_file": False,
             "error": "edit_symbol only supports Python (.py) files. Use edit_file for other languages.",
+            "failure_class": "path_error",
         }
 
     try:
@@ -193,11 +202,13 @@ def propose_edit_symbol(
         rel = _rel_path(workspace_root, target)
         return {
             "ok": False,
+            "path": rel,
             "rel_path": rel,
             "old_content": "",
             "new_content": "",
             "is_new_file": False,
             "error": "file is not valid UTF-8 text",
+            "failure_class": "internal_error",
         }
 
     rel = _rel_path(workspace_root, target)
@@ -210,27 +221,50 @@ def propose_edit_symbol(
     except SyntaxError as exc:
         return {
             "ok": False,
+            "path": rel,
             "rel_path": rel,
             "old_content": original,
             "new_content": "",
             "is_new_file": False,
             "error": f"Syntax error in file: {exc}",
+            "failure_class": "syntax_invalid",
+            "available_symbols": {},
+            "suggested_tool": "write_file",
+            "suggested_next_tool": "write_file",
+            "suggested_next_action": "The file is not parseable. Use write_file to repair the Python syntax.",
         }
 
     if start_line == -1:
         available = info.get("available_symbols", {})
-        is_empty = not any(available.values())
+        has_symbols = any(available.values())
         error_extra = info.get("error", f"Symbol '{symbol_name}' not found")
+        suggested_tool = "edit_line_range" if has_symbols else "write_file"
+        suggested_next_action = (
+            "Use read_file_outline or read_file to inspect available symbols, then use edit_line_range with exact line numbers."
+            if has_symbols
+            else "No parseable symbols were available. Use write_file for a full-file repair or replacement."
+        )
         return {
             "ok": False,
+            "path": rel,
             "rel_path": rel,
             "old_content": original,
             "new_content": "",
             "is_new_file": False,
             "error": error_extra,
-            "suggested_tool": "edit_line_range",
+            "failure_class": "edit_mechanics_symbol_not_found",
+            "symbol_type": symbol_type,
+            "symbol_name": symbol_name,
+            "class_name": class_name,
+            "suggested_tool": suggested_tool,
+            "suggested_next_tool": suggested_tool,
+            "suggested_next_action": suggested_next_action,
             "available_symbols": available,
-            "suggested_fallback": "read_file_outline" if is_empty else "read_file",
+            "suggested_fallback": (
+                "read_file_outline/read_file then edit_line_range"
+                if has_symbols
+                else "write_file"
+            ),
         }
 
     # --- Compute replacement --------------------------------------------------
@@ -273,15 +307,24 @@ def propose_edit_symbol(
         syntax_error = sys.exc_info()[1]
         return {
             "ok": False,
+            "path": rel,
             "rel_path": rel,
             "old_content": original,
             "new_content": "",
             "is_new_file": False,
             "error": f"Proposed replacement makes the file invalid: {syntax_error}",
+            "failure_class": "syntax_invalid",
+            "symbol_type": symbol_type,
+            "symbol_name": symbol_name,
+            "class_name": class_name,
+            "suggested_tool": "edit_symbol",
+            "suggested_next_tool": "edit_symbol",
+            "suggested_next_action": "Repair the replacement syntax before any unrelated tool call.",
         }
 
     result: dict[str, Any] = {
         "ok": True,
+        "path": rel,
         "rel_path": rel,
         "old_content": original,
         "new_content": new_content,

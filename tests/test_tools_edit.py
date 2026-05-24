@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from aura.conversation.tools.fs_edit_structured import propose_edit_symbol
-from aura.conversation.tools.fs_write import propose_write, propose_edit, replace_line_range, _sanitize_edit_strings
+from aura.conversation.tools.fs_write import propose_write, propose_edit, propose_line_range_edit, replace_line_range, _sanitize_edit_strings
 
 
 # replace_line_range
@@ -43,6 +43,30 @@ def test_replace_line_range_no_trailing_newline():
     lines_with_nl = original.splitlines(keepends=True)
     result = replace_line_range(original, lines_with_nl, 1, 2, "CHANGED\n")
     assert result == "line0\nCHANGED\nline2"
+
+
+def test_propose_line_range_insert_before_line(tmp_workspace: Path):
+    target = tmp_workspace / "insert.py"
+    target.write_text("one = 1\nthree = 3\n", encoding="utf-8")
+
+    result = propose_line_range_edit(tmp_workspace, target, 2, 2, "two = 2\n")
+
+    assert result["ok"] is True
+    assert result["start_line"] == 2
+    assert result["end_line"] == 2
+    assert result["new_content"] == "one = 1\ntwo = 2\nthree = 3\n"
+
+
+def test_propose_line_range_append_at_eof(tmp_workspace: Path):
+    target = tmp_workspace / "append.py"
+    target.write_text("one = 1\ntwo = 2\n", encoding="utf-8")
+
+    result = propose_line_range_edit(tmp_workspace, target, 3, 3, "three = 3\n")
+
+    assert result["ok"] is True
+    assert result["start_line"] == 3
+    assert result["end_line"] == 3
+    assert result["new_content"] == "one = 1\ntwo = 2\nthree = 3\n"
 
 # propose_write
 

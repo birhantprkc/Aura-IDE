@@ -35,7 +35,7 @@ class ChatView(QScrollArea):
 
     retry_requested = Signal()
     mermaid_detected = Signal(str)  # emits the raw mermaid code
-    _CODE_TOOL_NAMES = {"write_file", "edit_file", "edit_symbol"}
+    _CODE_TOOL_NAMES = {"write_file", "edit_file", "edit_symbol", "edit_line_range"}
     _BOTTOM_THRESHOLD_PX = 64
 
     def __init__(self) -> None:
@@ -374,6 +374,7 @@ class ChatView(QScrollArea):
             "write_file",
             "edit_file",
             "edit_symbol",
+            "edit_line_range",
             "dispatch_to_worker",
             "run_research",
         )

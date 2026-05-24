@@ -15,7 +15,9 @@ the supplied DispatchCallback rather than the registry.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import threading
 from typing import Any, Callable
 
@@ -57,6 +59,31 @@ from aura.conversation.tools._types import (
 from aura.conversation.tools.registry import ToolRegistry
 
 EventCallback = Callable[[Event], None]
+
+EDIT_MECHANICS_FAILURE_CLASSES = {
+    "edit_mechanics_symbol_not_found",
+    "edit_mechanics_old_str_not_found",
+    "edit_mechanics_ambiguous_match",
+}
+
+WORKER_EDIT_RECOVERY_INSTRUCTION = (
+    "Previous edit failed recoverably. Re-read the file, then use edit_line_range "
+    "with exact line numbers, or use write_file if a full replacement is safer. "
+    "Finish only after the edit is applied and touched Python files pass py_compile."
+)
+
+WORKER_PY_COMPILE_INSTRUCTION = (
+    "Run python -m py_compile on the touched Python file(s), repair syntax if it "
+    "fails, then finish."
+)
+
+WORKER_COMPILER_REPAIR_INSTRUCTION = (
+    "Craft/compiler rejected the proposed code with a precise checker error. "
+    "Re-read the file, repair the proposed code once, then retry with a different "
+    "write tactic. Use edit_line_range with exact line numbers, or write_file if "
+    "a full replacement is safer. Do not narrate; use tools. Finish only after "
+    "the edit applies and touched Python files pass py_compile."
+)
 
 
 class ConversationManager:
@@ -116,8 +143,15 @@ class ConversationManager:
         worker_phase_boundary_info: dict[str, Any] | None = None
         worker_redispatches = 0
         worker_dispatch_failures: dict[str, int] = {}
-        _edit_failures: dict[str, list[str]] = {}
-        _edit_tactic_blocked: dict[str, set[str]] = {}
+        edit_failed_shapes: set[str] = set()
+        edit_fallback_required: dict[str, dict[str, Any]] = {}
+        recovery_block_counts: dict[str, int] = {}
+        line_range_reread_required: dict[str, dict[str, Any]] = {}
+        syntax_repair_required: dict[str, dict[str, Any]] = {}
+        syntax_validation_required: set[str] = set()
+        compiler_repair_required: dict[str, dict[str, Any]] = {}
+        worker_recovery_nudge_sent = False
+        worker_py_compile_nudge_sent = False
 
         while True:
             rounds_used += 1
@@ -216,6 +250,88 @@ class ConversationManager:
                 return
 
             if not tool_calls:
+                if mode == "worker":
+                    if self._has_terminal_syntax_failure(syntax_repair_required):
+                        self._finish_worker_unrecoverable(
+                            on_event,
+                            failure_class="syntax_invalid",
+                            error="Python syntax still fails after one repair attempt.",
+                        )
+                        return
+                    if self._has_compiler_repair_failure(compiler_repair_required):
+                        self._finish_worker_unrecoverable(
+                            on_event,
+                            failure_class="compiler_rejected",
+                            error="Craft/compiler repair failed after one retry.",
+                        )
+                        return
+                    edit_recovery_pending = bool(
+                        edit_fallback_required or line_range_reread_required
+                    )
+                    syntax_repair_pending = bool(
+                        self._syntax_repair_paths(syntax_repair_required)
+                    )
+                    compiler_repair_pending = bool(
+                        self._compiler_repair_paths(compiler_repair_required)
+                    )
+                    if edit_recovery_pending or syntax_repair_pending or compiler_repair_pending:
+                        if not worker_recovery_nudge_sent:
+                            instruction = (
+                                WORKER_COMPILER_REPAIR_INSTRUCTION
+                                if compiler_repair_pending
+                                else WORKER_EDIT_RECOVERY_INSTRUCTION
+                                if edit_recovery_pending
+                                else (
+                                    "Previous py_compile failed. Re-read the touched "
+                                    "Python file, repair it with edit_line_range or "
+                                    "write_file, then run python -m py_compile again. "
+                                    "Finish only after py_compile passes."
+                                )
+                            )
+                            self._history.append_user_text(instruction)
+                            worker_recovery_nudge_sent = True
+                            continue
+                        if compiler_repair_pending:
+                            self._finish_worker_unrecoverable(
+                                on_event,
+                                failure_class="worker_compiler_repair_exhausted",
+                                error=(
+                                    "Worker stopped before repairing a recoverable "
+                                    "Craft/compiler rejection."
+                                ),
+                            )
+                            return
+                        self._finish_worker_unrecoverable(
+                            on_event,
+                            failure_class="worker_recovery_exhausted",
+                            error=(
+                                "Worker stopped before recovering from a recoverable edit "
+                                "mechanics failure."
+                            ),
+                        )
+                        return
+                    if syntax_validation_required:
+                        if not worker_py_compile_nudge_sent:
+                            paths = ", ".join(sorted(syntax_validation_required))
+                            instruction = WORKER_PY_COMPILE_INSTRUCTION
+                            if paths:
+                                instruction += (
+                                    "\nTouched Python file(s) awaiting py_compile: "
+                                    + paths
+                                )
+                            self._history.append_user_text(instruction)
+                            worker_py_compile_nudge_sent = True
+                            continue
+                        self._finish_worker_unrecoverable(
+                            on_event,
+                            failure_class="syntax_validation_required",
+                            error=(
+                                "Worker stopped before running py_compile on touched "
+                                "Python file(s): "
+                                + ", ".join(sorted(syntax_validation_required))
+                            ),
+                        )
+                        return
                 return
 
             _terminal_dispatch = False
@@ -263,28 +379,24 @@ class ConversationManager:
                 name = task["name"]
                 args = task["args"]
 
-                # Worker mode tactic-forcing: block retrying same edit tactic on a file that already failed.
-                if mode == "worker" and name in ("edit_file", "edit_symbol"):
-                    file_path = args.get("path", "")
-                    if file_path and file_path in _edit_tactic_blocked and name in _edit_tactic_blocked[file_path]:
-                        payload = json.dumps({
-                            "ok": False,
-                            "error": (
-                                "The same edit tactic (" + name + ") was attempted again on " + file_path +
-                                " after a prior failure. This is not allowed. "
-                                "Use a different tactic: edit_line_range or write_file."
-                            )
-                        })
-                        return {
-                            "id": tool_call_id,
-                            "result_payload": payload,
-                            "event": ToolResult(
-                                tool_call_id=tool_call_id,
-                                name=name,
-                                ok=False,
-                                result=payload,
-                            )
-                        }
+                if mode == "worker":
+                    blocked = self._worker_recovery_block(
+                        tool_call_id=tool_call_id,
+                        name=name,
+                        args=args,
+                        edit_failed_shapes=edit_failed_shapes,
+                        edit_fallback_required=edit_fallback_required,
+                        recovery_block_counts=recovery_block_counts,
+                        line_range_reread_required=line_range_reread_required,
+                        syntax_repair_required=syntax_repair_required,
+                        syntax_validation_required=syntax_validation_required,
+                        compiler_repair_required=compiler_repair_required,
+                    )
+                    if blocked is not None:
+                        blocked_payload = self._parse_tool_payload(str(blocked.get("result_payload", "")))
+                        if self._is_recoverable_phase_boundary(blocked_payload):
+                            _worker_phase_boundary_info = blocked_payload
+                        return blocked
 
                 if name == "dispatch_to_worker":
                     result = self._tool_runner.handle_dispatch(
@@ -336,13 +448,20 @@ class ConversationManager:
                         cancel_event=cancel_event,
                         mode=mode,
                     )
+                    if mode == "worker":
+                        self._update_syntax_state_from_terminal(
+                            args=args,
+                            loop_info=loop_info,
+                            syntax_repair_required=syntax_repair_required,
+                            syntax_validation_required=syntax_validation_required,
+                        )
                     if self._is_recoverable_phase_boundary(loop_info):
                         _worker_phase_boundary_info = loop_info
                     return {"id": tool_call_id, "skip": True}
 
                 if reject_all_for_turn and name in WRITE_TOOLS:
                     payload = json.dumps(
-                        {"ok": False, "error": "User rejected all writes in this turn."}
+                        {"ok": False, "error": "User rejected all writes in this turn.", "failure_class": "approval_rejected"}
                     )
                     return {
                         "id": tool_call_id,
@@ -368,26 +487,19 @@ class ConversationManager:
                     reject_all_for_turn = True
 
                 tool_msg_content = exec_result.to_tool_message_content()
-
-                # Worker mode tactic-forcing: track edit failures and inject recovery hint.
-                if mode == "worker" and name in ("edit_file", "edit_symbol") and not exec_result.ok:
-                    file_path = args.get("path", "")
-                    if file_path:
-                        _edit_tactic_blocked.setdefault(file_path, set()).add(name)
-                        hint = (
-                            "[edit-recovery: Your edit on " + file_path +
-                            " failed because old_str/symbol was not matched. "
-                            "Do NOT retry edit_file/edit_symbol on this path. "
-                            "Use a different tactic: edit_line_range (if you know the line numbers from a prior read_file) "
-                            "or write_file (to replace the whole file).]"
-                        )
-                        try:
-                            payload_dict = json.loads(tool_msg_content)
-                            if isinstance(payload_dict, dict):
-                                payload_dict["error"] = payload_dict.get("error", "") + "\n" + hint
-                                tool_msg_content = json.dumps(payload_dict)
-                        except (json.JSONDecodeError, TypeError):
-                            tool_msg_content = tool_msg_content + "\n" + hint
+                if mode == "worker":
+                    tool_msg_content = self._update_worker_recovery_state(
+                        name=name,
+                        args=args,
+                        ok=exec_result.ok,
+                        content=tool_msg_content,
+                        edit_failed_shapes=edit_failed_shapes,
+                        edit_fallback_required=edit_fallback_required,
+                        line_range_reread_required=line_range_reread_required,
+                        syntax_repair_required=syntax_repair_required,
+                        syntax_validation_required=syntax_validation_required,
+                        compiler_repair_required=compiler_repair_required,
+                    )
 
                 loop_result = self._apply_loop_detection(
                     mode=mode,
@@ -477,6 +589,478 @@ class ConversationManager:
             # The Worker Completed card is the final user-facing result.
             if _terminal_dispatch:
                 return
+
+    @staticmethod
+    def _syntax_repair_paths(
+        syntax_repair_required: dict[str, dict[str, Any]],
+    ) -> set[str]:
+        return {
+            path
+            for path, state in syntax_repair_required.items()
+            if not state.get("awaiting_validation")
+        }
+
+    @staticmethod
+    def _compiler_repair_paths(
+        compiler_repair_required: dict[str, dict[str, Any]],
+    ) -> set[str]:
+        return {
+            path
+            for path, state in compiler_repair_required.items()
+            if not state.get("repair_failed")
+        }
+
+    @staticmethod
+    def _has_compiler_repair_failure(
+        compiler_repair_required: dict[str, dict[str, Any]],
+    ) -> bool:
+        return any(state.get("repair_failed") for state in compiler_repair_required.values())
+
+    @staticmethod
+    def _has_terminal_syntax_failure(
+        syntax_repair_required: dict[str, dict[str, Any]],
+    ) -> bool:
+        return any(state.get("repair_failed") for state in syntax_repair_required.values())
+
+    def _finish_worker_unrecoverable(
+        self,
+        on_event: EventCallback,
+        *,
+        failure_class: str,
+        error: str,
+    ) -> None:
+        payload = {
+            "ok": False,
+            "failure_class": failure_class,
+            "error": error,
+        }
+        content = json.dumps(payload, ensure_ascii=False)
+        full_message = {
+            "role": "assistant",
+            "content": content,
+            "reasoning_content": None,
+        }
+        self._history.append_assistant(full_message)
+        on_event(ContentDelta(text=content))
+        on_event(Done(finish_reason="stop", full_message=full_message))
+
+    def _worker_recovery_block(
+        self,
+        *,
+        tool_call_id: str,
+        name: str,
+        args: dict[str, Any],
+        edit_failed_shapes: set[str],
+        edit_fallback_required: dict[str, dict[str, Any]],
+        recovery_block_counts: dict[str, int],
+        line_range_reread_required: dict[str, dict[str, Any]],
+        syntax_repair_required: dict[str, dict[str, Any]],
+        syntax_validation_required: set[str],
+        compiler_repair_required: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        path = self._tool_path(name, args)
+        if self._has_compiler_repair_failure(compiler_repair_required):
+            target = sorted(
+                path for path, state in compiler_repair_required.items()
+                if state.get("repair_failed")
+            )[0]
+            payload = self._recovery_payload(
+                path=target,
+                failure_class="compiler_rejected",
+                error="Craft/compiler repair failed after one retry.",
+                suggested_next_tool="",
+                suggested_next_action="Stop tool use and report the compiler rejection.",
+                recoverable=False,
+            )
+            self._record_recovery_block(payload, f"compiler-failed:{target}:{name}", recovery_block_counts)
+            return self._blocked_tool_result(tool_call_id, name, payload)
+
+        compiler_paths = self._compiler_repair_paths(compiler_repair_required)
+        if compiler_paths and not self._compiler_repair_tool_allowed(
+            name, args, compiler_repair_required
+        ):
+            target = sorted(compiler_paths)[0]
+            state = compiler_repair_required.get(target, {})
+            repair_failed = bool(state.get("repair_failed"))
+            payload = self._recovery_payload(
+                path=target,
+                failure_class="compiler_rejected",
+                error=(
+                    "Craft/compiler repair failed after one retry."
+                    if repair_failed
+                    else (
+                        "Craft/compiler rejected the proposed code. Re-read the file, "
+                        "repair the checker issue once, and retry with a different "
+                        "write tactic."
+                    )
+                ),
+                suggested_next_tool=str(
+                    state.get("suggested_next_tool")
+                    or self._alternate_write_tactic(str(state.get("tool") or name))
+                ),
+                suggested_next_action=(
+                    "Repair the proposed code once using the precise checker error; "
+                    "do not narrate. Retry with a different write tactic."
+                ),
+                recoverable=not repair_failed,
+            )
+            payload["previous_error"] = state.get("error", "")
+            self._record_recovery_block(payload, f"compiler:{target}:{name}", recovery_block_counts)
+            return self._blocked_tool_result(tool_call_id, name, payload)
+
+        syntax_paths = self._syntax_repair_paths(syntax_repair_required)
+        if syntax_paths and not self._syntax_repair_tool_allowed(name, args, syntax_paths):
+            target = sorted(syntax_paths)[0]
+            state = syntax_repair_required.get(target, {})
+            repair_failed = bool(state.get("repair_failed"))
+            payload = self._recovery_payload(
+                path=target,
+                failure_class="syntax_invalid",
+                error=(
+                    f"Python syntax is invalid in {target}. "
+                    + (
+                        "Syntax still fails after one repair attempt."
+                        if repair_failed
+                        else "Repair that file and pass py_compile before any unrelated tool call."
+                    )
+                ),
+                suggested_next_tool="edit_line_range",
+                suggested_next_action="Repair the touched file, then run python -m py_compile on it before continuing validation.",
+                recoverable=not repair_failed,
+            )
+            self._record_recovery_block(payload, f"syntax:{target}:{name}", recovery_block_counts)
+            return self._blocked_tool_result(tool_call_id, name, payload)
+
+        if name == "edit_line_range" and path in line_range_reread_required:
+            payload = self._recovery_payload(
+                path=path,
+                failure_class="edit_mechanics_stale_line_range",
+                error="Stale line range after a failed edit_line_range. Re-read the file before retrying line-range editing.",
+                suggested_next_tool="read_file",
+                suggested_next_action="Re-read the file, then make one corrected edit_line_range attempt or use write_file.",
+            )
+            self._record_recovery_block(payload, f"line-range-reread:{path}", recovery_block_counts)
+            return self._blocked_tool_result(tool_call_id, name, payload)
+
+        if name in ("edit_file", "edit_symbol") and path in edit_fallback_required:
+            prior = edit_fallback_required[path]
+            block_key = self._edit_shape_signature(name, args)
+            payload = self._recovery_payload(
+                path=path,
+                failure_class=str(prior.get("failure_class") or self._default_edit_failure_class(name)),
+                error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use edit_line_range or write_file.",
+                suggested_next_tool="edit_line_range",
+                suggested_next_action="Use read_file/read_file_outline, then edit_line_range with exact line numbers, or use write_file.",
+            )
+            payload["previous_error"] = prior.get("error", "")
+            self._record_recovery_block(payload, block_key, recovery_block_counts)
+            return self._blocked_tool_result(tool_call_id, name, payload)
+
+        if name in ("edit_file", "edit_symbol", "edit_line_range"):
+            shape = self._edit_shape_signature(name, args)
+            if shape in edit_failed_shapes:
+                payload = self._recovery_payload(
+                    path=path,
+                    failure_class=self._default_edit_failure_class(name),
+                    error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use edit_line_range or write_file.",
+                    suggested_next_tool="edit_line_range",
+                    suggested_next_action="Use read_file/read_file_outline, then edit_line_range with exact line numbers, or use write_file.",
+                )
+                self._record_recovery_block(payload, shape, recovery_block_counts)
+                return self._blocked_tool_result(tool_call_id, name, payload)
+
+        return None
+
+    def _update_worker_recovery_state(
+        self,
+        *,
+        name: str,
+        args: dict[str, Any],
+        ok: bool,
+        content: str,
+        edit_failed_shapes: set[str],
+        edit_fallback_required: dict[str, dict[str, Any]],
+        line_range_reread_required: dict[str, dict[str, Any]],
+        syntax_repair_required: dict[str, dict[str, Any]],
+        syntax_validation_required: set[str],
+        compiler_repair_required: dict[str, dict[str, Any]],
+    ) -> str:
+        parsed = self._parse_tool_payload(content)
+        self._record_reads_for_recovery(name, args, parsed, line_range_reread_required)
+        path = self._tool_path(name, args, parsed)
+
+        if ok:
+            if name in WRITE_TOOLS and path:
+                edit_fallback_required.pop(path, None)
+                line_range_reread_required.pop(path, None)
+                compiler_repair_required.pop(path, None)
+                if self._is_python_path(path):
+                    syntax_validation_required.add(path)
+                if path in syntax_repair_required:
+                    syntax_repair_required[path]["repair_attempted"] = True
+                    syntax_repair_required[path]["awaiting_validation"] = True
+                    syntax_validation_required.add(path)
+            return content
+
+        if name in ("edit_file", "edit_symbol", "edit_line_range"):
+            edit_failed_shapes.add(self._edit_shape_signature(name, args))
+
+        if not isinstance(parsed, dict):
+            return content
+
+        failure_class = str(parsed.get("failure_class", ""))
+        if path and failure_class in EDIT_MECHANICS_FAILURE_CLASSES:
+            edit_fallback_required[path] = parsed
+            parsed["recoverable"] = True
+            parsed["suggested_next_tool"] = "edit_line_range"
+            parsed["suggested_next_action"] = "Do not retry edit_file/edit_symbol on this path. Re-read the file and use edit_line_range or write_file."
+            content = json.dumps(parsed, ensure_ascii=False)
+        elif path and failure_class == "edit_mechanics_stale_line_range":
+            line_range_reread_required[path] = parsed
+            parsed["recoverable"] = True
+            parsed["suggested_next_tool"] = "read_file"
+            parsed["suggested_next_action"] = "Re-read the file, then make one corrected edit_line_range attempt or use write_file."
+            content = json.dumps(parsed, ensure_ascii=False)
+        elif path and failure_class == "syntax_invalid":
+            state = syntax_repair_required.setdefault(path, {"failed_repairs": 0})
+            state["awaiting_validation"] = False
+            if name in WRITE_TOOLS:
+                state["failed_repairs"] = int(state.get("failed_repairs", 0)) + 1
+            parsed["suggested_next_tool"] = "edit_line_range"
+            parsed["suggested_next_action"] = "Repair this file's Python syntax before any unrelated tool call."
+            if int(state.get("failed_repairs", 0)) > 1:
+                parsed["recoverable"] = False
+                parsed["error"] = "Syntax repair failed after one repair attempt. " + str(parsed.get("error", ""))
+            content = json.dumps(parsed, ensure_ascii=False)
+        elif (
+            path
+            and failure_class == "compiler_rejected"
+            and parsed.get("bounce")
+            and name in {"write_file", "edit_file", "edit_line_range"}
+            and self._has_precise_checker_error(parsed)
+        ):
+            prior = compiler_repair_required.get(path)
+            if prior is not None:
+                prior["repair_failed"] = True
+                prior["failed_tool"] = name
+                parsed["recoverable"] = False
+                parsed["error"] = (
+                    "Craft/compiler repair failed after one retry. "
+                    + str(parsed.get("error", ""))
+                )
+            else:
+                compiler_repair_required[path] = {
+                    "tool": name,
+                    "error": parsed.get("error", ""),
+                    "suggested_next_tool": self._alternate_write_tactic(name),
+                    "craft_issues": parsed.get("craft_issues", []),
+                    "is_new_file": bool(parsed.get("is_new_file")),
+                }
+                parsed["recoverable"] = True
+                parsed["suggested_next_tool"] = self._alternate_write_tactic(name)
+                parsed["suggested_next_action"] = (
+                    "Repair the proposed code once using the precise checker error, "
+                    "then retry with a different write tactic. Do not narrate."
+                )
+            parsed["internal_recovery_steer"] = True
+            content = json.dumps(parsed, ensure_ascii=False)
+
+        return content
+
+    def _update_syntax_state_from_terminal(
+        self,
+        *,
+        args: dict[str, Any],
+        loop_info: dict[str, Any] | None,
+        syntax_repair_required: dict[str, dict[str, Any]],
+        syntax_validation_required: set[str],
+    ) -> None:
+        payload = loop_info.get("_terminal_payload") if isinstance(loop_info, dict) else None
+        if not isinstance(payload, dict):
+            return
+        command = str(payload.get("command") or args.get("command") or "")
+        targets = self._py_compile_targets(command)
+        if not targets:
+            return
+        if payload.get("ok"):
+            for path in targets:
+                syntax_repair_required.pop(path, None)
+                syntax_validation_required.discard(path)
+            return
+        for path in targets:
+            prior = syntax_repair_required.get(path, {})
+            failed_after_repair = bool(
+                prior.get("repair_attempted") or prior.get("awaiting_validation")
+            )
+            syntax_repair_required[path] = {
+                "error": payload.get("output", ""),
+                "failed_repairs": int(prior.get("failed_repairs", 0)) + (1 if failed_after_repair else 0),
+                "repair_failed": failed_after_repair,
+            }
+            syntax_validation_required.discard(path)
+
+    @staticmethod
+    def _record_reads_for_recovery(
+        name: str,
+        args: dict[str, Any],
+        parsed: Any,
+        line_range_reread_required: dict[str, dict[str, Any]],
+    ) -> None:
+        if name == "read_file":
+            path = str(args.get("path") or (parsed.get("path") if isinstance(parsed, dict) else ""))
+            if path:
+                line_range_reread_required.pop(path, None)
+        elif name == "read_files":
+            paths = args.get("paths")
+            if isinstance(paths, list):
+                for item in paths:
+                    line_range_reread_required.pop(str(item), None)
+
+    @staticmethod
+    def _syntax_repair_tool_allowed(
+        name: str,
+        args: dict[str, Any],
+        syntax_paths: set[str],
+    ) -> bool:
+        if name in {"read_file", "read_file_outline"}:
+            return str(args.get("path", "")) in syntax_paths
+        if name == "read_files":
+            paths = args.get("paths")
+            return isinstance(paths, list) and any(str(path) in syntax_paths for path in paths)
+        if name in WRITE_TOOLS:
+            return str(args.get("path", "")) in syntax_paths
+        return False
+
+    @staticmethod
+    def _compiler_repair_tool_allowed(
+        name: str,
+        args: dict[str, Any],
+        compiler_repair_required: dict[str, dict[str, Any]],
+    ) -> bool:
+        path = str(args.get("path", ""))
+        paths = ConversationManager._compiler_repair_paths(compiler_repair_required)
+        if name in {"read_file", "read_file_outline"}:
+            return path in paths
+        if name == "read_files":
+            requested = args.get("paths")
+            return isinstance(requested, list) and any(str(item) in paths for item in requested)
+        if name in WRITE_TOOLS and path in paths:
+            prior_tool = str(compiler_repair_required[path].get("tool", ""))
+            return name != prior_tool
+        return False
+
+    @staticmethod
+    def _alternate_write_tactic(name: str) -> str:
+        if name == "write_file":
+            return "edit_line_range"
+        return "write_file"
+
+    @staticmethod
+    def _has_precise_checker_error(parsed: dict[str, Any]) -> bool:
+        issues = parsed.get("craft_issues")
+        if isinstance(issues, list) and issues:
+            return True
+        error = str(parsed.get("error") or "")
+        return bool(re.search(r"\bLine\s+\d+:", error))
+
+    @staticmethod
+    def _py_compile_targets(command: str) -> list[str]:
+        if "py_compile" not in command:
+            return []
+        matches = re.findall(r"(?<![\w.-])([A-Za-z0-9_./\\:\-]+\.py)(?![\w.-])", command)
+        return [m.replace("\\", "/").lstrip("./") for m in matches if not m.endswith("py_compile.py")]
+
+    @staticmethod
+    def _is_python_path(path: str) -> bool:
+        return path.replace("\\", "/").endswith(".py")
+
+    @staticmethod
+    def _tool_path(name: str, args: dict[str, Any], parsed: Any = None) -> str:
+        if isinstance(parsed, dict):
+            value = parsed.get("path") or parsed.get("rel_path")
+            if isinstance(value, str) and value:
+                return value
+        value = args.get("path")
+        return str(value) if value is not None else ""
+
+    @staticmethod
+    def _edit_shape_signature(name: str, args: dict[str, Any]) -> str:
+        path = str(args.get("path", ""))
+        if name == "edit_file":
+            raw = str(args.get("old_str", ""))
+            marker = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
+        elif name == "edit_symbol":
+            marker = "|".join(
+                str(args.get(key, ""))
+                for key in ("symbol_type", "class_name", "symbol_name")
+            )
+        elif name == "edit_line_range":
+            marker = f"{args.get('start_line')}:{args.get('end_line')}"
+        else:
+            marker = json.dumps(args, sort_keys=True, ensure_ascii=False)
+        return json.dumps({"tool": name, "path": path, "shape": marker}, sort_keys=True)
+
+    @staticmethod
+    def _default_edit_failure_class(name: str) -> str:
+        if name == "edit_symbol":
+            return "edit_mechanics_symbol_not_found"
+        if name == "edit_line_range":
+            return "edit_mechanics_stale_line_range"
+        return "edit_mechanics_old_str_not_found"
+
+    @staticmethod
+    def _parse_tool_payload(content: str) -> Any:
+        try:
+            return json.loads(content)
+        except (TypeError, json.JSONDecodeError):
+            return None
+
+    @staticmethod
+    def _recovery_payload(
+        *,
+        path: str,
+        failure_class: str,
+        error: str,
+        suggested_next_tool: str,
+        suggested_next_action: str,
+        recoverable: bool = True,
+    ) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "path": path,
+            "rel_path": path,
+            "error": error,
+            "failure_class": failure_class,
+            "recoverable": recoverable,
+            "internal_recovery_steer": True,
+            "suggested_tool": suggested_next_tool,
+            "suggested_next_tool": suggested_next_tool,
+            "suggested_next_action": suggested_next_action,
+        }
+
+    @staticmethod
+    def _record_recovery_block(
+        payload: dict[str, Any],
+        key: str,
+        recovery_block_counts: dict[str, int],
+    ) -> None:
+        count = recovery_block_counts.get(key, 0) + 1
+        recovery_block_counts[key] = count
+        payload["repeated_blocks"] = count
+
+    @staticmethod
+    def _blocked_tool_result(tool_call_id: str, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        content = json.dumps(payload, ensure_ascii=False)
+        return {
+            "id": tool_call_id,
+            "result_payload": content,
+            "event": ToolResult(
+                tool_call_id=tool_call_id,
+                name=name,
+                ok=False,
+                result=content,
+            ),
+        }
 
     def _append_limit_tool_result(
         self,
