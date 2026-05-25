@@ -121,6 +121,14 @@ class ToolStreamController(QObject):
                         for item in edits
                         if isinstance(item, dict)
                     )
+            elif self._tool_name == "apply_edit_transaction":
+                operations = parsed.get("operations")
+                if isinstance(operations, list):
+                    content = "\n\n".join(
+                        str(item.get("new_definition") or item.get("content") or item.get("new") or "")
+                        for item in operations
+                        if isinstance(item, dict)
+                    )
             elif self._tool_name == "edit_symbol":
                 content = parsed.get("new_definition", "") or parsed.get("content", "")
             elif self._tool_name == "dispatch_to_worker":
@@ -155,6 +163,8 @@ class ToolStreamController(QObject):
                 key = "new_str"
             elif self._tool_name == "patch_file":
                 key = "new"
+            elif self._tool_name == "apply_edit_transaction":
+                key = "new_definition"
             elif self._tool_name == "edit_symbol":
                 key = "new_definition"
             elif self._tool_name == "dispatch_to_worker":

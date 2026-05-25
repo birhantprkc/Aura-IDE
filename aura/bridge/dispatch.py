@@ -69,6 +69,15 @@ RECOVERABLE_WORKER_WRITE_FAILURE_CLASSES = {
     "syntax_invalid",
 }
 
+EDIT_TRANSACTION_FAILURE_CLASSES = {
+    "edit_transaction_hash_mismatch",
+    "edit_transaction_symbol_not_found",
+    "edit_transaction_ambiguous_symbol",
+    "edit_transaction_invalid_operation",
+    "edit_transaction_invalid_syntax",
+    "edit_transaction_not_applicable",
+}
+
 
 class _DispatchPending:
     def __init__(self, request: WorkerDispatchRequest) -> None:
@@ -685,7 +694,10 @@ def _compute_outcome_status(
         or has_quality_bounce_blocker
     ):
         return S.craft_bounced.value
-    if has_recoverable_edit_blocker:
+    if has_recoverable_edit_blocker or any(
+        fc == "edit_mechanics_blocked" or fc in EDIT_TRANSACTION_FAILURE_CLASSES
+        for fc in failure_classes
+    ):
         return S.edit_mechanics_blocked.value
     if has_validation_failure or any(fc.startswith("validation_") for fc in failure_classes):
         return S.validation_failed.value

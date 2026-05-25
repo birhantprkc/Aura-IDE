@@ -471,6 +471,24 @@ class WriteHandlersMixin:
             )
         return self._handle_write("write_file", args, approval_cb, reject_all)
 
+    def _handle_apply_edit_transaction(self, args, approval_cb, reject_all) -> ToolExecResult:
+        if self._read_only:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
+        if self._mode == "planner":
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": (
+                        "Planner cannot write directly. "
+                        "You must use the 'dispatch_to_worker' tool to specify code changes. "
+                        "Include your intended edits in the 'spec' field of the dispatch."
+                    ),
+                    "failure_class": "internal_error",
+                },
+            )
+        return self._handle_write("apply_edit_transaction", args, approval_cb, reject_all)
+
     def _handle_edit_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
             return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
@@ -624,6 +642,49 @@ class WriteHandlersMixin:
                 old_content=proposal["old_content"],
                 new_content=proposal["new_content"],
                 is_new_file=proposal.get("is_new_file", False),
+            )
+        elif name == "apply_edit_transaction":
+            operations = args.get("operations")
+            expected_file_hash = args.get("expected_file_hash")
+            description = args.get("description")
+            if not isinstance(operations, list):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "operations must be a list", "failure_class": "edit_transaction_invalid_operation"},
+                )
+            if expected_file_hash is not None and not isinstance(expected_file_hash, str):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "expected_file_hash must be a string when supplied", "failure_class": "edit_transaction_invalid_operation"},
+                )
+            if description is not None and not isinstance(description, str):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "description must be a string when supplied", "failure_class": "edit_transaction_invalid_operation"},
+                )
+            proposal = _reg.propose_edit_transaction(
+                self._root,
+                target,
+                operations,
+                expected_file_hash=expected_file_hash,
+                description=description,
+            )
+            if not proposal.get("ok", False):
+                return ToolExecResult(ok=False, payload=proposal)
+
+            gate_error = _maybe_humanize_proposal(proposal)
+            if gate_error is not None:
+                return gate_error
+            craft_error = _run_compiler_pipeline(proposal, "apply_edit_transaction", contract=self.get_contract(), workspace_root=self._root)
+            if craft_error is not None:
+                return craft_error
+
+            req = ApprovalRequest(
+                tool_name="apply_edit_transaction",
+                rel_path=proposal["rel_path"],
+                old_content=proposal["old_content"],
+                new_content=proposal["new_content"],
+                is_new_file=False,
             )
         elif name == "edit_file":
             old_str = args.get("old_str", "")
@@ -800,7 +861,7 @@ class WriteHandlersMixin:
         # Approve — back up if file exists, write new content.
         target.parent.mkdir(parents=True, exist_ok=True)
         backup_path = _reg.backup_existing(self._root, target)
-        target.write_text(req.new_content, encoding="utf-8")
+        target.write_bytes(req.new_content.encode("utf-8"))
 
         if compiler_service is not None:
             compiler_service.invalidate_workspace_index(self._root)
@@ -819,6 +880,8 @@ class WriteHandlersMixin:
             payload["end_line"] = proposal.get("end_line")
         if name == "patch_file":
             payload["hunk_count"] = proposal.get("hunk_count", 0)
+        if name == "apply_edit_transaction":
+            payload["operation_count"] = proposal.get("operation_count", 0)
         return ToolExecResult(
             ok=True,
             payload=payload,

@@ -1361,6 +1361,7 @@ class TestHandlerRegistration:
         "web_search",
         "web_fetch",
         "write_file",
+        "apply_edit_transaction",
         "edit_file",
         "edit_symbol",
         "edit_line_range",
@@ -1463,9 +1464,10 @@ class TestModeToolSurfaces:
         }
 
         assert "write_file" in tool_names
-        assert "edit_file" in tool_names
-        assert "edit_line_range" in tool_names
-        assert "patch_file" in tool_names
+        assert "apply_edit_transaction" in tool_names
+        assert "edit_file" not in tool_names
+        assert "edit_line_range" not in tool_names
+        assert "patch_file" not in tool_names
         assert "update_todo_list" in tool_names
         assert "run_terminal_command" in tool_names
         assert "run_research" in tool_names  # Added!
@@ -1482,6 +1484,7 @@ class TestModeToolSurfaces:
         }
 
         assert "write_file" in tool_names
+        assert "apply_edit_transaction" in tool_names
         assert "edit_file" in tool_names
         assert "edit_line_range" in tool_names
         assert "patch_file" in tool_names

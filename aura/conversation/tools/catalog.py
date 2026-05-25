@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from aura.conversation.tools._types import RegistryMode
@@ -33,6 +34,8 @@ PLANNER_TOOL_NAMES = {
     "git_show",
     "git_log_file",
 }
+
+NORMAL_WORKER_WRITE_TOOL_NAMES = {"write_file", "apply_edit_transaction"}
 
 
 def _tool_name(tool_def: dict[str, Any]) -> str:
@@ -88,9 +91,16 @@ class ToolCatalog:
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
             )
         elif mode == "worker":
+            if os.environ.get("AURA_WORKER_LOW_LEVEL_EDIT_TOOLS") == "1":
+                worker_write_tools = list(WRITE_TOOL_DEFS)
+            else:
+                worker_write_tools = [
+                    tool for tool in WRITE_TOOL_DEFS
+                    if _tool_name(tool) in NORMAL_WORKER_WRITE_TOOL_NAMES
+                ]
             tools = (
                 list(READ_TOOL_DEFS)
-                + list(WRITE_TOOL_DEFS)
+                + worker_write_tools
                 + [dict(WORKER_TODO_TOOL_DEF)]
                 + [dict(TERMINAL_TOOL_DEF)]
                 + list(GIT_TOOL_DEFS)

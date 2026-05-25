@@ -716,6 +716,88 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "apply_edit_transaction",
+            "description": (
+                "Apply a structured, atomic edit transaction to one existing workspace file. "
+                "Use this for normal existing-file code changes. The tool reads the file once, "
+                "checks expected_file_hash when supplied, applies every operation to an in-memory "
+                "copy, validates final Python syntax for .py files, and shows one approval diff. "
+                "If any operation cannot be applied safely, nothing is written."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path of the existing file to edit.",
+                    },
+                    "expected_file_hash": {
+                        "type": "string",
+                        "description": "Optional SHA-256 hex digest of the exact current whole file content.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional short description of the transaction.",
+                    },
+                    "operations": {
+                        "type": "array",
+                        "description": "Ordered structured edit operations to apply atomically.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "op": {
+                                    "type": "string",
+                                    "enum": [
+                                        "replace_function",
+                                        "replace_method",
+                                        "replace_class",
+                                        "insert_after_symbol",
+                                        "replace_text_once",
+                                    ],
+                                },
+                                "symbol_type": {
+                                    "type": "string",
+                                    "enum": ["function", "method", "class"],
+                                    "description": "Target type for insert_after_symbol.",
+                                },
+                                "symbol_name": {
+                                    "type": "string",
+                                    "description": "Function, method, or class name.",
+                                },
+                                "class_name": {
+                                    "type": "string",
+                                    "description": "Containing class name for method operations.",
+                                },
+                                "new_definition": {
+                                    "type": "string",
+                                    "description": "Complete replacement definition for replace_function, replace_method, or replace_class.",
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "Content to insert after a symbol.",
+                                },
+                                "old": {
+                                    "type": "string",
+                                    "description": "Exact text to replace once; escape hatch only.",
+                                },
+                                "new": {
+                                    "type": "string",
+                                    "description": "Replacement text for replace_text_once.",
+                                },
+                            },
+                            "required": ["op"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["path", "operations"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "patch_file",
             "description": (
                 "Apply multiple exact-text replacement hunks to one existing workspace file as a single "

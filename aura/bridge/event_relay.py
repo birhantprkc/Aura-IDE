@@ -183,6 +183,8 @@ class WorkerEventRelay(QObject):
                     write_record["end_line"] = parsed.get("end_line")
                 if "hunk_count" in parsed:
                     write_record["hunk_count"] = parsed.get("hunk_count")
+                if "operation_count" in parsed:
+                    write_record["operation_count"] = parsed.get("operation_count")
                 self.write_results.append(write_record)
                 path = parsed.get("path")
                 if isinstance(path, str) and path:

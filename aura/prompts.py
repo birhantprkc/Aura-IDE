@@ -180,22 +180,18 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Make the edit.
 - Use meaningful practical names and keep changes scoped.
 - Handle realistic failures specifically; do not swallow errors and report success.
-- Use `edit_symbol` for Python symbol replacement when the symbol is clear.
-- Use `edit_file` for one precise search-block replacement.
-- Use `patch_file` for multiple changes in one file after reading the file.
-- If `edit_symbol` or `edit_file` misses, read the failure payload, reread the file, and switch tactics.
-- Use `edit_line_range` with exact line numbers for one local range after rereading.
-- For replacement/deletion `edit_line_range` calls, include `expected_old_str` from the exact current range whenever practical.
-- Use `write_file` only when replacing most of the file is safer.
-- Hot path for multi-location edits in one file: read file, call `patch_file` once with all intended hunks, let Craft compile once, approve one diff, then py_compile touched Python.
+- Use `apply_edit_transaction` for existing-file code changes.
+- Use `write_file` only for new files or intentional full-file replacement.
+- Low-level old_str, line-range, and patch-hunk tools are not normal Worker tools.
+- Hot path for existing-file edits: read file, call `apply_edit_transaction` once with all intended operations, let Craft compile once, approve one diff, then py_compile touched Python.
 - Craft compiles your patch into cleaner human code before approval. If Craft returns repair notes, re-read the affected file, repair the patch once, and retry. Craft repair notes are normal patch preparation, not task failure.
-- If a tool result says "Repeated failed edit tactic", stop that edit shape immediately. Re-read the file and use patch_file for multi-location edits.
+- If apply_edit_transaction returns a typed deterministic blocker, re-read once only if useful; do not switch to low-level edit tools in normal Worker mode.
 - Validate touched Python with `python -m py_compile`.
 - If py_compile reports invalid syntax in a touched file, repair that file before unrelated validation, then rerun py_compile on that file.
 - Use focused existing tests only when directly relevant or requested.
 - Use `python -c` or an existing focused test for scratch validation.
 - Do not create root-level validation scratch files such as _check_acceptance.py, _check_ac7.py, or _check*.py.
-- Shell validation runs in the host shell. Prefer cross-platform commands such as `python -m py_compile` or focused Python assertion scripts. Use `grep_search` for search. Use terminal `rg` only for search, not pass/fail validation, unless the command explicitly exits 0 for the expected outcome.
+- Shell validation runs in the host shell. Prefer cross-platform commands such as `python -m py_compile` or focused Python assertion scripts. Use `grep_search` for search. Use terminal `rg` only for search, not pass/fail validation, unless the command explicitly exits 0 for the expected outcome. Do not use bare `grep`; it is often unavailable in the Windows/PowerShell host shell.
 - For "old pattern must be absent" validation, prefer a Python assertion. If using terminal `rg`, write shell semantics so the command exits 0 when the pattern is absent and exits nonzero only when it is present.
 - Aura may auto-run focused py_compile as a completion safety net if you stop without running it.
 - Scratch validation should use `python -c` or existing focused tests. Temporary validation .py files must NOT be checked in as project artifacts.
@@ -273,7 +269,7 @@ Handoff Adherence Protocol:
 3. Make the edit. Craft compiles/checks the proposed patch before approval and returns cleaned code on the happy path.
 4. If Craft returns repair notes, re-read the affected file, repair the patch once, and retry. This is normal patch preparation, not task failure.
 5. Acceptance Verification: run the focused validation needed for the change. Touched Python files must pass `python -m py_compile`.
-6. Use the smallest write tool that matches the edit shape: `edit_symbol` for one known Python symbol, `edit_line_range` for one local range, `edit_file` for one exact replacement, `patch_file` for multiple changes in one file, and `write_file` only when replacing most of the file. If `edit_symbol` or `edit_file` misses, reread and switch to `patch_file` for multi-location edits or `edit_line_range` for one local range.
+6. Use `apply_edit_transaction` for existing-file code changes. Use `write_file` only for new files or intentional full-file replacement. Low-level old_str, line-range, and patch-hunk tools are not normal Worker tools.
 7. Repair syntax before unrelated validation. Use focused existing tests only when directly relevant or requested.
 8. Use `python -c` for scratch validation; do not write root-level `_check*.py` files.
 

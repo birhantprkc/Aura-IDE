@@ -843,6 +843,9 @@ def test_compute_outcome_status_distinguishes_validation_mechanics_and_harness()
         has_recoverable_edit_blocker=True
     ) == WorkerOutcomeStatus.edit_mechanics_blocked.value
     assert _status_for(
+        write_failures=[{"failure_class": "edit_transaction_symbol_not_found"}]
+    ) == WorkerOutcomeStatus.edit_mechanics_blocked.value
+    assert _status_for(
         has_validation_failure=True
     ) == WorkerOutcomeStatus.validation_failed.value
     assert _status_for(

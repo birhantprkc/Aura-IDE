@@ -39,6 +39,7 @@ from aura.conversation.tools.fs_handler import FsReadHandler
 from aura.conversation.tools.git_handler import GitHandler
 from aura.conversation.tools.grep import grep_files  # noqa: F401
 from aura.conversation.tools.fs_edit_structured import propose_edit_symbol  # noqa: F401
+from aura.conversation.tools.fs_edit_transaction import propose_edit_transaction  # noqa: F401
 from aura.conversation.tools.fs_write import propose_edit, propose_line_range_edit, propose_patch_file, propose_write  # noqa: F401
 from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
 from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
@@ -221,6 +222,7 @@ TOOL_HANDLERS["git_stash_show"] = ToolRegistry._handle_git_stash_show
 TOOL_HANDLERS["web_search"] = ToolRegistry._handle_web_search
 TOOL_HANDLERS["web_fetch"] = ToolRegistry._handle_web_fetch
 TOOL_HANDLERS["write_file"] = ToolRegistry._handle_write_file
+TOOL_HANDLERS["apply_edit_transaction"] = ToolRegistry._handle_apply_edit_transaction
 TOOL_HANDLERS["edit_file"] = ToolRegistry._handle_edit_file
 TOOL_HANDLERS["edit_symbol"] = ToolRegistry._handle_edit_symbol
 TOOL_HANDLERS["edit_line_range"] = ToolRegistry._handle_edit_line_range

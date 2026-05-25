@@ -155,7 +155,7 @@ class AuraPlayground(QWidget):
         if name == "update_todo_list":
             c.todo_updated.connect(self.update_todo_list)
 
-        if name in ("write_file", "edit_file", "edit_symbol"):
+        if name in ("write_file", "apply_edit_transaction", "edit_file", "edit_symbol"):
             self._worker_code_tool_names[worker_tool_id] = name
             c.path_resolved.connect(
                 lambda path, tid=worker_tool_id: self._on_code_path_resolved(
@@ -207,17 +207,17 @@ class AuraPlayground(QWidget):
         self._worker_code_paths[worker_tool_id] = path
         self._code_editor.open_or_focus_tab(worker_tool_id, path)
         tool_name = self._worker_code_tool_names.get(worker_tool_id)
-        if tool_name in ("edit_file", "edit_symbol"):
+        if tool_name in ("apply_edit_transaction", "edit_file", "edit_symbol"):
             current_content = self._read_workspace_text(path)
             if current_content is not None:
                 self._code_editor.set_content(worker_tool_id, current_content)
         pending_content = self._pending_worker_code_content.pop(worker_tool_id, None)
-        if pending_content is not None and tool_name not in ("edit_file", "edit_symbol"):
+        if pending_content is not None and tool_name not in ("apply_edit_transaction", "edit_file", "edit_symbol"):
             self._code_editor.stream_content(worker_tool_id, pending_content)
 
     def _on_code_content_updated(self, worker_tool_id: str, content: str) -> None:
         tool_name = self._worker_code_tool_names.get(worker_tool_id)
-        if tool_name in ("edit_file", "edit_symbol"):
+        if tool_name in ("apply_edit_transaction", "edit_file", "edit_symbol"):
             return
         if worker_tool_id not in self._worker_code_paths:
             self._pending_worker_code_content[worker_tool_id] = content
