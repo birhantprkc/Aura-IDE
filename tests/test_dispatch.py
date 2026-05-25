@@ -6,7 +6,11 @@ from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
 )
-from aura.bridge.dispatch import _build_worker_summary
+from aura.bridge.dispatch import (
+    _build_worker_summary,
+    _format_spec_as_user_message,
+    _unrecovered_validation_failures,
+)
 from aura.conversation.history import History
 
 
@@ -226,6 +230,102 @@ def test_dispatch_request_expected_dataclass_fields_none():
         }
     )
     assert req.expected_dataclass_fields == {}
+
+
+def test_rg_no_match_validation_is_not_unrecovered_failure():
+    results = [
+        {
+            "ok": False,
+            "exit_code": 1,
+            "output": "",
+            "command": 'rg "show_response" app/tray.py',
+        }
+    ]
+
+    assert _unrecovered_validation_failures(results) == []
+
+
+def test_rg_pipeline_no_match_validation_is_not_unrecovered_failure():
+    results = [
+        {
+            "ok": False,
+            "exit_code": 1,
+            "output": "",
+            "command": 'rg "show_response" app/tray.py | rg "No recent"',
+        }
+    ]
+
+    assert _unrecovered_validation_failures(results) == []
+
+
+def test_grep_no_match_validation_is_not_unrecovered_failure():
+    results = [
+        {
+            "ok": False,
+            "exit_code": 1,
+            "output": "",
+            "command": 'grep -R "show_response" app/',
+        }
+    ]
+
+    assert _unrecovered_validation_failures(results) == []
+
+
+def test_py_compile_exit_1_validation_remains_unrecovered_failure():
+    results = [
+        {
+            "ok": False,
+            "exit_code": 1,
+            "output": "SyntaxError: invalid syntax",
+            "command": "python -m py_compile app/tray.py",
+        }
+    ]
+
+    assert _unrecovered_validation_failures(results) == results
+
+
+def test_rg_real_error_validation_remains_unrecovered_failure():
+    exit_2 = {
+        "ok": False,
+        "exit_code": 2,
+        "output": "",
+        "command": 'rg "unterminated" app/tray.py',
+    }
+    error_output = {
+        "ok": False,
+        "exit_code": 1,
+        "output": "regex parse error: unclosed group",
+        "command": 'rg "(" app/tray.py',
+    }
+
+    assert _unrecovered_validation_failures([exit_2]) == [exit_2]
+    assert _unrecovered_validation_failures([error_output]) == [error_output]
+
+
+def test_arbitrary_exit_1_validation_remains_unrecovered_failure():
+    result = {
+        "ok": False,
+        "exit_code": 1,
+        "output": "",
+        "command": 'python -c "raise SystemExit(1)"',
+    }
+
+    assert _unrecovered_validation_failures([result]) == [result]
+
+
+def test_worker_prompt_guides_search_validation_semantics():
+    req = WorkerDispatchRequest(
+        goal="Do things",
+        files=["x.py"],
+        spec="Do it.",
+        acceptance="Check it.",
+    )
+
+    prompt = _format_spec_as_user_message(req)
+
+    assert "Use grep_search for searching" in prompt
+    assert "make intended no-match exit 0" in prompt
+    assert "pytest" not in prompt
 
 
 # normalize_worker_task

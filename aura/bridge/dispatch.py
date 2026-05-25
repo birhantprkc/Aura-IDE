@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import json
 import re
+import shlex
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -667,6 +668,7 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
         "- Use update_todo_list for broad or risky work; small localized tasks may proceed directly after reading.",
         "- Build the smallest complete implementation.",
         "- Own exact edits, validation, and code-quality decisions.",
+        "- Use grep_search for searching. If terminal rg/grep/findstr is used for absence checks, make intended no-match exit 0 or use a Python assertion.",
         "- Code must work and be easy to work on.",
         "- Avoid public-library, tutorial, or demo ceremony unless requested.",
         "- Avoid module summary docstrings and Args/Returns/Raises in normal app/tool code.",
@@ -793,12 +795,96 @@ def _unrecovered_validation_failures(results: list[dict[str, Any]]) -> list[dict
     for index, result in enumerate(results):
         if result.get("ok"):
             continue
+        if _is_benign_search_no_match(result):
+            continue
         command = str(result.get("command", ""))
         targets = set(_py_compile_targets(command))
         if targets and _later_py_compile_passes(results[index + 1:], targets):
             continue
         failures.append(result)
     return failures
+
+
+def _is_benign_search_no_match(result: dict[str, Any]) -> bool:
+    command = str(result.get("command") or "").strip()
+    exit_code = result.get("exit_code")
+    output = str(result.get("output") or "").strip()
+
+    if exit_code != 1 or not command:
+        return False
+    if output and not _is_no_match_only_output(output):
+        return False
+
+    segments = _split_simple_pipeline(command)
+    if not segments:
+        return False
+    return all(_pipeline_segment_starts_with_search(segment) for segment in segments)
+
+
+def _is_no_match_only_output(output: str) -> bool:
+    normalized = re.sub(r"\s+", " ", output.strip().lower())
+    return normalized in {
+        "no match",
+        "no matches",
+        "no matches found",
+    }
+
+
+def _split_simple_pipeline(command: str) -> list[str]:
+    segments: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    escaped = False
+
+    for char in command:
+        if escaped:
+            current.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            current.append(char)
+            escaped = True
+            continue
+        if quote:
+            current.append(char)
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'}:
+            current.append(char)
+            quote = char
+            continue
+        if char == "|":
+            segment = "".join(current).strip()
+            if not segment:
+                return []
+            segments.append(segment)
+            current = []
+            continue
+        current.append(char)
+
+    if quote:
+        return []
+    segment = "".join(current).strip()
+    if not segment:
+        return []
+    segments.append(segment)
+    return segments
+
+
+def _pipeline_segment_starts_with_search(segment: str) -> bool:
+    if re.search(r"(^|[^|])(?:&&|\|\||;|[<>])", segment):
+        return False
+    try:
+        tokens = shlex.split(segment, posix=False)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    executable = tokens[0].strip("'\"").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if executable.endswith(".exe"):
+        executable = executable[:-4]
+    return executable in {"rg", "grep", "findstr"}
 
 
 def _later_py_compile_passes(results: list[dict[str, Any]], targets: set[str]) -> bool:
