@@ -17,8 +17,14 @@ class WorkerSummaryCard(QFrame):
     """
 
     def __init__(
-        self, tool_call_id: str, goal: str, ok: bool, summary: str,
-        needs_followup: bool = False, parent=None
+        self,
+        tool_call_id: str,
+        goal: str,
+        ok: bool,
+        summary: str,
+        needs_followup: bool = False,
+        parent=None,
+        status: str | None = None,
     ) -> None:
         super().__init__(parent)
         self.tool_call_id = tool_call_id
@@ -38,12 +44,10 @@ class WorkerSummaryCard(QFrame):
         self._body = QLabel(self)
         self._body.setWordWrap(True)
         self._body.setTextFormat(Qt.TextFormat.RichText)
-        self._body.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
+        self._body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self._body)
 
-        self.update_summary(goal, ok, summary, needs_followup=needs_followup)
+        self.update_summary(goal, ok, summary, needs_followup=needs_followup, status=status)
 
     def update_summary(
         self,
@@ -52,13 +56,13 @@ class WorkerSummaryCard(QFrame):
         summary: str,
         *,
         needs_followup: bool = False,
+        status: str | None = None,
     ) -> None:
         """Update this card in place for repeated results with the same ID."""
-        header_text, header_color = self._status_label(ok, needs_followup, summary)
+        self._status = status
+        header_text, header_color = self._status_label(ok, needs_followup, summary, status)
         self._header.setText(header_text)
-        self._header.setStyleSheet(
-            f"color: {header_color}; font-weight: 700; font-size: 12px;"
-        )
+        self._header.setStyleSheet(f"color: {header_color}; font-weight: 700; font-size: 12px;")
 
         self.setObjectName("workerSummaryCard")
         self.setStyleSheet(
@@ -75,7 +79,30 @@ class WorkerSummaryCard(QFrame):
         self._body.setVisible(bool(summary))
 
     @staticmethod
-    def _status_label(ok: bool, needs_followup: bool, summary: str = "") -> tuple[str, str]:
+    def _status_label(
+        ok: bool,
+        needs_followup: bool = False,
+        summary: str = "",
+        status: str | None = None,
+    ) -> tuple[str, str]:
+        if status is not None:
+            from aura.conversation.dispatch import WorkerOutcomeStatus
+
+            mapping = {
+                WorkerOutcomeStatus.completed.value: ("Completed", SUCCESS),
+                WorkerOutcomeStatus.completed_with_caveats.value: ("Completed with caveats", WARN),
+                WorkerOutcomeStatus.needs_followup.value: ("Needs follow-up", WARN),
+                WorkerOutcomeStatus.validation_failed.value: ("Validation failed", DANGER),
+                WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Edit mechanics blocked", WARN),
+                WorkerOutcomeStatus.craft_bounced.value: ("Patch quality needs repair", WARN),
+                WorkerOutcomeStatus.craft_rejected.value: ("Craft rejected", DANGER),
+                WorkerOutcomeStatus.scope_mismatch.value: ("Scope mismatch", WARN),
+                WorkerOutcomeStatus.approval_rejected.value: ("Approval rejected", DANGER),
+                WorkerOutcomeStatus.cancelled.value: ("Cancelled", "#6b7280"),
+                WorkerOutcomeStatus.harness_error.value: ("Harness error", DANGER),
+            }
+            return mapping.get(status, ("Unknown", "#6b7280"))
+        # Fallback to legacy inference
         if "Patch quality needs repair" in summary:
             return "Patch quality needs repair", WARN
         if "Waiting for approval" in summary:

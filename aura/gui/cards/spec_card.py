@@ -501,7 +501,7 @@ class SpecCard(QFrame):
         self._make_safer_btn.setEnabled(False)
         self._go_deeper_btn.setEnabled(False)
 
-    def worker_finished(self, ok: bool, summary: str) -> None:
+    def worker_finished(self, ok: bool, summary: str, status: str | None = None) -> None:
         """Update status when worker completes."""
         self._worker_running = False
         verb = "Completed" if ok else "Completed with errors"

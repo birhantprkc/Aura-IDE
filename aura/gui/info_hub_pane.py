@@ -123,7 +123,7 @@ class InfoHubPane(QWidget):
         card = ErrorCard("Worker Error", message, parent=self._log_tab)
         self._cards_layout.addWidget(card)
 
-    def show_final_summary(self, ok: bool, summary: str, needs_followup: bool = False) -> None:
+    def show_final_summary(self, ok: bool, summary: str, needs_followup: bool = False, status: str | None = None) -> None:
         """Append a formatted summary block to the Worker Log text.
 
         Flushes the typewriter immediately so the summary is visible at once.
@@ -131,7 +131,23 @@ class InfoHubPane(QWidget):
         # Flush any pending typewriter content
         self._flush_log()
 
-        if ok:
+        if status is not None:
+            from aura.conversation.dispatch import WorkerOutcomeStatus
+            status_labels = {
+                WorkerOutcomeStatus.completed.value: "✅ Worker completed successfully.",
+                WorkerOutcomeStatus.completed_with_caveats.value: "✅ Worker completed with caveats.",
+                WorkerOutcomeStatus.needs_followup.value: "⚠️ Worker needs follow-up.",
+                WorkerOutcomeStatus.validation_failed.value: "❌ Worker validation failed.",
+                WorkerOutcomeStatus.edit_mechanics_blocked.value: "⚠️ Worker edit mechanics blocked.",
+                WorkerOutcomeStatus.craft_bounced.value: "⚠️ Worker patch quality needs repair.",
+                WorkerOutcomeStatus.craft_rejected.value: "❌ Worker craft rejected.",
+                WorkerOutcomeStatus.scope_mismatch.value: "⚠️ Worker scope mismatch.",
+                WorkerOutcomeStatus.approval_rejected.value: "❌ Worker approval rejected.",
+                WorkerOutcomeStatus.cancelled.value: "🔶 Worker cancelled.",
+                WorkerOutcomeStatus.harness_error.value: "❌ Worker harness error.",
+            }
+            prefix = status_labels.get(status, "❓ Unknown status.")
+        elif ok:
             prefix = "✅ Worker completed successfully."
         elif needs_followup:
             prefix = "⚠️ Worker needs follow-up."

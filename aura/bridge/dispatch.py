@@ -34,6 +34,7 @@ from aura.conversation import (
     History,
     WorkerDispatchRequest,
     WorkerDispatchResult,
+    WorkerOutcomeStatus,
     WorkerTaskSpec,
     normalize_worker_task,
 )
@@ -81,7 +82,7 @@ class _DispatchPending:
 class _DispatchProxy(QObject):
     showSpecCard = Signal(str, str, list, str, str, str)  # tool_id, goal, files, spec, acceptance, summary
     workerStarted = Signal(str)  # tool_id
-    workerFinished = Signal(str, bool, str, bool)  # tool_id, ok, summary, needs_followup
+    workerFinished = Signal(str, bool, str, bool, str)  # tool_id, ok, summary, needs_followup, status
     workerCancelled = Signal(str)
     workerReasoningDelta = Signal(str, str)
     workerContentDelta = Signal(str, str)
@@ -505,6 +506,23 @@ class _DispatchProxy(QObject):
             recoverable = False
 
         summary_continuation = dict(continuation)
+
+        status = _compute_outcome_status(
+            ok=ok,
+            needs_followup=needs_followup,
+            recoverable=recoverable,
+            has_internal_failure=has_internal_failure,
+            has_validation_failure=has_validation_failure,
+            has_recoverable_edit_blocker=has_recoverable_edit_blocker,
+            has_quality_bounce_blocker=has_quality_bounce_blocker,
+            has_no_work=has_no_work,
+            is_implementation=is_implementation,
+            has_unverified_acceptance=has_unverified_acceptance,
+            has_hard_failure=has_hard_failure,
+            result_errors=result_errors,
+            result_caveats=result_caveats,
+            continuation=summary_continuation,
+        )
         if has_recoverable_edit_blocker:
             if not summary_continuation.get("status"):
                 summary_continuation["status"] = "needs_followup"
@@ -579,10 +597,11 @@ class _DispatchProxy(QObject):
             except Exception:
                 pass  # Never block the chat on git failures
 
-        self.workerFinished.emit(tool_call_id, ok, summary, needs_followup)
+        self.workerFinished.emit(tool_call_id, ok, summary, needs_followup, status)
         return WorkerDispatchResult(
             ok=ok,
             summary=summary,
+            status=status,
             cancelled=False,
             needs_followup=needs_followup,
             phase_boundary=phase_boundary,
@@ -616,6 +635,50 @@ class _DispatchProxy(QObject):
                 ),
             },
         )
+
+
+def _compute_outcome_status(
+    ok: bool,
+    needs_followup: bool,
+    recoverable: bool,
+    has_internal_failure: bool,
+    has_validation_failure: bool,
+    has_recoverable_edit_blocker: bool,
+    has_quality_bounce_blocker: bool,
+    has_no_work: bool,
+    is_implementation: bool,
+    has_unverified_acceptance: bool,
+    has_hard_failure: bool,
+    result_errors: list[str],
+    result_caveats: list[str],
+    continuation: dict[str, Any],
+) -> str:
+    """Map the boolean severity classification to a WorkerOutcomeStatus."""
+    from aura.conversation.dispatch import WorkerOutcomeStatus as S
+
+    if has_hard_failure and has_internal_failure:
+        return S.harness_error.value
+    if has_hard_failure and has_validation_failure:
+        return S.validation_failed.value
+    if has_hard_failure:
+        # Non-internal, non-validation failures
+        structured = continuation.get("status")
+        if structured == "patch_quality_unresolved":
+            return S.craft_bounced.value
+        if structured == "phased":
+            return S.needs_followup.value
+        return S.needs_followup.value
+    if has_quality_bounce_blocker:
+        return S.craft_bounced.value
+    if has_recoverable_edit_blocker:
+        return S.edit_mechanics_blocked.value
+    if has_no_work and is_implementation:
+        return S.needs_followup.value
+    if has_unverified_acceptance:
+        return S.needs_followup.value
+    if result_caveats:
+        return S.completed_with_caveats.value
+    return S.completed.value
 
 
 def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -> str:

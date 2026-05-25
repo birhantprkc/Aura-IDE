@@ -108,7 +108,7 @@ class TestWorkerLifecycle:
         self, handler: WorkerEventHandler, playground: Mock,
     ) -> None:
         handler._on_worker_finished("tc1", True, "done")
-        playground.worker_finished.assert_called_once_with(True, "done")
+        playground.worker_finished.assert_called_once_with(True, "done", status=None)
 
     def test_worker_cancelled_delegates_to_playground(
         self, handler: WorkerEventHandler, playground: Mock,

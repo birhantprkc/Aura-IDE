@@ -230,7 +230,7 @@ class ConversationBridge(QObject):
     # binds to a single object).
     workerDispatchRequested = Signal(str, str, list, str, str, str)
     workerStarted = Signal(str)
-    workerFinished = Signal(str, bool, str, bool)
+    workerFinished = Signal(str, bool, str, bool, str)
     workerCancelled = Signal(str)
     workerReasoningDelta = Signal(str, str)
     workerContentDelta = Signal(str, str)

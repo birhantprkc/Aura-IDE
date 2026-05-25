@@ -497,9 +497,11 @@ class ChatView(QScrollArea):
                         summary = data.get("summary", "")
                         if summary:
                             needs_followup = bool(data.get("needs_followup", False))
+                            status = data.get("status")
                             self.add_worker_summary(
                                 tool_call_id, controller.goal or "", ok, summary,
                                 needs_followup=needs_followup,
+                                status=status,
                             )
                 except Exception:
                     pass
@@ -610,18 +612,19 @@ class ChatView(QScrollArea):
 
     def add_worker_summary(
         self, tool_call_id: str, goal: str, ok: bool, summary: str,
-        needs_followup: bool = False
+        needs_followup: bool = False, status: str | None = None,
     ) -> None:
         """Add a summary card to the chat after a worker completes."""
         self._remove_plan_writer_card(tool_call_id)
         existing = self._worker_summary_cards.get(tool_call_id)
         if existing is not None:
-            existing.update_summary(goal, ok, summary, needs_followup=needs_followup)
+            existing.update_summary(goal, ok, summary, needs_followup=needs_followup, status=status)
             self._scroll_to_bottom()
             return
         card = WorkerSummaryCard(
             tool_call_id, goal, ok, summary,
-            needs_followup=needs_followup, parent=self
+            needs_followup=needs_followup, parent=self,
+            status=status,
         )
         self._worker_summary_cards[tool_call_id] = card
         self._add_card(card)

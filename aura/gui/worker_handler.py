@@ -183,19 +183,20 @@ class WorkerEventHandler(QObject):
         ok: bool,
         summary: str,
         needs_followup: bool | None = None,
+        status: str | None = None,
     ) -> None:
         """Forward worker finished to playground and update spec card."""
         self._playground.stop_aura()
         if needs_followup is None:
-            self._playground.worker_finished(ok, summary)
+            self._playground.worker_finished(ok, summary, status=status)
         else:
             self._playground.worker_finished(
-                ok, summary, needs_followup=bool(needs_followup)
+                ok, summary, needs_followup=bool(needs_followup), status=status
             )
 
         card = self._chat.get_spec_card(tool_call_id)
         if card:
-            card.worker_finished(ok, summary)
+            card.worker_finished(ok, summary, status=status)
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
         """Stop worker aura and forward cancel to playground/spec card."""

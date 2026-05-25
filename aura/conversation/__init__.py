@@ -4,6 +4,7 @@ from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
     WorkerDispatchResult,
+    WorkerOutcomeStatus,
     WorkerTaskSpec,
     normalize_worker_task,
 )
