@@ -8,11 +8,49 @@ planner as the tool_result for that call.
 """
 from __future__ import annotations
 
+import enum
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from aura.craft.types import ExplicitSpecContract
+
+
+class WorkerOutcomeStatus(str, enum.Enum):
+    """Outcome classification for a worker dispatch result."""
+
+    completed = "completed"
+    """Worker finished successfully with all goals met."""
+
+    completed_with_caveats = "completed_with_caveats"
+    """Worker finished but attached caveats or non-blocking concerns."""
+
+    needs_followup = "needs_followup"
+    """Worker made partial progress; a follow-up dispatch is needed."""
+
+    validation_failed = "validation_failed"
+    """Worker-produced code failed validation checks."""
+
+    edit_mechanics_blocked = "edit_mechanics_blocked"
+    """Worker could not apply edits due to mechanical tool failures."""
+
+    craft_bounced = "craft_bounced"
+    """Craft rejected the patch during compilation."""
+
+    craft_rejected = "craft_rejected"
+    """Craft rejected the patch and it was not retried."""
+
+    scope_mismatch = "scope_mismatch"
+    """Worker determined the request was out of scope or unclear."""
+
+    approval_rejected = "approval_rejected"
+    """User rejected the dispatch approval request."""
+
+    cancelled = "cancelled"
+    """Worker execution was cancelled before completion."""
+
+    harness_error = "harness_error"
+    """An unexpected error occurred in the worker harness."""
 
 
 @dataclass
@@ -88,6 +126,7 @@ class WorkerDispatchResult:
     phase_boundary: bool = False
     followup_reason: str | None = None
     recoverable: bool = False
+    status: str | None = None
     completed: list[str] = field(default_factory=list)
     remaining: list[str] = field(default_factory=list)
     modified_files: list[str] = field(default_factory=list)
@@ -121,11 +160,17 @@ class WorkerDispatchResult:
             payload["suggested_next_spec"] = self.suggested_next_spec
         if self.extras:
             payload["extras"] = self.extras
+        if self.status is not None:
+            payload["status"] = self.status
         return payload
 
     @classmethod
     def from_tool_payload(cls, data: dict[str, Any]) -> "WorkerDispatchResult":
         """Restore a dispatch result from a planner tool payload."""
+        status: str | None = None
+        if "status" in data:
+            raw = data["status"]
+            status = str(raw) if raw is not None else None
         return cls(
             ok=bool(data.get("ok", False)),
             summary=str(data.get("summary", "")),
@@ -136,6 +181,7 @@ class WorkerDispatchResult:
                 str(data["followup_reason"]) if data.get("followup_reason") is not None else None
             ),
             recoverable=bool(data.get("recoverable", False)),
+            status=status,
             completed=_string_list(data.get("completed")),
             remaining=_string_list(data.get("remaining")),
             modified_files=_string_list(data.get("modified_files")),
@@ -145,6 +191,21 @@ class WorkerDispatchResult:
             ),
             extras=data.get("extras") if isinstance(data.get("extras"), dict) else {},
         )
+
+
+def infer_outcome_status(result: WorkerDispatchResult) -> str:
+    """Infer an outcome status from legacy boolean fields when no explicit status is set."""
+    if result.cancelled:
+        return WorkerOutcomeStatus.cancelled.value
+    if not result.ok:
+        return (
+            WorkerOutcomeStatus.needs_followup.value
+            if result.recoverable
+            else WorkerOutcomeStatus.harness_error.value
+        )
+    if result.needs_followup:
+        return WorkerOutcomeStatus.needs_followup.value
+    return WorkerOutcomeStatus.completed.value
 
 
 @dataclass
@@ -340,7 +401,9 @@ cancelled the dispatch and (if approved) the worker manager has finished.
 __all__ = [
     "WorkerDispatchRequest",
     "WorkerDispatchResult",
+    "WorkerOutcomeStatus",
     "WorkerTaskSpec",
     "DispatchCallback",
+    "infer_outcome_status",
     "normalize_worker_task",
 ]

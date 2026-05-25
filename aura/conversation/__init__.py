@@ -1,4 +1,5 @@
 """Conversation history and the tool-loop manager."""
+
 from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
@@ -14,7 +15,9 @@ __all__ = [
     "ConversationManager",
     "WorkerDispatchRequest",
     "WorkerDispatchResult",
+    "WorkerOutcomeStatus",
     "WorkerTaskSpec",
     "DispatchCallback",
+    "infer_outcome_status",
     "normalize_worker_task",
 ]
