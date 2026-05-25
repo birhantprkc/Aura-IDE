@@ -8,8 +8,11 @@ from aura.conversation.dispatch import (
 )
 from aura.bridge.dispatch import (
     _build_worker_summary,
+    _final_report_claims_failure,
+    _final_report_claims_validation,
     _format_spec_as_user_message,
     _unrecovered_validation_failures,
+    _validation_results_for_task,
 )
 from aura.conversation.history import History
 
@@ -258,6 +261,19 @@ def test_rg_pipeline_no_match_validation_is_not_unrecovered_failure():
     assert _unrecovered_validation_failures(results) == []
 
 
+def test_rg_pipeline_no_match_validation_preview_shape_is_not_unrecovered_failure():
+    results = [
+        {
+            "ok": False,
+            "exit_code": 1,
+            "output_preview": "",
+            "command": 'rg "show_response" app/tray.py | rg "No recent"',
+        }
+    ]
+
+    assert _unrecovered_validation_failures(results) == []
+
+
 def test_grep_no_match_validation_is_not_unrecovered_failure():
     results = [
         {
@@ -326,6 +342,81 @@ def test_worker_prompt_guides_search_validation_semantics():
     assert "Use grep_search for searching" in prompt
     assert "make intended no-match exit 0" in prompt
     assert "pytest" not in prompt
+
+
+def test_lone_rg_terminal_result_does_not_count_as_task_validation():
+    terminal_results = [
+        {
+            "ok": True,
+            "exit_code": 0,
+            "output": "match",
+            "output_preview": "match",
+            "command": 'rg "needle" app/tray.py',
+        }
+    ]
+
+    assert _validation_results_for_task([], terminal_results, []) == []
+
+
+def test_explicit_validation_command_counts_from_terminal_results():
+    terminal_results = [
+        {
+            "ok": True,
+            "exit_code": 0,
+            "output": "match",
+            "output_preview": "match",
+            "command": 'rg "needle" app/tray.py && exit 1 || exit 0',
+        }
+    ]
+
+    assert _validation_results_for_task(
+        [],
+        terminal_results,
+        ['rg "needle" app/tray.py && exit 1 || exit 0'],
+    ) == terminal_results
+
+
+def test_final_report_partial_suite_with_py_compile_is_not_harness_failure():
+    assert _final_report_claims_failure("Could not run full test suite, but py_compile passed")
+    assert _final_report_claims_validation("Could not run full test suite, but py_compile passed")
+
+    summary = _build_worker_summary(
+        WorkerDispatchRequest(goal="Fix", files=["a.py"], spec="spec", acceptance=""),
+        History(),
+        [{"tool": "edit_file", "path": "a.py"}],
+        [],
+        {},
+        ["Worker final report mentioned possible blocker, failed validation, or incomplete verification."],
+    )
+
+    assert not summary.startswith("Harness error")
+    assert summary.startswith("Worker completed with caveats")
+
+
+def test_no_blocker_remains_does_not_trip_failure_sniffing():
+    assert not _final_report_claims_failure("No blocker remains. py_compile passed.")
+
+
+def test_not_tested_does_not_count_as_validation_success():
+    assert not _final_report_claims_validation("Changed the file. Not tested.")
+
+
+def test_raw_rg_passed_does_not_count_as_validation_success():
+    assert not _final_report_claims_validation('rg "old" app/tray.py passed')
+
+
+def test_structured_worker_failure_summary_is_not_harness_error():
+    summary = _build_worker_summary(
+        WorkerDispatchRequest(goal="Fix", files=["a.py"], spec="spec", acceptance=""),
+        History(),
+        [],
+        ["blocked by missing dependency (worker_blocked)."],
+        {},
+        [],
+    )
+
+    assert summary.startswith("Worker needs follow-up")
+    assert not summary.startswith("Harness error")
 
 
 # normalize_worker_task

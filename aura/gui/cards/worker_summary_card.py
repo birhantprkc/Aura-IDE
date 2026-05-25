@@ -84,6 +84,12 @@ class WorkerSummaryCard(QFrame):
             return "Repairing patch", WARN
         if ok:
             return "Completed", SUCCESS
+        if summary.startswith("Harness error"):
+            return "Harness error", DANGER
+        if summary.startswith("Validation failed"):
+            return "Validation failed", WARN
+        if summary.startswith("Worker needs follow-up"):
+            return "Worker needs follow-up", WARN
         if needs_followup:
-            return "Patch quality needs repair", WARN
-        return "Harness error", DANGER
+            return "Worker needs follow-up", WARN
+        return "Worker needs follow-up", WARN

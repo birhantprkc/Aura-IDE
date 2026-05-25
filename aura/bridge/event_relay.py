@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
@@ -23,6 +24,9 @@ from aura.client import (
     Usage,
 )
 from aura.conversation.tool_limits import WRITE_TOOLS
+
+TERMINAL_OUTPUT_CAPTURE_CHARS = 4000
+TERMINAL_OUTPUT_PREVIEW_CHARS = 200
 
 
 class WorkerEventRelay(QObject):
@@ -60,6 +64,7 @@ class WorkerEventRelay(QObject):
         self.tool_results: list[dict] = []
         self.failed_tool_results: list[dict] = []
         self.quality_bounces: list[dict[str, Any]] = []
+        self.terminal_results: list[dict] = []
         self.validation_results: list[dict] = []
         # Execution ledger
         self.read_files: set[str] = set()         # paths read via read_file/read_files
@@ -210,7 +215,7 @@ class WorkerEventRelay(QObject):
             if not ev.ok:
                 self.failed_tool_results.append(tr)
 
-            # Track terminal validation command results
+            # Track terminal command results, then classify the subset that is meaningful validation.
             if (
                 ev.name == "run_terminal_command"
                 and isinstance(parsed, dict)
@@ -218,15 +223,19 @@ class WorkerEventRelay(QObject):
                 and "exit_code" in parsed
                 and "ok" in parsed
             ):
+                output = str(parsed.get("output") or "")
                 record = {
                     "command": parsed.get("command", ""),
                     "ok": parsed.get("ok", False),
                     "exit_code": parsed.get("exit_code", -1),
-                    "output_preview": (parsed.get("output", "") or "")[:200],
+                    "output": output[:TERMINAL_OUTPUT_CAPTURE_CHARS],
+                    "output_preview": output[:TERMINAL_OUTPUT_PREVIEW_CHARS],
                 }
                 if parsed.get("auto_validation"):
                     record["auto_validation"] = True
-                self.validation_results.append(record)
+                self.terminal_results.append(record)
+                if _is_validation_terminal_record(record):
+                    self.validation_results.append(record)
         elif isinstance(ev, TerminalOutput):
             self.terminalOutput.emit(tool_call_id, ev.tool_call_id, ev.text)
         elif isinstance(ev, AgentProcessStarted):
@@ -247,6 +256,7 @@ class WorkerEventRelay(QObject):
         self.tool_results.clear()
         self.failed_tool_results.clear()
         self.quality_bounces.clear()
+        self.terminal_results.clear()
         self.validation_results.clear()
         self.read_files.clear()
         self.read_outline_files.clear()
@@ -308,3 +318,45 @@ class WorkerEventRelay(QObject):
             record["error"] = (ev.result or "")[:500]
         record["payload"] = parsed
         return record
+
+
+def _is_validation_terminal_record(record: dict[str, Any]) -> bool:
+    if record.get("auto_validation"):
+        return True
+    command = str(record.get("command") or "").strip()
+    if not command:
+        return False
+    normalized = " ".join(command.lower().split())
+
+    known_patterns = (
+        r"(^|[;&|]\s*)(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+py_compile\b",
+        r"(^|[;&|]\s*)(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+pytest\b",
+        r"(^|[;&|]\s*)pytest\b",
+        r"(^|[;&|]\s*)ruff\s+(?:check|format\s+--check)\b",
+        r"(^|[;&|]\s*)mypy\b",
+        r"(^|[;&|]\s*)npm\s+(?:test|run\s+test)\b",
+        r"(^|[;&|]\s*)cargo\s+test\b",
+        r"(^|[;&|]\s*)go\s+test\b",
+    )
+    if any(re.search(pattern, normalized) for pattern in known_patterns):
+        return True
+    if _is_python_assertion_command(normalized):
+        return True
+    if _is_search_command_with_explicit_shell_assertion(normalized):
+        return True
+    return False
+
+
+def _is_python_assertion_command(normalized_command: str) -> bool:
+    if not re.search(r"(^|[;&|]\s*)(?:python(?:\d+(?:\.\d+)?)?|py)\s+-c\s+", normalized_command):
+        return False
+    return any(token in normalized_command for token in ("assert ", "raise systemexit", "sys.exit("))
+
+
+def _is_search_command_with_explicit_shell_assertion(normalized_command: str) -> bool:
+    if not re.search(r"^\s*(?:rg|grep|findstr)\b", normalized_command):
+        return False
+    return bool(
+        re.search(r"&&\s*exit\s+1\s*\|\|\s*exit\s+0\b", normalized_command)
+        or re.search(r"\|\|\s*exit\s+1\b", normalized_command)
+    )

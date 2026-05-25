@@ -505,13 +505,13 @@ def test_recoverable_edit_mechanics_exhaustion_is_single_final_reason(tmp_worksp
         hooks.unregister("generate_worker_code")
 
     assert result.ok is False
-    assert result.needs_followup is False
+    assert result.needs_followup is True
     assert result.recoverable is False
     assert result.extras["failed_write_tools"] == []
     assert result.extras["errors"] == [
         "Worker stopped before recovering from a recoverable edit mechanics failure. (worker_recovery_exhausted)."
     ]
-    assert "Harness error" in result.summary
+    assert result.summary.startswith("Worker needs follow-up")
     assert "old_str not found" not in result.summary
 
 
@@ -561,6 +561,7 @@ def test_auto_py_compile_validation_is_counted_by_dispatch(tmp_workspace):
             "command": "python -m py_compile a.py",
             "ok": True,
             "exit_code": 0,
+            "output": "a.py: ok",
             "output_preview": "a.py: ok",
             "auto_validation": True,
         }

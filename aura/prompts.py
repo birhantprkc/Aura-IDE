@@ -117,7 +117,7 @@ Generated repos should represent the real application directly from the first pa
 
 Cross-file sanity before finishing:
 - When adding constants, permissions, enum values, route names, states, or event types, quickly check related files for representation mismatches.
-- Prefer cheap search/read checks (`grep_search`, `rg`, or direct Python assertions) over broad test runs. Do not rely on bare `grep`; it is often unavailable in the Windows/PowerShell host shell. Prefer `grep_search` for structured results and `rg` for shell searches.
+- Prefer cheap search/read checks (`grep_search` or direct Python assertions) over broad test runs. Use terminal `rg` only for search, not pass/fail validation, unless the command explicitly exits 0 for the expected outcome. Do not rely on bare `grep`; it is often unavailable in the Windows/PowerShell host shell.
 - Do not mix symbolic permission names and permission string values accidentally. If a permission constant exists, import and use the constant instead of repeating raw strings.
 - State rules, service checks, route dependencies, and role mappings must use the same permission representation.
 - Avoid "almost matching" names like work_order_verify versus "work_order:verify"."""
@@ -195,8 +195,8 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Use focused existing tests only when directly relevant or requested.
 - Use `python -c` or an existing focused test for scratch validation.
 - Do not create root-level validation scratch files such as _check_acceptance.py, _check_ac7.py, or _check*.py.
-- Shell validation runs in the host shell. Prefer cross-platform commands such as `python -m py_compile`, focused Python assertion scripts, or `rg` when available. Do not use bare `grep`; it is not portable on Windows/PowerShell. Prefer `grep_search` or `rg` instead.
-- For "old pattern must be absent" validation, use a command that exits 0 when the pattern is absent and exits nonzero only when it is present.
+- Shell validation runs in the host shell. Prefer cross-platform commands such as `python -m py_compile` or focused Python assertion scripts. Use `grep_search` for search. Use terminal `rg` only for search, not pass/fail validation, unless the command explicitly exits 0 for the expected outcome.
+- For "old pattern must be absent" validation, prefer a Python assertion. If using terminal `rg`, write shell semantics so the command exits 0 when the pattern is absent and exits nonzero only when it is present.
 - Aura may auto-run focused py_compile as a completion safety net if you stop without running it.
 - Scratch validation should use `python -c` or existing focused tests. Temporary validation .py files must NOT be checked in as project artifacts.
 - Finish with changed files and validation results."""
@@ -281,7 +281,7 @@ Execution Protocol:
 - For broad or risky tasks, start with `update_todo_list`; this creates the visible execution plan for the user. Small localized tasks may stay fast.
 - Keep TODO statuses current when you use TODOs.
 - Build the smallest complete implementation. Do not use placeholders, elisions, fake scaffolding, or comments such as `// ... existing code`.
-- Validation commands should be focused. Do not use bare `grep`; use `rg`, `grep_search`, or Python assertions instead. For absence checks, the validation command must exit 0 when the pattern is absent.
+- Validation commands should be focused. Use `grep_search` for search. Use terminal `rg` only for search, not pass/fail validation, unless the command explicitly exits 0 for the expected outcome. Prefer Python assertions for absence/presence validation.
 - Resolution: when complete, state "Done." with changed files and validation results. Include blockers only if present.
 
 If a tool result tells you the worker tool-call limit was reached, do not call any more tools. Produce exactly this continuation report format:

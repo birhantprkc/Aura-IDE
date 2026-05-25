@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import Mock
 
 from aura.bridge.event_relay import WorkerEventRelay
@@ -85,3 +86,81 @@ def test_patch_file_quality_bounce_is_not_failed_or_touched() -> None:
     assert relay.failed_tool_results == []
     assert relay.write_results == []
     assert relay.touched_files == set()
+
+
+def test_terminal_results_include_capped_output_and_preview() -> None:
+    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
+    output = "x" * 5000
+    payload = {
+        "ok": True,
+        "command": "python -m py_compile a.py",
+        "exit_code": 0,
+        "output": output,
+    }
+
+    relay.relay(
+        "dispatch-1",
+        ToolResult(
+            tool_call_id="worker-tool-1",
+            name="run_terminal_command",
+            ok=True,
+            result=json.dumps(payload),
+        ),
+    )
+
+    assert relay.terminal_results[0]["output"] == output[:4000]
+    assert relay.terminal_results[0]["output_preview"] == output[:200]
+    assert relay.validation_results == relay.terminal_results
+
+
+def test_raw_rg_terminal_result_is_not_validation() -> None:
+    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
+    payload = {
+        "ok": False,
+        "command": 'rg "show_response" app/tray.py | rg "No recent"',
+        "exit_code": 1,
+        "output": "",
+    }
+
+    relay.relay(
+        "dispatch-1",
+        ToolResult(
+            tool_call_id="worker-tool-1",
+            name="run_terminal_command",
+            ok=False,
+            result=json.dumps(payload),
+        ),
+    )
+
+    assert relay.terminal_results == [
+        {
+            "command": 'rg "show_response" app/tray.py | rg "No recent"',
+            "ok": False,
+            "exit_code": 1,
+            "output": "",
+            "output_preview": "",
+        }
+    ]
+    assert relay.validation_results == []
+
+
+def test_shell_assertion_search_terminal_result_is_validation() -> None:
+    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
+    payload = {
+        "ok": True,
+        "command": 'rg "old" app/tray.py && exit 1 || exit 0',
+        "exit_code": 0,
+        "output": "",
+    }
+
+    relay.relay(
+        "dispatch-1",
+        ToolResult(
+            tool_call_id="worker-tool-1",
+            name="run_terminal_command",
+            ok=True,
+            result=json.dumps(payload),
+        ),
+    )
+
+    assert relay.validation_results == relay.terminal_results

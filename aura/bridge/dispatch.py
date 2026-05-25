@@ -365,6 +365,11 @@ class _DispatchProxy(QObject):
         claimed_validation = _final_report_claims_validation(final_report) or bool(continuation.get("validation_text"))
 
         _filter_scratch_write_records(relay)
+        validation_results = _validation_results_for_task(
+            relay.validation_results,
+            getattr(relay, "terminal_results", []),
+            task_spec.validation_commands,
+        )
         has_writes = bool(relay.write_results)
         internal_recovery_steers = [
             r for r in relay.failed_tool_results if r.get("internal_recovery_steer")
@@ -374,8 +379,8 @@ class _DispatchProxy(QObject):
             for r in relay.failed_tool_results
             if r["name"] in WRITE_TOOLS and not r.get("internal_recovery_steer")
         ]
-        failed_validation = _unrecovered_validation_failures(relay.validation_results)
-        validation_ran = bool(relay.validation_results)
+        failed_validation = _unrecovered_validation_failures(validation_results)
+        validation_ran = bool(validation_results)
         quality_bounces = list(getattr(relay, "quality_bounces", []))
 
         # Compute acceptance-unverified
@@ -413,12 +418,6 @@ class _DispatchProxy(QObject):
                 cmd = v["command"][:80]
                 result_errors.append(f"Validation command failed (exit code {v['exit_code']}): {cmd}")
 
-        if not structured_failure and _final_report_claims_failure(final_report):
-            result_errors.append(
-                "Worker final report claims a blocker, failed validation, failed acceptance, "
-                "or unverified acceptance."
-            )
-
         # Read-before-edit enforcement
         edited_without_read = _check_read_before_edit(
             relay.read_files, relay.read_outline_files, relay.edited_existing_files,
@@ -443,6 +442,13 @@ class _DispatchProxy(QObject):
         if acceptance_unverified:
             result_caveats.append("Worker final report did not clearly mention validation or acceptance verification.")
 
+        if not structured_failure and _final_report_claims_failure(final_report):
+            phrase_caveat = (
+                "Worker final report mentioned possible blocker, failed validation, "
+                "or incomplete verification."
+            )
+            result_caveats.append(phrase_caveat)
+
         # No-work detection
         phase_boundary = relay.phase_boundary_info is not None
         is_implementation = not (
@@ -455,6 +461,8 @@ class _DispatchProxy(QObject):
 
         # Severity-based classification
         has_hard_failure = bool(result_errors)
+        has_internal_failure = bool(internal_error or relay.api_errors)
+        has_validation_failure = bool(failed_validation)
         has_recoverable_edit_blocker = bool(recoverable_write_failures) and not relay.write_results
         has_quality_bounce_blocker = bool(quality_bounces) and not relay.write_results
         has_no_work = not relay.touched_files and not relay.failed_tool_results and not quality_bounces and not internal_error and not relay.api_errors
@@ -467,8 +475,8 @@ class _DispatchProxy(QObject):
         # Determine severity
         if has_hard_failure:
             ok = False
-            needs_followup = False
-            recoverable = False
+            needs_followup = not has_internal_failure
+            recoverable = has_validation_failure and not has_internal_failure
         elif has_quality_bounce_blocker:
             ok = False
             needs_followup = True
@@ -594,7 +602,8 @@ class _DispatchProxy(QObject):
                 "recoverable_write_failures": recoverable_write_failures,
                 "quality_bounces": quality_bounces,
                 "patch_quality_unresolved": patch_quality_unresolved,
-                "validation_results": relay.validation_results,
+                "terminal_results": getattr(relay, "terminal_results", []),
+                "validation_results": validation_results,
                 "errors": result_errors,
                 "caveats": result_caveats,
                 "worker_internal_error": bool(internal_error),
@@ -694,49 +703,49 @@ def _last_assistant_content(history: History) -> str:
 
 def _final_report_claims_failure(content: str) -> bool:
     text = content.lower()
+    if re.search(r"\bno\s+(?:blocker|blockers|blocked)\b", text):
+        text = re.sub(r"\bno\s+(?:blocker|blockers|blocked)\b", "", text)
     return any(
-        phrase in text
-        for phrase in (
-            "blocker",
-            "blocked",
-            "failed validation",
-            "validation failed",
-            "failed acceptance",
-            "acceptance failed",
-            "could not verify",
-            "couldn't verify",
-            "cannot verify",
-            "unable to verify",
-            "not verified",
-            "could not run",
-            "couldn't run",
-            "unable to run",
-            "tests failed",
-            "pytest failed",
-            "lint failed",
+        re.search(pattern, text)
+        for pattern in (
+            r"\bblocker(?:s)?\b",
+            r"\bblocked\b",
+            r"\bfailed\s+validation\b",
+            r"\bvalidation\s+failed\b",
+            r"\bfailed\s+acceptance\b",
+            r"\bacceptance\s+failed\b",
+            r"\bcould\s+not\s+verify\b",
+            r"\bcouldn't\s+verify\b",
+            r"\bcannot\s+verify\b",
+            r"\bunable\s+to\s+verify\b",
+            r"\bnot\s+verified\b",
+            r"\bcould\s+not\s+run\b",
+            r"\bcouldn't\s+run\b",
+            r"\bunable\s+to\s+run\b",
+            r"\btests?\s+failed\b",
+            r"\bpytest\s+failed\b",
+            r"\blint\s+failed\b",
         )
     )
 
 
 def _final_report_claims_validation(content: str) -> bool:
     text = content.lower()
+    if re.search(r"\bnot\s+(?:tested|validated|verified)\b", text):
+        text = re.sub(r"\bnot\s+(?:tested|validated|verified)\b", "", text)
     return any(
-        phrase in text
-        for phrase in (
-            "verified",
-            "validated",
-            "validation",
-            "passes",
-            "pass",
-            "pytest",
-            "py_compile",
-            "ruff",
-            "mypy",
-            "test",
-            "check",
-            "compiled",
-            "exit code 0",
-            "exits 0",
+        re.search(pattern, text)
+        for pattern in (
+            r"\bverified\b",
+            r"\bvalidated\b",
+            r"\bpytest\b",
+            r"\bpy_compile\b",
+            r"\bruff\b",
+            r"\bmypy\b",
+            r"\btests?\s+pass(?:ed|es)?\b",
+            r"\bcompiled\b",
+            r"\bexit\s+code\s+0\b",
+            r"\bexits\s+0\b",
         )
     )
 
@@ -805,10 +814,35 @@ def _unrecovered_validation_failures(results: list[dict[str, Any]]) -> list[dict
     return failures
 
 
+def _validation_results_for_task(
+    validation_results: list[dict[str, Any]],
+    terminal_results: list[dict[str, Any]],
+    explicit_commands: list[str],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    seen: set[tuple[str, Any, Any]] = set()
+
+    def add(record: dict[str, Any]) -> None:
+        key = (str(record.get("command") or ""), record.get("exit_code"), record.get("ok"))
+        if key not in seen:
+            records.append(record)
+            seen.add(key)
+
+    for record in validation_results:
+        add(record)
+
+    explicit = {command.strip() for command in explicit_commands if command.strip()}
+    if explicit:
+        for record in terminal_results:
+            if str(record.get("command") or "").strip() in explicit:
+                add(record)
+    return records
+
+
 def _is_benign_search_no_match(result: dict[str, Any]) -> bool:
     command = str(result.get("command") or "").strip()
     exit_code = result.get("exit_code")
-    output = str(result.get("output") or "").strip()
+    output = str(result.get("output") or result.get("output_preview") or "").strip()
 
     if exit_code != 1 or not command:
         return False
@@ -927,7 +961,13 @@ def _build_worker_summary(
         reason = continuation.get("reason", "") or (errors[0] if errors else "Patch quality needs repair.")
         lines.append(f"Patch quality needs repair: {reason}")
     elif errors:
-        lines.append(f"Harness error — {errors[0]}")
+        first_error = errors[0]
+        if _is_internal_error_summary(first_error):
+            lines.append(f"Harness error — {first_error}")
+        elif first_error.startswith("Validation command failed"):
+            lines.append(f"Validation failed — {first_error}")
+        else:
+            lines.append(f"Worker needs follow-up — {first_error}")
     elif continuation.get("status") == "needs_followup":
         reason = continuation.get("reason", "") or (caveats[0] if caveats else "needs further work")
         lines.append(f"Worker needs follow-up — {reason}")
@@ -980,6 +1020,17 @@ def _build_worker_summary(
         lines.append("Worker finished with no changes.")
 
     return "\n".join(lines).strip()
+
+
+def _is_internal_error_summary(error: str) -> bool:
+    text = error.lower()
+    return (
+        text.startswith("harness error")
+        or "internal worker exception" in text
+        or "internal worker dispatch exception" in text
+        or "worker_internal_error" in text
+        or "internal_error" in text
+    )
 
 
 def _check_read_before_edit(
