@@ -97,5 +97,6 @@ def test_validation_guidance_is_windows_safe():
     assert "Avoid bare `grep`" in PLANNER_SYSTEM_PROMPT
 
     command_desc = DIAGNOSTIC_TOOL_DEF["function"]["parameters"]["properties"]["command"]["description"]
-    assert "Avoid bare grep" in command_desc
+    assert "Use 'rg' instead of bare grep" in command_desc
+    assert "grep_search" in command_desc
     assert "exit 0 when the pattern is absent" in command_desc

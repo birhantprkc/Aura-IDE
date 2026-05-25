@@ -1,13 +1,15 @@
 """grep_search — search file contents across the workspace."""
 from __future__ import annotations
 
+import json
+import os
 import re
-import subprocess
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
-from aura.config import SKIP_DIRS, SKIP_FILE_SUFFIXES, get_subprocess_kwargs
+from aura.config import MAX_READ_BYTES, SKIP_DIRS, SKIP_FILE_SUFFIXES, get_subprocess_kwargs
 
 
 def _should_skip(path: Path) -> bool:
@@ -33,10 +35,7 @@ def grep_files(
     max_results: int = 50,
     include_pattern: str | None = None,
 ) -> dict[str, Any]:
-    """Search file contents under workspace_root for the given pattern.
-    
-    Uses 'ripgrep' (rg) if installed, otherwise falls back to sequential Python glob.
-    """
+    """Search file contents under workspace_root for the given pattern."""
     if not pattern:
         return {"ok": False, "error": "pattern is required"}
 
@@ -84,9 +83,54 @@ def grep_files(
 
 
 def _looks_like_regex(pattern: str) -> bool:
-    """Return true for regex syntax models commonly emit by accident."""
-    regex_tokens = ("|", r"\b", r"\d", r"\s", r"\w", ".*", ".+", "[", "(?")
-    return any(token in pattern for token in regex_tokens)
+    """Return true when the pattern contains obvious regex syntax."""
+    if "(?" in pattern:
+        return True
+    if re.search(r"\\(?:[(){}\[\].+*?|^$]|[swdb])", pattern):
+        return True
+    return re.search(r"(?<!\\)(?:\^|\$|\*|\+|\?|\(|\)|\{|\}|\[|\]|\|)", pattern) is not None
+
+
+def _build_result(
+    *,
+    matches: list[dict[str, Any]],
+    engine: str,
+    searched_files: int,
+    skipped_files: int,
+    regex_mode: bool,
+    include_pattern: str | None,
+    auto_regex_retry: bool = False,
+    truncated: bool = False,
+) -> dict[str, Any]:
+    result = {
+        "ok": True,
+        "matches": matches,
+        "engine": engine,
+        "searched_files": searched_files,
+        "skipped_files": skipped_files,
+        "truncated": truncated,
+        "regex_mode": regex_mode,
+        "auto_regex_retry": auto_regex_retry,
+        "include_pattern": include_pattern,
+    }
+    result["summary"] = _build_summary(result)
+    return result
+
+
+def _build_summary(result: dict[str, Any]) -> str:
+    matches = len(result.get("matches", []))
+    state = "found matches" if matches else "found no matches"
+    include_pattern = result.get("include_pattern")
+    include_note = f" include_pattern={include_pattern!r}." if include_pattern else ""
+    return (
+        f"{result.get('engine', 'search')} {state}. "
+        f"searched_files={result.get('searched_files', 0)}, "
+        f"skipped_files={result.get('skipped_files', 0)}, "
+        f"regex_mode={result.get('regex_mode', False)}, "
+        f"auto_regex_retry={result.get('auto_regex_retry', False)}, "
+        f"truncated={result.get('truncated', False)}."
+        f"{include_note}"
+    )
 
 
 def _maybe_retry_as_regex(
@@ -112,11 +156,43 @@ def _maybe_retry_as_regex(
         include_pattern,
         **kwargs,
     )
-    if retry.get("ok") and retry.get("matches"):
+    if retry.get("ok"):
         retry["auto_regex_retry"] = True
-        retry["original_regex_mode"] = False
+        retry["summary"] = _build_summary(retry)
         return retry
+
+    result["auto_regex_retry"] = True
+    result["regex_retry_error"] = retry.get("error")
+    result["summary"] = _build_summary(result)
     return result
+
+
+def _collect_candidate_files(workspace_root: Path, include_pattern: str | None) -> tuple[list[Path], int]:
+    candidates: list[Path] = []
+    skipped_files = 0
+
+    if include_pattern:
+        for file_path in workspace_root.rglob(include_pattern):
+            if not file_path.is_file():
+                continue
+            rel_path = _safe_relative_to(file_path, workspace_root)
+            if _should_skip(rel_path):
+                skipped_files += 1
+                continue
+            candidates.append(file_path)
+    else:
+        for root_dir, dirs, files in os.walk(workspace_root):
+            dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
+            for filename in sorted(files):
+                file_path = Path(root_dir) / filename
+                rel_path = _safe_relative_to(file_path, workspace_root)
+                if _should_skip(rel_path):
+                    skipped_files += 1
+                    continue
+                candidates.append(file_path)
+
+    candidates.sort(key=lambda path: _safe_relative_to(path, workspace_root).as_posix())
+    return candidates, skipped_files
 
 
 def _grep_ripgrep(
@@ -128,35 +204,24 @@ def _grep_ripgrep(
     include: str | None,
     rg_path: str | None = None,
 ) -> dict[str, Any]:
-    # Use the resolved rg_path to guarantee execution consistency
     exe = rg_path or shutil.which("rg") or "rg"
-    # Use --hidden to search .github, .env, etc. (but SKIP_DIRS still excludes .git/.venv)
-    cmd = [exe, "--json", "--column", "--max-count", str(max_results), "--hidden"]
-    
+    candidates, skipped_files = _collect_candidate_files(root, include)
+
+    cmd = [exe, "--json", "--column", "--hidden"]
     if not regex:
         cmd.append("--fixed-strings")
     if not case_sensitive:
         cmd.append("--ignore-case")
-    
     if include:
         cmd.extend(["--glob", include])
-    
-    # Exclude common junk
-    for skip in SKIP_DIRS:
-        # Use !{skip}/ to exclude the entire directory efficiently
+    for skip in sorted(SKIP_DIRS):
         cmd.extend(["--glob", f"!{skip}/"])
         cmd.extend(["--glob", f"!{skip}/*"])
-    
-    for suffix in SKIP_FILE_SUFFIXES:
+    for suffix in sorted(SKIP_FILE_SUFFIXES):
         cmd.extend(["--glob", f"!*{suffix}"])
-    
-    cmd.append("--")
-    cmd.append(pattern)
-    cmd.append(str(root))
+    cmd.extend(["--", pattern, str(root)])
 
     try:
-        # ripgrep returns 1 if no matches found, 0 if matches found.
-        # We handle this manually.
         proc = subprocess.run(
             cmd,
             capture_output=True,
@@ -167,10 +232,10 @@ def _grep_ripgrep(
         if proc.returncode not in (0, 1):
             return {"ok": False, "error": proc.stderr or f"ripgrep failed with code {proc.returncode}"}
 
-        import json
-        matches = []
+        matches: list[dict[str, Any]] = []
+        truncated = False
         root_resolved = root.resolve()
-        
+
         for line in proc.stdout.splitlines():
             if not line.strip():
                 continue
@@ -178,39 +243,43 @@ def _grep_ripgrep(
                 data = json.loads(line)
             except json.JSONDecodeError:
                 continue
-                
-            if data.get("type") == "match":
-                m_data = data["data"]
-                # Resolve the path from rg to ensure it's absolute, then make it relative to our root.
-                raw_match_path = m_data["path"]["text"]
-                abs_match_path = Path(raw_match_path)
-                if not abs_match_path.is_absolute():
-                    abs_match_path = (root / abs_match_path).resolve()
-                else:
-                    abs_match_path = abs_match_path.resolve()
-                    
-                try:
-                    import os
-                    rel_path = Path(os.path.relpath(abs_match_path, root_resolved)).as_posix()
-                except Exception:
-                    # Fallback if relative_to / relpath fails (e.g. outside root)
-                    rel_path = raw_match_path
-                
-                matches.append({
-                    "path": rel_path,
-                    "line_number": m_data["line_number"],
-                    "line": m_data["lines"]["text"].strip(),
-                    "match_column": m_data["submatches"][0]["start"],
-                })
-                if len(matches) >= max_results:
-                    break
 
-        return {
-            "ok": True,
-            "matches": matches,
-            "truncated": len(matches) >= max_results,
-            "engine": "ripgrep"
-        }
+            if data.get("type") != "match":
+                continue
+
+            if len(matches) >= max_results:
+                truncated = True
+                continue
+
+            match_data = data["data"]
+            raw_match_path = match_data["path"]["text"]
+            abs_match_path = Path(raw_match_path)
+            if not abs_match_path.is_absolute():
+                abs_match_path = (root / abs_match_path).resolve()
+            else:
+                abs_match_path = abs_match_path.resolve()
+
+            try:
+                rel_path = Path(os.path.relpath(abs_match_path, root_resolved)).as_posix()
+            except Exception:
+                rel_path = raw_match_path
+
+            matches.append({
+                "path": rel_path,
+                "line_number": match_data["line_number"],
+                "line": match_data["lines"]["text"].strip(),
+                "match_column": match_data["submatches"][0]["start"],
+            })
+
+        return _build_result(
+            matches=matches,
+            engine="ripgrep",
+            searched_files=len(candidates),
+            skipped_files=skipped_files,
+            truncated=truncated,
+            regex_mode=regex,
+            include_pattern=include,
+        )
     except Exception as exc:
         return {"ok": False, "error": f"ripgrep error: {exc}"}
 
@@ -223,14 +292,7 @@ def _grep_python(
     max_results: int,
     include_pattern: str | None,
 ) -> dict[str, Any]:
-    """Search file contents under workspace_root for the given pattern.
-
-    Returns a dict with keys:
-      - ok: bool
-      - matches: list of {path, line_number, line, match_column}
-      - truncated: whether max_results was hit
-      - error (if any)
-    """
+    """Search file contents under workspace_root for the given pattern."""
     if not pattern:
         return {"ok": False, "error": "pattern is required"}
 
@@ -244,79 +306,68 @@ def _grep_python(
         return {"ok": False, "error": f"invalid regex: {exc}"}
 
     matches: list[dict[str, Any]] = []
-    
-    # Import locally to avoid circular dependency if config changes
-    from aura.config import MAX_READ_BYTES
-
-    # Collect candidate files via rglob with optional include_pattern filter
-    candidates: list[Path] = []
-    if include_pattern:
-        for p in workspace_root.rglob(include_pattern):
-            if _should_skip(_safe_relative_to(p, workspace_root)):
-                continue
-            if p.is_file():
-                candidates.append(p)
-    else:
-        # Faster manual walk to prune SKIP_DIRS early
-        import os
-        for root_dir, dirs, files in os.walk(workspace_root):
-            # Prune directories in-place to avoid visiting them
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-            for f in files:
-                p = Path(root_dir) / f
-                if _should_skip(_safe_relative_to(p, workspace_root)):
-                    continue
-                candidates.append(p)
-                # Soft cap on candidate list to avoid extreme memory usage
-                if len(candidates) > max_results * 50:
-                    break
-            if len(candidates) > max_results * 50:
-                break
+    candidates, skipped_files = _collect_candidate_files(workspace_root, include_pattern)
+    searched_files = 0
 
     for file_path in candidates:
-        if len(matches) >= max_results:
-            break
         rel = _safe_relative_to(file_path, workspace_root).as_posix()
         try:
-            # Prevent hanging on massive binary/log files during search fallback
             file_size = file_path.stat().st_size
             if file_size > MAX_READ_BYTES:
-                # Skip massive files in pure python grep to avoid memory explosion
+                skipped_files += 1
                 continue
-                
-            with open(file_path, "rb") as f:
-                raw = f.read()
-                
-            # Try UTF-8, fall back to latin-1 for binary-ish files
+
+            raw = file_path.read_bytes()
+            if b"\x00" in raw:
+                skipped_files += 1
+                continue
+
             try:
                 text = raw.decode("utf-8")
             except UnicodeDecodeError:
-                # Skip files that aren't valid UTF-8 or latin-1 text
-                try:
-                    text = raw.decode("latin-1")
-                except UnicodeDecodeError:
-                    continue
+                skipped_files += 1
+                continue
         except (OSError, PermissionError):
+            skipped_files += 1
             continue
 
+        searched_files += 1
+
         for line_num, line in enumerate(text.splitlines(), start=1):
-            if len(matches) >= max_results:
-                break
             if compiled is not None:
-                m = compiled.search(line)
-                if m:
+                match = compiled.search(line)
+                if match:
+                    if len(matches) >= max_results:
+                        return _build_result(
+                            matches=matches,
+                            engine="python",
+                            searched_files=searched_files,
+                            skipped_files=skipped_files,
+                            truncated=True,
+                            regex_mode=regex_mode,
+                            include_pattern=include_pattern,
+                        )
                     matches.append({
                         "path": rel,
                         "line_number": line_num,
                         "line": line.strip(),
-                        "match_column": m.start(),
+                        "match_column": match.start(),
                     })
             else:
-                # Plain substring search
                 search_line = line if case_sensitive else line.lower()
                 search_pattern = pattern if case_sensitive else pattern.lower()
                 col = search_line.find(search_pattern)
                 if col != -1:
+                    if len(matches) >= max_results:
+                        return _build_result(
+                            matches=matches,
+                            engine="python",
+                            searched_files=searched_files,
+                            skipped_files=skipped_files,
+                            truncated=True,
+                            regex_mode=regex_mode,
+                            include_pattern=include_pattern,
+                        )
                     matches.append({
                         "path": rel,
                         "line_number": line_num,
@@ -324,11 +375,12 @@ def _grep_python(
                         "match_column": col,
                     })
 
-    return {
-        "ok": True,
-        "matches": matches,
-        "truncated": len(matches) >= max_results,
-        "pattern": pattern,
-        "regex_mode": regex_mode,
-        "case_sensitive": case_sensitive,
-    }
+    return _build_result(
+        matches=matches,
+        engine="python",
+        searched_files=searched_files,
+        skipped_files=skipped_files,
+        truncated=False,
+        regex_mode=regex_mode,
+        include_pattern=include_pattern,
+    )

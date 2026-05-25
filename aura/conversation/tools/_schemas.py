@@ -126,7 +126,8 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                     "description": (
                         "Search file contents in the workspace for a given string or regex pattern. "
                         "Returns matching file paths, line numbers, the matching line content, "
-                        "and the column where the match starts. "
+                        "and the column where the match starts, plus search metadata such as the "
+                        "engine used, searched file count, skipped file count, truncation, and regex retry state. "
                         "Use this to find where functions are defined, variables are used, "
                         "error messages, or any text pattern across the codebase."
                     ),
@@ -154,7 +155,12 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                             },
                             "include_pattern": {
                                 "type": "string",
-                                "description": "Optional glob pattern to filter which files to search (e.g. '**/*.py' to only search Python files).",
+                                "description": (
+                                    "Optional glob pattern restricting which files are searched. "
+                                    "This uses workspace-relative glob matching; use patterns such as "
+                                    "'**/*.py' to search Python files anywhere in the repo. "
+                                    "Prefer '**/*.py' over '*.py' when you want recursive Python-only search."
+                                ),
                             },
                         },
                         "required": ["pattern"],
@@ -913,16 +919,16 @@ DIAGNOSTIC_TOOL_DEF: dict[str, Any] = {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": (
-                        "A read-only diagnostic command. Examples: "
-                        "'python -m py_compile aura/gui/left_pane.py', "
-                        "'git status', 'git diff', "
-                        "'pytest tests/test_gui.py -x -q', "
-                        "'rg \"class LeftPane\" aura/', "
-                        "'ls aura/conversation/tools/'. "
-                        "Avoid bare grep; it is not portable on Windows/PowerShell. "
-                        "For absence checks, make the command exit 0 when the pattern is absent."
-                    ),
+                        "description": (
+                            "A read-only diagnostic command. Examples: "
+                            "'python -m py_compile aura/gui/left_pane.py', "
+                            "'git status', 'git diff', "
+                            "'pytest tests/test_gui.py -x -q', "
+                            "'rg \"class LeftPane\" aura/', "
+                            "'ls aura/conversation/tools/'. "
+                            "Use 'rg' instead of bare grep for shell searches, or use grep_search when you want structured matches. "
+                            "For absence checks, make the command exit 0 when the pattern is absent."
+                        ),
                 },
                 "timeout": {
                     "type": "integer",

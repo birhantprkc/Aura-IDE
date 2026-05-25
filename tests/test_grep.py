@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from aura.conversation.tools.grep import grep_files, _should_skip
+from aura.conversation.tools.grep import _looks_like_regex, _should_skip, grep_files
 from tests.helpers import MockResult, _make_run
 
 
@@ -77,10 +77,13 @@ class TestGrepPython:
 
     # -- tests ---------------------------------------------------------
 
-    def test_basic_substring_search(self, tmp_workspace: Path) -> None:
+    def test_literal_search_finds_exact_text(self, tmp_workspace: Path) -> None:
         """Find 'hello' in scripts/smoke.py via substring matching."""
         result = grep_files(tmp_workspace, "hello")
         assert result["ok"] is True
+        assert result["engine"] == "python"
+        assert result["regex_mode"] is False
+        assert result["auto_regex_retry"] is False
         assert len(result["matches"]) >= 1
         assert any("hello" in m["line"] for m in result["matches"])
 
@@ -90,20 +93,35 @@ class TestGrepPython:
         assert result["ok"] is True
         assert len(result["matches"]) == 0
 
-    def test_regex_mode(self, tmp_workspace: Path) -> None:
-        """Regex pattern he[l]+o matches 'hello'."""
-        result = grep_files(tmp_workspace, r"he[l]+o", regex_mode=True)
+    def test_regex_search_finds_pattern_with_anchors(self, tmp_workspace: Path) -> None:
+        """Regex pattern with ^ and $ anchors matches a full line."""
+        result = grep_files(tmp_workspace, r"^VALUE = 42$", regex_mode=True)
         assert result["ok"] is True
-        assert len(result["matches"]) >= 1
-        assert any("hello" in m["line"] for m in result["matches"])
+        assert result["regex_mode"] is True
+        assert len(result["matches"]) == 1
+        assert result["matches"][0]["path"] == "aura/config.py"
 
-    def test_auto_regex_retry_for_alternation(self, tmp_workspace: Path) -> None:
-        """Pipe-delimited searches are retried as regex when plain text has no hits."""
-        result = grep_files(tmp_workspace, "VALUE|hello")
+    def test_regex_looking_pattern_auto_retries(self, tmp_workspace: Path) -> None:
+        """Regex-looking patterns retry in regex mode after a literal miss."""
+        result = grep_files(tmp_workspace, r"^VALUE = 42$")
         assert result["ok"] is True
         assert result["auto_regex_retry"] is True
-        assert len(result["matches"]) >= 1
-        assert any("VALUE" in m["line"] or "hello" in m["line"] for m in result["matches"])
+        assert result["regex_mode"] is True
+        assert len(result["matches"]) == 1
+        assert result["matches"][0]["path"] == "aura/config.py"
+
+    def test_escaped_function_pattern_is_detected_as_regex(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "module.py"
+        file_path.write_text("def foo(bar):\n    return bar\n", encoding="utf-8")
+
+        result = grep_files(tmp_path, r"def foo\(")
+
+        assert _looks_like_regex(r"def foo\(") is True
+        assert result["ok"] is True
+        assert result["auto_regex_retry"] is True
+        assert result["regex_mode"] is True
+        assert len(result["matches"]) == 1
+        assert result["matches"][0]["path"] == "module.py"
 
     def test_invalid_regex(self, tmp_workspace: Path) -> None:
         """Malformed regex returns an error."""
@@ -123,13 +141,14 @@ class TestGrepPython:
         assert len(result["matches"]) <= 2
         assert result["truncated"] is True
 
-    def test_include_pattern(self, tmp_workspace: Path) -> None:
-        """include_pattern='*.md' restricts search to Markdown files only."""
-        result = grep_files(tmp_workspace, "content", include_pattern="*.md")
+    def test_include_pattern_recursive_python_only(self, tmp_workspace: Path) -> None:
+        """include_pattern='**/*.py' restricts search to Python files only."""
+        result = grep_files(tmp_workspace, "VALUE", include_pattern="**/*.py")
         assert result["ok"] is True
         assert len(result["matches"]) >= 1
+        assert result["include_pattern"] == "**/*.py"
         for m in result["matches"]:
-            assert m["path"].endswith(".md")
+            assert m["path"].endswith(".py")
 
     def test_skip_dirs_and_hidden(self, tmp_workspace: Path) -> None:
         """Hidden files and .git/ contents are not searched."""
@@ -139,17 +158,30 @@ class TestGrepPython:
         assert len(result["matches"]) == 1
 
     def test_binary_file_skipped(self, tmp_path: Path) -> None:
-        """Binary files that can't be decoded as UTF-8 are silently skipped."""
+        """Binary files that can't be decoded as UTF-8 are counted as skipped."""
         binary = tmp_path / "data.bin"
         binary.write_bytes(b"\x00\xff\xfe")
         readable = tmp_path / "readable.txt"
         readable.write_text("hello world\n", encoding="utf-8")
 
-        # Search for a pattern that only binary contains (if it were text)
         result = grep_files(tmp_path, "hello")
         assert result["ok"] is True
         assert len(result["matches"]) == 1
         assert result["matches"][0]["path"] == "readable.txt"
+        assert result["searched_files"] == 1
+        assert result["skipped_files"] == 1
+
+    def test_skipped_large_and_binary_files_are_counted(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("aura.conversation.tools.grep.MAX_READ_BYTES", 8)
+        (tmp_path / "large.txt").write_text("0123456789abcdef", encoding="utf-8")
+        (tmp_path / "binary.bin").write_bytes(b"\x00\x01\x02")
+        (tmp_path / "small.txt").write_text("needle\n", encoding="utf-8")
+
+        result = grep_files(tmp_path, "needle")
+
+        assert result["ok"] is True
+        assert result["searched_files"] == 1
+        assert result["skipped_files"] == 2
 
     def test_grep_finds_private_method_names(self, tmp_path: Path) -> None:
         target = tmp_path / "gui"
@@ -193,6 +225,26 @@ class TestGrepPython:
         assert result["ok"] is True
         assert result["matches"]
         assert result["matches"][0]["path"] == ".custom/example.py"
+
+    def test_python_fallback_searches_beyond_old_candidate_cap(self, tmp_path: Path) -> None:
+        for index in range(150):
+            (tmp_path / f"file_{index:03d}.txt").write_text("nothing here\n", encoding="utf-8")
+        (tmp_path / "zzz_target.txt").write_text("needle late in traversal\n", encoding="utf-8")
+
+        result = grep_files(tmp_path, "needle", max_results=2)
+
+        assert result["ok"] is True
+        assert len(result["matches"]) == 1
+        assert result["matches"][0]["path"] == "zzz_target.txt"
+        assert result["searched_files"] == 151
+
+    def test_no_match_reports_searched_files(self, tmp_workspace: Path) -> None:
+        result = grep_files(tmp_workspace, "definitely absent")
+
+        assert result["ok"] is True
+        assert result["matches"] == []
+        assert result["searched_files"] > 0
+        assert "searched_files=" in result["summary"]
 
 
 # ===================================================================
@@ -268,6 +320,8 @@ class TestGrepRipgrep:
         result = grep_files(tmp_workspace, "nonexistent")
         assert result["ok"] is True
         assert len(result["matches"]) == 0
+        assert result["searched_files"] > 0
+        assert result["auto_regex_retry"] is False
 
     def test_auto_regex_retry_for_alternation(
         self, monkeypatch: pytest.MonkeyPatch, tmp_workspace: Path
@@ -291,6 +345,7 @@ class TestGrepRipgrep:
 
         assert result["ok"] is True
         assert result["auto_regex_retry"] is True
+        assert result["regex_mode"] is True
         assert len(result["matches"]) == 1
         assert "--fixed-strings" in captured[0]
         assert "--fixed-strings" not in captured[1]
@@ -325,14 +380,22 @@ class TestGrepRipgrep:
             stdout_lines.append(
                 self._rg_json_match("file.txt", i + 1, f"match {i}", 0)
             )
+        captured: list[list[str]] = []
+
+        def _capture_run(*args: object, **kwargs: object) -> MockResult:
+            cmd = args[0] if args else kwargs.get("cmd", [])
+            captured.append(list(cmd))  # type: ignore[arg-type]
+            return MockResult(stdout="\n".join(stdout_lines) + "\n")
+
         monkeypatch.setattr(
             subprocess, "run",
-            _make_run([MockResult(stdout="\n".join(stdout_lines) + "\n")]),
+            _capture_run,
         )
         result = grep_files(tmp_workspace, "match", max_results=3)
         assert result["ok"] is True
         assert len(result["matches"]) == 3
         assert result["truncated"] is True
+        assert "--max-count" not in captured[0]
 
     def test_case_sensitive_flag(self, monkeypatch: pytest.MonkeyPatch,
                                  tmp_workspace: Path) -> None:

@@ -9,7 +9,6 @@ ALLOWED_EXECUTABLES = {
     "pytest",
     "git",
     "rg",
-    "grep",
     "ls",
     "cat",
     "head",
@@ -62,6 +61,8 @@ def parse_and_validate(command: str) -> list[str]:
         raise ValueError("Command cannot be empty")
 
     exe = tokens[0]
+    if exe == "grep":
+        raise ValueError("Command rejected: use 'rg' or grep_search instead of bare 'grep' for Windows portability.")
     if exe not in ALLOWED_EXECUTABLES:
         raise ValueError(f"Command rejected: executable '{exe}' is not in the allowed list.")
 

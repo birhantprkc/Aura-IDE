@@ -15,6 +15,7 @@ import pytest
 from aura.conversation.tools._types import (
     ApprovalDecision,
 )
+from aura.conversation.tools._schemas import DIAGNOSTIC_TOOL_DEF, READ_TOOL_DEFS
 from aura.conversation.tools.registry import (
     TOOL_HANDLERS,
     ToolRegistry,
@@ -280,6 +281,40 @@ class TestGrepSearch:
         assert result.ok is False
         assert result.payload["ok"] is False
         assert result.payload["error"] == "boom"
+
+    def test_grep_handler_preserves_search_metadata(self, registry: ToolRegistry, approve_cb: MagicMock):
+        with patch("aura.conversation.tools.registry.grep_files") as mock_gf:
+            mock_gf.return_value = {
+                "ok": True,
+                "matches": [],
+                "engine": "python",
+                "searched_files": 12,
+                "skipped_files": 3,
+                "truncated": False,
+                "regex_mode": False,
+                "auto_regex_retry": True,
+                "include_pattern": "**/*.py",
+            }
+            result = _handler("grep_search")(registry, {"pattern": "anything"}, approve_cb, False)
+
+        assert result.ok is True
+        assert result.payload["engine"] == "python"
+        assert result.payload["searched_files"] == 12
+        assert result.payload["skipped_files"] == 3
+        assert result.payload["auto_regex_retry"] is True
+
+
+class TestToolSchemaDocs:
+    def test_grep_search_include_pattern_docs_recommend_recursive_python_glob(self):
+        grep_tool = next(tool for tool in READ_TOOL_DEFS if tool["function"]["name"] == "grep_search")
+        include_desc = grep_tool["function"]["parameters"]["properties"]["include_pattern"]["description"]
+        assert "**/*.py" in include_desc
+        assert "recursive" in include_desc.lower() or "anywhere in the repo" in include_desc.lower()
+
+    def test_diagnostic_schema_prefers_rg_over_grep(self):
+        command_desc = DIAGNOSTIC_TOOL_DEF["function"]["parameters"]["properties"]["command"]["description"]
+        assert "Use 'rg' instead of bare grep" in command_desc
+        assert "grep_search" in command_desc
 
 
 # find_usages
