@@ -320,7 +320,7 @@ class _DispatchProxy(QObject):
         relay.agentProcessFinished.connect(self.workerAgentProcessFinished)
 
         internal_error: str | None = None
-        scratch_before = _root_check_files(self._workspace_root) if self._workspace_root is not None else set()
+        scratch_before = _validation_scratch_files(self._workspace_root) if self._workspace_root is not None else set()
         try:
             worker_manager.send(
                 on_event=lambda ev: relay.relay(tool_call_id, ev),
@@ -343,7 +343,7 @@ class _DispatchProxy(QObject):
 
         cleaned_scratch_files: list[str] = []
         if self._workspace_root is not None and not _request_allows_root_check_files(req):
-            cleaned_scratch_files = _cleanup_new_root_check_files(self._workspace_root, scratch_before)
+            cleaned_scratch_files = _cleanup_new_validation_scratch_files(self._workspace_root, scratch_before)
             if cleaned_scratch_files:
                 cleaned_set = set(cleaned_scratch_files)
                 relay.write_results = [
@@ -360,6 +360,7 @@ class _DispatchProxy(QObject):
         is_partial = bool(continuation.get("status") == "needs_followup" or continuation.get("remaining"))
         claimed_validation = _final_report_claims_validation(final_report) or bool(continuation.get("validation_text"))
 
+        _filter_scratch_write_records(relay)
         has_writes = bool(relay.write_results)
         internal_recovery_steers = [
             r for r in relay.failed_tool_results if r.get("internal_recovery_steer")
@@ -504,6 +505,10 @@ class _DispatchProxy(QObject):
         modified_files = continuation.get("modified_files") or [
             str(w["path"]) for w in relay.write_results if isinstance(w.get("path"), str) and w.get("path")
         ]
+        modified_files = [
+            path for path in modified_files
+            if not _is_validation_scratch_path(str(path))
+        ]
 
         spec_dict = req.to_dict()
         spec_dict["task_spec"] = task_spec.to_dict()
@@ -526,7 +531,12 @@ class _DispatchProxy(QObject):
             try:
                 from aura.git_ops import auto_commit
 
-                written_files = [w["path"] for w in relay.write_results if isinstance(w.get("path"), str) and w.get("path")]
+                written_files = [
+                    w["path"] for w in relay.write_results
+                    if isinstance(w.get("path"), str)
+                    and w.get("path")
+                    and not _is_validation_scratch_path(str(w.get("path")))
+                ]
                 if written_files:
                     def _do_commit(root, goal, files, summary):
                         auto_commit(root, goal, files, summary)
@@ -876,6 +886,66 @@ def _check_read_before_edit(
         p for p in edited_existing_files
         if p not in all_read and file_exists(p)
     ]
+
+
+
+def _normalize_worker_path(path: str) -> str:
+    normalized = str(path).replace("\\", "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    while "//" in normalized:
+        normalized = normalized.replace("//", "/")
+    return normalized
+
+
+def _is_validation_scratch_path(path: str) -> bool:
+    normalized = _normalize_worker_path(path)
+    if not (normalized.startswith(".aura/tmp/") and normalized.endswith(".py")):
+        return False
+    name = normalized.rsplit("/", 1)[-1]
+    return name.startswith(("dump", "_check", "check", "tmp"))
+
+
+def _validation_scratch_files(root: Path | None) -> set[Path]:
+    if root is None:
+        return set()
+
+    files = set(_root_check_files(root))
+    tmp_dir = root / ".aura" / "tmp"
+    if tmp_dir.is_dir():
+        for pattern in ("dump*.py", "_check*.py", "check*.py", "tmp*.py"):
+            files.update(path for path in tmp_dir.glob(pattern) if path.is_file())
+    return files
+
+
+def _cleanup_new_validation_scratch_files(root: Path, before: set[Path]) -> list[str]:
+    cleaned: list[str] = []
+    for path in _validation_scratch_files(root):
+        if path in before:
+            continue
+        try:
+            rel = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        cleaned.append(rel)
+    return sorted(cleaned)
+
+
+def _filter_scratch_write_records(relay: Any) -> None:
+    def keep(path: object) -> bool:
+        return not _is_validation_scratch_path(str(path or ""))
+
+    relay.write_results = [
+        item for item in relay.write_results
+        if keep(item.get("path") if isinstance(item, dict) else "")
+    ]
+    relay.touched_files = {path for path in relay.touched_files if keep(path)}
+    relay.wrote_new_files = [path for path in relay.wrote_new_files if keep(path)]
+    relay.edited_existing_files = [path for path in relay.edited_existing_files if keep(path)]
 
 
 def _root_check_files(root: Path | None) -> set[Path]:
