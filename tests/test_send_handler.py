@@ -166,6 +166,42 @@ class TestUndoIntercept:
         chat.begin_assistant.assert_not_called()
         bridge.send.assert_not_called()
 
+    def test_restore_snapshot_phrase_stays_separate_from_undo(
+        self, handler: SendHandler, chat: Mock, bridge: Mock
+    ) -> None:
+        text = "restore the latest snapshot"
+        with patch("aura.gui.send_handler.undo_last_commit") as mock_undo:
+            handler.handle_send(SendPayload(text=text, attachments=[]), "model", "off")
+
+        mock_undo.assert_not_called()
+        chat.add_user.assert_called_once_with(text)
+        chat.add_error.assert_called_once_with(
+            "Restore snapshot",
+            "Choose a specific snapshot to restore.",
+        )
+        chat.begin_assistant.assert_not_called()
+        bridge.send.assert_not_called()
+
+    def test_builtin_action_runs_before_busy_bridge_queue(
+        self, handler: SendHandler, chat: Mock, bridge: Mock, input_panel: Mock
+    ) -> None:
+        bridge.is_running.return_value = True
+        with patch(
+            "aura.gui.send_handler.working_tree_status",
+            return_value=(True, "clean", ""),
+        ) as mock_status:
+            handler.handle_send(
+                SendPayload(text="show git status", attachments=[]),
+                "model",
+                "off",
+            )
+
+        mock_status.assert_called_once_with(Path("/test/workspace"))
+        chat.add_user.assert_called_once_with("show git status")
+        chat.add_info.assert_called_once_with("Git status", "clean")
+        input_panel.set_queued_messages.assert_not_called()
+        bridge.send.assert_not_called()
+
     def test_git_status_uses_builtin_path(
         self, handler: SendHandler, chat: Mock, bridge: Mock
     ) -> None:

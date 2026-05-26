@@ -193,7 +193,7 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Terminal is for validation/build/test commands only. Use `read_file`, `read_files`, `grep_search`, and `read_file_outline` for source inspection. If structured reads fail, report a blocker.
 - Worker terminal is validation-only. Use structured read tools for source inspection. Do not use Python/shell commands to read source files. If structured reads fail, report a blocker.
 - Do not create root-level validation scratch files such as _check_acceptance.py, _check_ac7.py, or _check*.py.
-- Shell validation runs in the host shell. Prefer cross-platform build/test commands such as `python -m py_compile`, `pytest`, `ruff`, or `mypy`. Use `grep_search` for source search.
+- Shell validation runs in the host shell. Prefer cross-platform build/test commands such as `python -m py_compile`, `pytest`, `ruff`, or `mypy`. Do not use bare `grep`; use `rg` or `grep_search`, and use a check that exits 0 when the pattern is absent for negative checks.
 - For "old pattern must be absent" checks, use `grep_search` or an explicit validation command from the handoff.
 - Aura may auto-run focused py_compile as a completion safety net if you stop without running it.
 - Scratch validation should use existing focused tests or explicit validation commands. Temporary validation .py files must NOT be checked in as project artifacts.
@@ -226,10 +226,7 @@ Dispatch protocol:
 - The Worker owns exact edits, TODOs, validation, implementation quality, style, and detailed code decisions.
 - If the planner context-call budget is reached, dispatch with known files or ask one concise clarifying question.
 - Re-dispatch only when a Worker reports a blocker, failed validation, skipped required validation, or returns a continuation report.
-- After a Worker result or built-in action result is complete, produce at most one concise final response.
-- Do not repeat "all set", "staged and ready", "let me know", or commit suggestions.
-- If no follow-up is required, summarize once and stop.
-- Do not continue with extra reassurance.
+- After Worker or built-in action completes, emit one concise final response and stop.
 
 Default dispatch style:
 - `goal`: one sentence summary of the task.

@@ -1,0 +1,297 @@
+"""Deterministic active Worker workflow state."""
+
+from __future__ import annotations
+
+import enum
+import json
+from dataclasses import dataclass, field, replace
+from typing import Any
+
+from aura.conversation.dispatch import WorkerOutcomeStatus, normalize_outcome_status
+from aura.conversation.tool_limits import WRITE_TOOLS
+
+
+class WorkflowStatus(str, enum.Enum):
+    intent_captured = "intent_captured"
+    plan_ready = "plan_ready"
+    dispatched = "dispatched"
+    editing = "editing"
+    validating = "validating"
+    blocked = "blocked"
+    failed_retryable = "failed_retryable"
+    failed_nonrecoverable = "failed_nonrecoverable"
+    done = "done"
+    cancelled = "cancelled"
+
+
+class ValidationStatus(str, enum.Enum):
+    not_run = "not_run"
+    running = "running"
+    passed = "passed"
+    failed = "failed"
+    mixed = "mixed"
+
+
+@dataclass(frozen=True)
+class ValidationCommandRun:
+    command: str
+    ok: bool | None = None
+    exit_code: int | None = None
+
+
+@dataclass(frozen=True)
+class WorkflowState:
+    tool_call_id: str
+    task_title: str
+    user_intent_summary: str
+    status: WorkflowStatus
+    pending_user_action: str = ""
+    changed_files: tuple[str, ...] = ()
+    validation_commands_run: tuple[ValidationCommandRun, ...] = ()
+    validation_status: ValidationStatus = ValidationStatus.not_run
+    blocker_reason: str = ""
+    failure_reason: str = ""
+    follow_up_required: bool = False
+
+    @classmethod
+    def intent_captured(
+        cls,
+        tool_call_id: str,
+        goal: str,
+        *,
+        summary: str = "",
+    ) -> "WorkflowState":
+        return cls(
+            tool_call_id=tool_call_id,
+            task_title=_compact_title(goal or summary or "Worker task"),
+            user_intent_summary=(summary or goal).strip(),
+            status=WorkflowStatus.intent_captured,
+        )
+
+    def with_status(
+        self,
+        status: WorkflowStatus,
+        *,
+        pending_user_action: str | None = None,
+        blocker_reason: str | None = None,
+        failure_reason: str | None = None,
+        follow_up_required: bool | None = None,
+    ) -> "WorkflowState":
+        return replace(
+            self,
+            status=status,
+            pending_user_action=self.pending_user_action if pending_user_action is None else pending_user_action,
+            blocker_reason=self.blocker_reason if blocker_reason is None else blocker_reason,
+            failure_reason=self.failure_reason if failure_reason is None else failure_reason,
+            follow_up_required=self.follow_up_required if follow_up_required is None else follow_up_required,
+        )
+
+    def with_changed_file(self, path: str) -> "WorkflowState":
+        normalized = _normalize_path(path)
+        if not normalized or normalized in self.changed_files:
+            return self
+        return replace(self, changed_files=(*self.changed_files, normalized))
+
+    def with_changed_files(self, paths: list[str] | tuple[str, ...]) -> "WorkflowState":
+        state = self
+        for path in paths:
+            state = state.with_changed_file(path)
+        return state
+
+    def with_validation_run(
+        self,
+        command: str,
+        *,
+        ok: bool | None = None,
+        exit_code: int | None = None,
+    ) -> "WorkflowState":
+        command = command.strip()
+        if not command:
+            return self
+        runs = list(self.validation_commands_run)
+        runs.append(ValidationCommandRun(command=command, ok=ok, exit_code=exit_code))
+        return replace(
+            self,
+            validation_commands_run=tuple(runs),
+            validation_status=_validation_status(tuple(runs)),
+        )
+
+    def absorb_worker_tool_result(
+        self,
+        name: str,
+        ok: bool,
+        result: str,
+        extras: dict[str, Any] | None = None,
+    ) -> "WorkflowState":
+        parsed = _parse_json_object(result)
+        state = self
+
+        if name in WRITE_TOOLS:
+            path = _first_string(parsed, "path", "rel_path") or _first_string(extras or {}, "rel_path")
+            if ok and path:
+                state = state.with_changed_file(path).with_status(
+                    WorkflowStatus.editing,
+                    pending_user_action="",
+                )
+            elif not ok:
+                reason = _failure_text(parsed, fallback=result)
+                state = state.with_status(
+                    WorkflowStatus.blocked,
+                    blocker_reason=reason,
+                    follow_up_required=True,
+                )
+
+        if name == "run_terminal_command" and isinstance(parsed, dict):
+            command = str(parsed.get("command") or "")
+            if command:
+                state = state.with_validation_run(
+                    command,
+                    ok=bool(parsed.get("ok")) if "ok" in parsed else ok,
+                    exit_code=_int_or_none(parsed.get("exit_code")),
+                )
+                if state.validation_status in {ValidationStatus.failed, ValidationStatus.mixed}:
+                    state = state.with_status(
+                        WorkflowStatus.blocked,
+                        blocker_reason=f"Validation failed: {command}",
+                        follow_up_required=True,
+                    )
+                else:
+                    state = state.with_status(WorkflowStatus.validating)
+
+        return state
+
+    def finish(
+        self,
+        *,
+        ok: bool,
+        summary: str,
+        needs_followup: bool,
+        status: str | None,
+        modified_files: list[str] | None = None,
+        validation: str | None = None,
+        extras: dict[str, Any] | None = None,
+    ) -> "WorkflowState":
+        state = self.with_changed_files(modified_files or [])
+        if validation and not state.validation_commands_run:
+            state = state.with_validation_run(validation, ok=ok)
+
+        extra_validation = extras.get("validation_results") if isinstance(extras, dict) else None
+        if isinstance(extra_validation, list):
+            for item in extra_validation:
+                if isinstance(item, dict):
+                    state = state.with_validation_run(
+                        str(item.get("command") or ""),
+                        ok=bool(item.get("ok")) if "ok" in item else None,
+                        exit_code=_int_or_none(item.get("exit_code")),
+                    )
+
+        outcome = normalize_outcome_status(status)
+        failure_reason = _first_error(summary, extras)
+        if outcome == WorkerOutcomeStatus.cancelled.value:
+            final_status = WorkflowStatus.cancelled
+        elif ok and not needs_followup:
+            final_status = WorkflowStatus.done
+        elif outcome in {
+            WorkerOutcomeStatus.harness_error.value,
+            WorkerOutcomeStatus.craft_rejected.value,
+            WorkerOutcomeStatus.approval_rejected.value,
+        }:
+            final_status = WorkflowStatus.failed_nonrecoverable
+        else:
+            final_status = WorkflowStatus.failed_retryable
+
+        return replace(
+            state,
+            status=final_status,
+            pending_user_action=_pending_action(final_status, needs_followup),
+            blocker_reason="" if final_status in {WorkflowStatus.done, WorkflowStatus.cancelled} else failure_reason,
+            failure_reason="" if final_status == WorkflowStatus.done else failure_reason,
+            follow_up_required=needs_followup or final_status == WorkflowStatus.failed_retryable,
+            validation_status=state.validation_status,
+        )
+
+
+def _compact_title(text: str, limit: int = 90) -> str:
+    title = " ".join(text.strip().split())
+    if len(title) <= limit:
+        return title
+    return title[: limit - 1].rstrip() + "..."
+
+
+def _normalize_path(path: str) -> str:
+    normalized = str(path).replace("\\", "/").strip()
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def _parse_json_object(text: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _first_string(data: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _validation_status(runs: tuple[ValidationCommandRun, ...]) -> ValidationStatus:
+    completed = [run.ok for run in runs if run.ok is not None]
+    if not runs:
+        return ValidationStatus.not_run
+    if not completed:
+        return ValidationStatus.running
+    if all(completed):
+        return ValidationStatus.passed
+    if any(completed):
+        return ValidationStatus.mixed
+    return ValidationStatus.failed
+
+
+def _failure_text(parsed: dict[str, Any], *, fallback: str) -> str:
+    return str(
+        parsed.get("error")
+        or parsed.get("failure_class")
+        or parsed.get("result_preview")
+        or fallback
+    )[:500]
+
+
+def _first_error(summary: str, extras: dict[str, Any] | None) -> str:
+    if isinstance(extras, dict):
+        errors = extras.get("errors")
+        if isinstance(errors, list) and errors:
+            return str(errors[0])
+    first = summary.strip().splitlines()[0] if summary.strip() else ""
+    return first[:500]
+
+
+def _pending_action(status: WorkflowStatus, needs_followup: bool) -> str:
+    if status == WorkflowStatus.failed_retryable:
+        return "Review the blocker, then dispatch a follow-up or revise the plan."
+    if status == WorkflowStatus.failed_nonrecoverable:
+        return "Review the failure before retrying."
+    if needs_followup:
+        return "Review the remaining work and dispatch a follow-up."
+    return ""
+
+
+__all__ = [
+    "ValidationCommandRun",
+    "ValidationStatus",
+    "WorkflowState",
+    "WorkflowStatus",
+]

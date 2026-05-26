@@ -104,6 +104,8 @@ TASK_COMPLETION_TOOL_NAMES = {
     "git_log_file",
 }
 
+ACTION_COMPLETION_TOOL_NAMES = TASK_COMPLETION_TOOL_NAMES | WRITE_TOOLS
+
 WORKER_EDIT_RECOVERY_INSTRUCTION = (
     "Previous edit failed recoverably. Re-read the file, then use apply_edit_transaction "
     "for existing-file code changes or write_file only for a full replacement. "
@@ -647,8 +649,7 @@ class ConversationManager:
                     ),
                     "completed_tool_result_for_final": (
                         mode in {"planner", "single"}
-                        and exec_result.ok
-                        and name in TASK_COMPLETION_TOOL_NAMES
+                        and self._tool_result_completes_action(name, exec_result.ok)
                     ),
                 }
 
@@ -773,6 +774,10 @@ class ConversationManager:
     def _terminal_result_completed(info: dict[str, Any] | None) -> bool:
         payload = info.get("_terminal_payload") if isinstance(info, dict) else None
         return isinstance(payload, dict) and payload.get("ok") is True
+
+    @staticmethod
+    def _tool_result_completes_action(name: str, ok: bool) -> bool:
+        return ok and name in ACTION_COMPLETION_TOOL_NAMES
 
     @staticmethod
     def _completion_phrase_hits(text: str) -> set[str]:
@@ -1060,6 +1065,23 @@ class ConversationManager:
         if name == "apply_edit_transaction" and path:
             shape = self._edit_shape_signature(name, args)
             if shape in edit_failed_shapes:
+                if f"ambiguous-replace-text:{shape}" in edit_failed_shapes:
+                    payload = self._recovery_payload(
+                        path=path,
+                        failure_class="edit_transaction_ambiguous_symbol",
+                        error=(
+                            "Repeated ambiguous replace_text_once transaction. "
+                            "Do not retry the same exact text shape."
+                        ),
+                        suggested_next_tool="apply_edit_transaction",
+                        suggested_next_action=(
+                            "Use a structured symbol operation, or retry "
+                            "replace_text_once with occurrence or allow_multiple."
+                        ),
+                        recoverable=False,
+                    )
+                    self._record_recovery_block(payload, shape, recovery_block_counts)
+                    return self._blocked_tool_result(tool_call_id, name, payload)
                 payload = self._recovery_payload(
                     path=path,
                     failure_class="edit_mechanics_blocked",
@@ -1191,11 +1213,25 @@ class ConversationManager:
             return content
 
         failure_class = str(parsed.get("failure_class", ""))
+        shape = self._edit_shape_signature(name, args)
         if path and failure_class in EDIT_TRANSACTION_FAILURE_CLASSES:
             parsed["recoverable"] = False
             parsed.pop("suggested_tool", None)
             parsed.pop("suggested_next_tool", None)
-            parsed["suggested_next_action"] = "Transaction could not be applied safely. Re-read the file and report this typed blocker if the operation is still not applicable."
+            if (
+                failure_class == "edit_transaction_ambiguous_symbol"
+                and self._has_replace_text_once_operation(args)
+            ):
+                edit_failed_shapes.add(f"ambiguous-replace-text:{shape}")
+                parsed["suggested_next_action"] = (
+                    "Use a structured symbol operation, or provide occurrence "
+                    "or allow_multiple for replace_text_once."
+                )
+            else:
+                parsed["suggested_next_action"] = (
+                    "Transaction could not be applied safely. Re-read the file "
+                    "and report this typed blocker if the operation is still not applicable."
+                )
             content = json.dumps(parsed, ensure_ascii=False)
         elif path and failure_class in EDIT_MECHANICS_FAILURE_CLASSES:
             edit_fallback_required[path] = parsed
@@ -1482,6 +1518,17 @@ class ConversationManager:
         else:
             marker = json.dumps(args, sort_keys=True, ensure_ascii=False)
         return json.dumps({"tool": name, "path": path, "shape": marker}, sort_keys=True)
+
+    @staticmethod
+    def _has_replace_text_once_operation(args: dict[str, Any]) -> bool:
+        operations = args.get("operations")
+        if not isinstance(operations, list):
+            return False
+        return any(
+            isinstance(op, dict)
+            and str(op.get("op") or op.get("type") or "") == "replace_text_once"
+            for op in operations
+        )
 
     @staticmethod
     def _default_edit_failure_class(name: str) -> str:

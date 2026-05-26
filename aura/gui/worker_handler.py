@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal
 
+from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
+
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
 
@@ -52,6 +54,8 @@ class WorkerEventHandler(QObject):
         self._settings = settings
         self._spec_host = spec_host
         self._session_usage: dict[str, dict[str, int]] = {}
+        self._active_workflow: WorkflowState | None = None
+        self._wired_spec_cards: set[str] = set()
 
     # ---- public property -------------------------------------------------------
 
@@ -59,6 +63,11 @@ class WorkerEventHandler(QObject):
     def session_usage(self) -> dict[str, dict[str, int]]:
         """Read-only access to the per-model usage accumulator."""
         return self._session_usage
+
+    @property
+    def active_workflow(self) -> WorkflowState | None:
+        """Authoritative state for the currently active Worker task."""
+        return self._active_workflow
 
     # ---- public methods --------------------------------------------------------
 
@@ -109,6 +118,16 @@ class WorkerEventHandler(QObject):
     ) -> None:
         """Always show the SpecCard; auto-dispatch or wait for card interaction."""
         file_list = list(files)
+        self._set_active_workflow(
+            WorkflowState.intent_captured(
+                tool_call_id,
+                goal,
+                summary=summary,
+            ).with_status(
+                WorkflowStatus.plan_ready,
+                pending_user_action="Dispatch, edit, or cancel the plan.",
+            )
+        )
         try:
             if hasattr(self._chat, "prepare_spec_card"):
                 self._chat.prepare_spec_card(tool_call_id)
@@ -136,13 +155,23 @@ class WorkerEventHandler(QObject):
             else:
                 self._bridge.user_cancelled_dispatch(tool_call_id)
             return
-        card.dispatch_clicked.connect(self._on_dispatch_clicked)
-        card.edit_clicked.connect(self._on_edit_spec_clicked)
-        card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)
-        card.view_worker_clicked.connect(self._on_view_worker_clicked)
+        if hasattr(card, "update_workflow_state") and self._active_workflow is not None:
+            card.update_workflow_state(self._active_workflow)
+        if tool_call_id not in self._wired_spec_cards:
+            card.dispatch_clicked.connect(self._on_dispatch_clicked)
+            card.edit_clicked.connect(self._on_edit_spec_clicked)
+            card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)
+            card.view_worker_clicked.connect(self._on_view_worker_clicked)
+            self._wired_spec_cards.add(tool_call_id)
 
         if self._bridge.auto_dispatch:
-            card.mark_dispatched()
+            if hasattr(card, "mark_dispatched"):
+                card.mark_dispatched()
+            self._transition_active_workflow(
+                tool_call_id,
+                WorkflowStatus.dispatched,
+                pending_user_action="",
+            )
             self._bridge.user_dispatched(tool_call_id, goal, file_list, spec, acceptance, summary)
             return
 
@@ -155,6 +184,18 @@ class WorkerEventHandler(QObject):
         accepted = self._bridge.user_dispatched(tool_call_id, goal, files, spec, acceptance, summary)
         if not accepted:
             card.mark_stale()
+            self._transition_active_workflow(
+                tool_call_id,
+                WorkflowStatus.blocked,
+                blocker_reason="Dispatch is no longer pending.",
+                follow_up_required=True,
+            )
+        else:
+            self._transition_active_workflow(
+                tool_call_id,
+                WorkflowStatus.dispatched,
+                pending_user_action="",
+            )
 
     def _on_edit_spec_clicked(self, tool_call_id: str) -> None:
         """Open the SpecEditDialog pre-populated with the spec card's values."""
@@ -175,6 +216,19 @@ class WorkerEventHandler(QObject):
             card = self._get_spec_card(tool_call_id)
             if card:
                 card.mark_stale()
+            self._transition_active_workflow(
+                tool_call_id,
+                WorkflowStatus.blocked,
+                blocker_reason="Dispatch is no longer pending.",
+                follow_up_required=True,
+            )
+        else:
+            self._transition_active_workflow(
+                tool_call_id,
+                WorkflowStatus.cancelled,
+                pending_user_action="",
+            )
+            self._clear_active_spec_card(tool_call_id)
 
     # ---- worker lifecycle slots ------------------------------------------------
 
@@ -188,6 +242,11 @@ class WorkerEventHandler(QObject):
         card = self._get_spec_card(tool_call_id)
         if card:
             card.mark_worker_running()
+        self._transition_active_workflow(
+            tool_call_id,
+            WorkflowStatus.dispatched,
+            pending_user_action="",
+        )
 
     def _on_worker_finished(
         self,
@@ -209,6 +268,16 @@ class WorkerEventHandler(QObject):
         card = self._get_spec_card(tool_call_id)
         if card:
             card.worker_finished(ok, summary, status=status)
+        if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
+            self._set_active_workflow(
+                self._active_workflow.finish(
+                    ok=ok,
+                    summary=summary,
+                    needs_followup=bool(needs_followup),
+                    status=status,
+                )
+            )
+        self._clear_active_spec_card(tool_call_id)
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
         """Stop worker aura and forward cancel to playground/spec card."""
@@ -218,6 +287,12 @@ class WorkerEventHandler(QObject):
         card = self._get_spec_card(tool_call_id)
         if card:
             card.worker_cancelled()
+        self._transition_active_workflow(
+            tool_call_id,
+            WorkflowStatus.cancelled,
+            pending_user_action="",
+        )
+        self._clear_active_spec_card(tool_call_id)
 
     # ---- worker content slots --------------------------------------------------
 
@@ -236,6 +311,26 @@ class WorkerEventHandler(QObject):
     ) -> None:
         """Forward tool call start to playground."""
         self._playground.add_tool_call(worker_tool_id, name)
+        write_tools = {
+            "write_file",
+            "apply_edit_transaction",
+            "edit_file",
+            "edit_symbol",
+            "edit_line_range",
+            "patch_file",
+        }
+        if name in write_tools:
+            self._transition_active_workflow(
+                tool_call_id,
+                WorkflowStatus.editing,
+                pending_user_action="",
+            )
+        elif name == "run_terminal_command":
+            self._transition_active_workflow(
+                tool_call_id,
+                WorkflowStatus.validating,
+                pending_user_action="",
+            )
 
     def _on_worker_tool_args(
         self, tool_call_id: str, worker_tool_id: str, fragment: str
@@ -254,6 +349,10 @@ class WorkerEventHandler(QObject):
     ) -> None:
         """Forward tool result to playground."""
         self._playground.set_tool_result(worker_tool_id, ok, result)
+        if self._active_workflow is not None and self._active_workflow.tool_call_id == parent_tool_id:
+            self._set_active_workflow(
+                self._active_workflow.absorb_worker_tool_result(name, ok, result, extras)
+            )
 
     def _on_worker_diff_decided(
         self,
@@ -267,11 +366,21 @@ class WorkerEventHandler(QObject):
     ) -> None:
         """Forward diff decision to playground."""
         self._playground.show_code_diff(worker_tool_id, rel_path, old, new, decision)
+        if self._active_workflow is not None and self._active_workflow.tool_call_id == parent_tool_id:
+            self._set_active_workflow(self._active_workflow.with_changed_file(rel_path))
 
     def _on_worker_api_error(self, tool_call_id: str, status: int, message: str) -> None:
         """Forward API error to playground with a formatted title."""
         title = f"API Error {status}" if status > 0 else "Worker Error"
         self._playground.add_error(f"{title}: {message}")
+        self._transition_active_workflow(
+            tool_call_id,
+            WorkflowStatus.failed_nonrecoverable,
+            failure_reason=message,
+            follow_up_required=False,
+            pending_user_action="Review the failure before retrying.",
+        )
+        self._clear_active_spec_card(tool_call_id)
 
     def _on_view_worker_clicked(self, tool_call_id: str) -> None:
         """No-op placeholder for view-worker button."""
@@ -282,6 +391,41 @@ class WorkerEventHandler(QObject):
             if card is not None:
                 return card
         return self._chat.get_spec_card(tool_call_id)
+
+    def _set_active_workflow(self, state: WorkflowState) -> None:
+        self._active_workflow = state
+        card = self._get_spec_card(state.tool_call_id)
+        if card is not None and hasattr(card, "update_workflow_state"):
+            card.update_workflow_state(state)
+
+    def _transition_active_workflow(
+        self,
+        tool_call_id: str,
+        status: WorkflowStatus,
+        *,
+        pending_user_action: str | None = None,
+        blocker_reason: str | None = None,
+        failure_reason: str | None = None,
+        follow_up_required: bool | None = None,
+    ) -> None:
+        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            return
+        self._set_active_workflow(
+            self._active_workflow.with_status(
+                status,
+                pending_user_action=pending_user_action,
+                blocker_reason=blocker_reason,
+                failure_reason=failure_reason,
+                follow_up_required=follow_up_required,
+            )
+        )
+
+    def _clear_active_spec_card(self, tool_call_id: str) -> None:
+        """Remove the active plan card once the workflow reaches a terminal state."""
+        if self._spec_host is not None:
+            self._spec_host.remove_spec_card(tool_call_id)
+        elif hasattr(self._chat, "remove_spec_card"):
+            self._chat.remove_spec_card(tool_call_id)
 
     def _on_worker_usage(
         self,

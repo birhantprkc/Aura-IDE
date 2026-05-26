@@ -6,9 +6,10 @@ button appears to open the pop-out WorkerWindow.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from aura.conversation.workflow_state import ValidationStatus, WorkflowState, WorkflowStatus
 from aura.gui.cards._collapsible import _CollapsibleSection
 from aura.gui.cards._helpers import _MarkdownTextBlock
 from aura.gui.markdown_renderer import _render_markdown_with_code
@@ -115,6 +116,12 @@ class SpecCard(QFrame):
         self._view_worker_btn, self._status_label = self._build_status_section()
         outer.addWidget(self._view_worker_btn)
         outer.addWidget(self._status_label)
+        self._workflow_details_label = QLabel("", parent=self)
+        self._workflow_details_label.setWordWrap(True)
+        self._workflow_details_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._workflow_details_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        self._workflow_details_label.setVisible(False)
+        outer.addWidget(self._workflow_details_label)
 
         if not self._dispatched:
             self._status_label.setText("Plan ready — waiting for dispatch approval.")
@@ -536,6 +543,90 @@ class SpecCard(QFrame):
         self._worker_running = False
         self._status_label.setText("Cancelled")
         self._status_label.setStyleSheet(f"color: {DANGER}; font-size: 11px;")
+
+    def update_workflow_state(self, state: WorkflowState) -> None:
+        """Render the authoritative active Worker state on the plan card."""
+        label, color = self._workflow_status_label(state.status)
+        self._status_label.setText(label)
+        self._status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+        self._status_label.setVisible(True)
+
+        if state.status in {
+            WorkflowStatus.dispatched,
+            WorkflowStatus.editing,
+            WorkflowStatus.validating,
+            WorkflowStatus.blocked,
+        }:
+            self._buttons_row.setVisible(False)
+            self._view_worker_btn.setVisible(True)
+        elif state.status in {
+            WorkflowStatus.done,
+            WorkflowStatus.cancelled,
+            WorkflowStatus.failed_retryable,
+            WorkflowStatus.failed_nonrecoverable,
+        }:
+            self._buttons_row.setVisible(False)
+
+        self._workflow_details_label.setText(self._format_workflow_details(state))
+        self._workflow_details_label.setVisible(True)
+
+    @staticmethod
+    def _workflow_status_label(status: WorkflowStatus) -> tuple[str, str]:
+        mapping = {
+            WorkflowStatus.intent_captured: ("Intent captured", FG_DIM),
+            WorkflowStatus.plan_ready: ("Awaiting dispatch", FG_DIM),
+            WorkflowStatus.dispatched: ("Running", FG_DIM),
+            WorkflowStatus.editing: ("Editing", ACCENT),
+            WorkflowStatus.validating: ("Validating", WARN),
+            WorkflowStatus.blocked: ("Blocked", WARN),
+            WorkflowStatus.failed_retryable: ("Failed", WARN),
+            WorkflowStatus.failed_nonrecoverable: ("Failed", DANGER),
+            WorkflowStatus.done: ("Done", SUCCESS),
+            WorkflowStatus.cancelled: ("Cancelled", DANGER),
+        }
+        return mapping[status]
+
+    @staticmethod
+    def _format_workflow_details(state: WorkflowState) -> str:
+        lines = [
+            f"Task: {state.task_title}",
+            f"Validation: {SpecCard._validation_status_text(state.validation_status)}",
+        ]
+        if state.changed_files:
+            lines.append("Changed files: " + ", ".join(state.changed_files[:6]))
+        else:
+            lines.append("Changed files: none yet")
+        if state.validation_commands_run:
+            commands = []
+            for run in state.validation_commands_run[-3:]:
+                suffix = ""
+                if run.ok is not None:
+                    suffix = " passed" if run.ok else " failed"
+                if run.exit_code is not None:
+                    suffix += f" ({run.exit_code})"
+                commands.append(f"{run.command}{suffix}")
+            lines.append("Validation commands: " + " | ".join(commands))
+        if state.blocker_reason:
+            lines.append(f"Blocker: {state.blocker_reason}")
+        if state.failure_reason and state.failure_reason != state.blocker_reason:
+            lines.append(f"Failure: {state.failure_reason}")
+        if state.pending_user_action:
+            lines.append(f"Action needed: {state.pending_user_action}")
+        elif state.follow_up_required:
+            lines.append("Action needed: follow-up required")
+        else:
+            lines.append("Action needed: none")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _validation_status_text(status: ValidationStatus) -> str:
+        return {
+            ValidationStatus.not_run: "not run",
+            ValidationStatus.running: "running",
+            ValidationStatus.passed: "passed",
+            ValidationStatus.failed: "failed",
+            ValidationStatus.mixed: "mixed",
+        }[status]
 
     def set_dispatched_and_finished(self, ok: bool) -> None:
         """Force the card into a read-only finished state (for history replay)."""

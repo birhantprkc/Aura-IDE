@@ -25,6 +25,20 @@ def test_long_natural_language_undo_routes_to_built_in_undo() -> None:
     assert route.action == "undo"
 
 
+def test_undo_last_commit_keep_changes_routes_to_built_in_undo() -> None:
+    route = classify_user_request("undo last commit and keep changes")
+
+    assert route.lane == TaskLane.built_in_action
+    assert route.action == "undo"
+
+
+def test_undo_last_commit_keep_staged_routes_to_built_in_undo() -> None:
+    route = classify_user_request("undo the last commit, keep changes staged")
+
+    assert route.lane == TaskLane.built_in_action
+    assert route.action == "undo"
+
+
 def test_soft_reset_head_routes_to_built_in_undo() -> None:
     route = classify_user_request("soft reset HEAD~1")
 
@@ -53,6 +67,20 @@ def test_show_git_status_routes_to_built_in_status() -> None:
     assert route.action == "git_status"
 
 
+def test_current_git_status_routes_to_built_in_status() -> None:
+    route = classify_user_request("current git status")
+
+    assert route.lane == TaskLane.built_in_action
+    assert route.action == "git_status"
+
+
+def test_what_is_git_status_routes_to_built_in_status() -> None:
+    route = classify_user_request("what is git status")
+
+    assert route.lane == TaskLane.built_in_action
+    assert route.action == "git_status"
+
+
 def test_show_git_diff_routes_to_built_in_diff() -> None:
     route = classify_user_request("show git diff")
 
@@ -65,6 +93,13 @@ def test_show_git_log_routes_to_built_in_log() -> None:
 
     assert route.lane == TaskLane.built_in_action
     assert route.action == "git_log"
+
+
+def test_restore_snapshot_routes_separately_from_undo() -> None:
+    route = classify_user_request("restore the latest snapshot")
+
+    assert route.lane == TaskLane.built_in_action
+    assert route.action == "restore_snapshot"
 
 
 def test_fix_request_routes_to_implementation() -> None:

@@ -793,6 +793,40 @@ def test_normal_explanation_without_worker_completion_is_not_blocked(
     assert history.messages[-1]["content"] == "All set means the task has no remaining work."
 
 
+def test_successful_builtin_write_gets_one_final_message(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="single")
+    tc = _tool_call("write1", "write_file", {"path": "a.txt", "content": "done"})
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc])]),
+        iter([
+            ContentDelta(text="All set. Wrote the file."),
+            _make_done(content="All set. Wrote the file."),
+        ]),
+        iter([
+            ContentDelta(text="All set, committed and done. Let me know if you need anything else."),
+            _make_done(
+                content="All set, committed and done. Let me know if you need anything else."
+            ),
+        ]),
+    ]
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=MagicMock(),
+    )
+
+    assert mock_client.call_count == 2
+    assert history.messages[-1]["content"] == "All set. Wrote the file."
+    streamed_text = "".join(e.text for e in captured_events if isinstance(e, ContentDelta))
+    assert "committed and done" not in streamed_text
+
+
 def test_redispatch_counter_stops_runaway_followups(
     manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
 ):

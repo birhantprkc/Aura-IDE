@@ -50,6 +50,8 @@ def test_apply_edit_transaction_schema_advertises_symbol_aliases(tmp_workspace):
         "class_name",
         "name",
         "new_definition",
+        "occurrence",
+        "allow_multiple",
     ):
         assert name in operation_properties
 

@@ -12,6 +12,12 @@ from aura.conversation.dispatch import (
 )
 from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager
+from aura.conversation.workflow_state import (
+    ValidationCommandRun,
+    ValidationStatus,
+    WorkflowState,
+    WorkflowStatus,
+)
 
 __all__ = [
     "History",
@@ -24,4 +30,8 @@ __all__ = [
     "infer_outcome_status",
     "normalize_outcome_status",
     "normalize_worker_task",
+    "ValidationCommandRun",
+    "ValidationStatus",
+    "WorkflowState",
+    "WorkflowStatus",
 ]

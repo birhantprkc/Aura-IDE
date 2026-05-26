@@ -155,6 +155,121 @@ def test_replace_method_accepts_method_name_alias(tmp_path: Path):
     assert "return 'new'" in result["new_content"]
 
 
+def test_replace_method_resolves_unique_unqualified_method(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_text(
+        "class Overlay:\n"
+        "    def paint(self):\n"
+        "        return 'old'\n"
+        "\n"
+        "class Tray:\n"
+        "    def show(self):\n"
+        "        return 'tray'\n",
+        encoding="utf-8",
+    )
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_method",
+                "method_name": "paint",
+                "new_definition": "def paint(self):\n    return 'new'",
+            }
+        ],
+    )
+
+    assert proposal["ok"] is True
+    assert "return 'new'" in proposal["new_content"]
+
+
+def test_replace_method_accepts_fully_qualified_method_name(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_text(
+        "class Overlay:\n"
+        "    def paint(self):\n"
+        "        return 'overlay'\n"
+        "\n"
+        "class Tray:\n"
+        "    def paint(self):\n"
+        "        return 'tray'\n",
+        encoding="utf-8",
+    )
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_method",
+                "method_name": "Overlay.paint",
+                "new_definition": "def paint(self):\n    return 'new overlay'",
+            }
+        ],
+    )
+
+    assert proposal["ok"] is True
+    assert "return 'new overlay'" in proposal["new_content"]
+    assert "return 'tray'" in proposal["new_content"]
+
+
+def test_replace_method_missing_unqualified_method_returns_available_symbols(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_text(
+        "class Overlay:\n"
+        "    def paint(self):\n"
+        "        return 'overlay'\n",
+        encoding="utf-8",
+    )
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_method",
+                "method_name": "missing",
+                "new_definition": "def missing(self):\n    return 'new'",
+            }
+        ],
+    )
+
+    assert proposal["ok"] is False
+    assert proposal["failure_class"] == "edit_transaction_symbol_not_found"
+    assert proposal["available_symbols"]["methods"] == ["Overlay.paint"]
+
+
+def test_replace_method_ambiguous_unqualified_method_returns_candidates(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_text(
+        "class Overlay:\n"
+        "    def paint(self):\n"
+        "        return 'overlay'\n"
+        "\n"
+        "class Tray:\n"
+        "    def paint(self):\n"
+        "        return 'tray'\n",
+        encoding="utf-8",
+    )
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_method",
+                "method_name": "paint",
+                "new_definition": "def paint(self):\n    return 'new'",
+            }
+        ],
+    )
+
+    assert proposal["ok"] is False
+    assert proposal["failure_class"] == "edit_transaction_ambiguous_symbol"
+    assert proposal["candidates"] == ["Overlay.paint", "Tray.paint"]
+
+
 def test_replace_function_accepts_function_name_alias(tmp_workspace: Path):
     target = tmp_workspace / "sample.py"
     target.write_text("def alpha():\n    return 1\n", encoding="utf-8")
@@ -222,6 +337,122 @@ def test_insert_after_method_accepts_method_name_alias(tmp_workspace: Path):
     assert "def wave(self):" in proposal["new_content"]
 
 
+def test_insert_after_method_resolves_unique_unqualified_method(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_text(
+        "class Overlay:\n"
+        "    def paint(self):\n"
+        "        return 'old'\n",
+        encoding="utf-8",
+    )
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "insert_after_symbol",
+                "symbol_type": "method",
+                "method_name": "paint",
+                "content": "\n    def erase(self):\n        return 'erase'",
+            }
+        ],
+    )
+
+    assert proposal["ok"] is True
+    assert "def erase(self):" in proposal["new_content"]
+
+
+def test_insert_after_method_accepts_fully_qualified_method_name(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_text(
+        "class Overlay:\n"
+        "    def paint(self):\n"
+        "        return 'overlay'\n"
+        "\n"
+        "class Tray:\n"
+        "    def paint(self):\n"
+        "        return 'tray'\n",
+        encoding="utf-8",
+    )
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "insert_after_symbol",
+                "symbol_type": "method",
+                "method_name": "Tray.paint",
+                "content": "\n    def hide(self):\n        return 'hide'",
+            }
+        ],
+    )
+
+    assert proposal["ok"] is True
+    new_content = proposal["new_content"]
+    assert new_content.index("def hide") > new_content.index("return 'tray'")
+    assert new_content.index("def hide") > new_content.index("class Tray")
+
+
+def test_insert_after_method_missing_returns_available_symbols(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_text(
+        "class Overlay:\n"
+        "    def paint(self):\n"
+        "        return 'overlay'\n",
+        encoding="utf-8",
+    )
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "insert_after_symbol",
+                "symbol_type": "method",
+                "method_name": "missing",
+                "content": "\n    def hide(self):\n        return 'hide'",
+            }
+        ],
+    )
+
+    assert proposal["ok"] is False
+    assert proposal["failure_class"] == "edit_transaction_symbol_not_found"
+    assert proposal["available_symbols"]["methods"] == ["Overlay.paint"]
+
+
+def test_insert_after_method_ambiguous_returns_candidates(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_text(
+        "class Overlay:\n"
+        "    def paint(self):\n"
+        "        return 'overlay'\n"
+        "\n"
+        "class Tray:\n"
+        "    def paint(self):\n"
+        "        return 'tray'\n",
+        encoding="utf-8",
+    )
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "insert_after_symbol",
+                "symbol_type": "method",
+                "method_name": "paint",
+                "content": "\n    def hide(self):\n        return 'hide'",
+            }
+        ],
+    )
+
+    assert proposal["ok"] is False
+    assert proposal["failure_class"] == "edit_transaction_ambiguous_symbol"
+    assert proposal["candidates"] == ["Overlay.paint", "Tray.paint"]
+
+
 def test_missing_symbol_alias_failure_includes_operation_index(tmp_workspace: Path):
     target = tmp_workspace / "sample.py"
     target.write_text("def alpha():\n    return 1\n", encoding="utf-8")
@@ -235,6 +466,122 @@ def test_missing_symbol_alias_failure_includes_operation_index(tmp_workspace: Pa
     assert proposal["ok"] is False
     assert proposal["failure_class"] == "edit_transaction_invalid_operation"
     assert proposal["operation_index"] == 0
+
+
+def test_replace_text_once_ambiguous_suggests_occurrence_or_allow_multiple(tmp_workspace: Path):
+    target = tmp_workspace / "sample.txt"
+    target.write_text("value\nvalue\n", encoding="utf-8")
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [{"op": "replace_text_once", "old": "value", "new": "changed"}],
+    )
+
+    assert proposal["ok"] is False
+    assert proposal["failure_class"] == "edit_transaction_ambiguous_symbol"
+    assert proposal["occurrence_count"] == 2
+    assert "occurrence" in proposal["suggested_next_action"]
+    assert "allow_multiple" in proposal["suggested_next_action"]
+
+
+def test_replace_text_once_occurrence_replaces_one_based_match(tmp_workspace: Path):
+    target = tmp_workspace / "sample.txt"
+    target.write_text("value\nvalue\nvalue\n", encoding="utf-8")
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_text_once",
+                "old": "value",
+                "new": "changed",
+                "occurrence": 2,
+            }
+        ],
+    )
+
+    assert proposal["ok"] is True
+    assert proposal["new_content"].replace("\r\n", "\n") == "value\nchanged\nvalue\n"
+
+
+def test_replace_text_once_allow_multiple_replaces_all_matches(tmp_workspace: Path):
+    target = tmp_workspace / "sample.txt"
+    target.write_text("value\nvalue\n", encoding="utf-8")
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_text_once",
+                "old": "value",
+                "new": "changed",
+                "allow_multiple": True,
+            }
+        ],
+    )
+
+    assert proposal["ok"] is True
+    assert proposal["new_content"].replace("\r\n", "\n") == "changed\nchanged\n"
+
+
+def test_replace_text_once_occurrence_bounds_are_validated(tmp_workspace: Path):
+    target = tmp_workspace / "sample.txt"
+    target.write_text("value\nvalue\n", encoding="utf-8")
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_text_once",
+                "old": "value",
+                "new": "changed",
+                "occurrence": 3,
+            }
+        ],
+    )
+
+    assert proposal["ok"] is False
+    assert proposal["failure_class"] == "edit_transaction_invalid_operation"
+    assert proposal["occurrence_count"] == 2
+
+
+def test_replace_text_once_option_types_are_validated(tmp_workspace: Path):
+    target = tmp_workspace / "sample.txt"
+    target.write_text("value\nvalue\n", encoding="utf-8")
+
+    bad_occurrence = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_text_once",
+                "old": "value",
+                "new": "changed",
+                "occurrence": True,
+            }
+        ],
+    )
+    bad_allow_multiple = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_text_once",
+                "old": "value",
+                "new": "changed",
+                "allow_multiple": "yes",
+            }
+        ],
+    )
+
+    assert bad_occurrence["ok"] is False
+    assert bad_occurrence["failure_class"] == "edit_transaction_invalid_operation"
+    assert bad_allow_multiple["ok"] is False
+    assert bad_allow_multiple["failure_class"] == "edit_transaction_invalid_operation"
 
 
 def test_invalid_generated_python_does_not_write_and_returns_invalid_syntax(tmp_workspace: Path):

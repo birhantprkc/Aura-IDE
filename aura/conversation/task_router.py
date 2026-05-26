@@ -96,7 +96,7 @@ def _classify_built_in(normalized: str) -> str | None:
         or normalized == "show git log"
     ):
         return "git_log"
-    if normalized == "restore snapshot":
+    if re.search(r"\brestore\b.*\bsnapshot\b", normalized):
         return "restore_snapshot"
     return None
 

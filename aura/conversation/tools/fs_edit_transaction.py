@@ -91,6 +91,11 @@ def _find_symbol(
 ) -> tuple[int, int, dict[str, Any]]:
     tree = parse_python_ast(source, filename=filename)
     available = _available_symbols(tree)
+    if symbol_type == "method" and "." in symbol_name:
+        qualified_class, qualified_method = symbol_name.rsplit(".", 1)
+        if qualified_class and qualified_method:
+            class_name = qualified_class
+            symbol_name = qualified_method
     effective_type = "method" if class_name and symbol_type == "function" else symbol_type
     if effective_type not in _SYMBOL_NODE_TYPES:
         return -1, -1, {
@@ -101,11 +106,22 @@ def _find_symbol(
 
     if effective_type == "method":
         if not class_name:
-            return -1, -1, {
-                "failure_class": "edit_transaction_invalid_operation",
-                "error": "class_name is required for method operations",
-                "available_symbols": available,
-            }
+            method_matches = _find_unqualified_methods(tree, symbol_name)
+            if not method_matches:
+                return -1, -1, {
+                    "failure_class": "edit_transaction_symbol_not_found",
+                    "error": f"Method '{symbol_name}' not found",
+                    "available_symbols": available,
+                }
+            if len(method_matches) > 1:
+                return -1, -1, {
+                    "failure_class": "edit_transaction_ambiguous_symbol",
+                    "error": f"Method '{symbol_name}' is ambiguous",
+                    "available_symbols": available,
+                    "candidates": [candidate for candidate, _node in method_matches],
+                }
+            start, end = _node_range(method_matches[0][1])
+            return start, end, {"available_symbols": available}
         classes = [
             node for node in ast.iter_child_nodes(tree)
             if isinstance(node, ast.ClassDef) and node.name == class_name
@@ -146,6 +162,20 @@ def _find_symbol(
         }
     start, end = _node_range(matches[0])
     return start, end, {"available_symbols": available}
+
+
+def _find_unqualified_methods(
+    tree: ast.AST,
+    method_name: str,
+) -> list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]:
+    matches: list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]] = []
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, _SYMBOL_NODE_TYPES["method"]) and child.name == method_name:
+                matches.append((f"{node.name}.{child.name}", child))
+    return matches
 
 
 def _indent_like_existing(original_block: str, replacement: str) -> str:
@@ -238,6 +268,8 @@ def _replace_text_once(
     old: str,
     new: str,
     newline: str,
+    occurrence: int | None = None,
+    allow_multiple: bool = False,
 ) -> tuple[bool, str, dict[str, Any]]:
     if not isinstance(old, str) or not isinstance(new, str) or old == "":
         return False, proposed, {
@@ -252,13 +284,44 @@ def _replace_text_once(
             "failure_class": "edit_transaction_not_applicable",
             "error": "replace_text_once old text was not found",
         }
+    if occurrence is not None:
+        if occurrence < 1 or occurrence > count:
+            return False, proposed, {
+                "failure_class": "edit_transaction_invalid_operation",
+                "error": (
+                    "replace_text_once occurrence must be between 1 and "
+                    f"occurrence_count ({count})"
+                ),
+                "occurrence_count": count,
+            }
+        return True, _replace_nth_occurrence(proposed, old, new, occurrence), {}
     if count > 1:
+        if allow_multiple:
+            return True, proposed.replace(old, new), {}
         return False, proposed, {
             "failure_class": "edit_transaction_ambiguous_symbol",
-            "error": "replace_text_once old text is ambiguous",
+            "error": (
+                "replace_text_once old text is ambiguous; provide a 1-based "
+                "occurrence or set allow_multiple true to replace every occurrence"
+            ),
             "occurrence_count": count,
+            "suggested_next_action": (
+                "Provide occurrence to replace one match, set allow_multiple true "
+                "to replace all matches, or use a structured symbol operation."
+            ),
         }
     return True, proposed.replace(old, new, 1), {}
+
+
+def _replace_nth_occurrence(text: str, old: str, new: str, occurrence: int) -> str:
+    start = -1
+    search_from = 0
+    for _ in range(occurrence):
+        start = text.find(old, search_from)
+        if start < 0:
+            return text
+        search_from = start + len(old)
+    return text[:start] + new + text[start + len(old):]
 
 
 def propose_edit_transaction(
@@ -362,11 +425,39 @@ def propose_edit_transaction(
                 newline=newline,
             )
         elif kind == "replace_text_once":
+            occurrence = op.get("occurrence")
+            if occurrence is not None and (
+                not isinstance(occurrence, int) or isinstance(occurrence, bool)
+            ):
+                return _failure_payload(
+                    workspace_root,
+                    target,
+                    "replace_text_once occurrence must be an integer",
+                    "edit_transaction_invalid_operation",
+                    operation_index=index,
+                    old_content=original,
+                    new_content="",
+                    is_new_file=False,
+                )
+            allow_multiple = op.get("allow_multiple", False)
+            if not isinstance(allow_multiple, bool):
+                return _failure_payload(
+                    workspace_root,
+                    target,
+                    "replace_text_once allow_multiple must be a boolean",
+                    "edit_transaction_invalid_operation",
+                    operation_index=index,
+                    old_content=original,
+                    new_content="",
+                    is_new_file=False,
+                )
             ok, proposed, failure = _replace_text_once(
                 proposed,
                 old=op.get("old"),
                 new=op.get("new"),
                 newline=newline,
+                occurrence=occurrence,
+                allow_multiple=allow_multiple,
             )
         else:
             return _failure_payload(

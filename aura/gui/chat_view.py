@@ -633,6 +633,22 @@ class ChatView(QScrollArea):
             return self._spec_card_host.get_spec_card(tool_call_id)
         return None
 
+    def remove_spec_card(self, tool_call_id: str) -> None:
+        if self._spec_card_host is not None:
+            self._spec_card_host.remove_spec_card(tool_call_id)
+            return
+
+        card = self._spec_cards.pop(tool_call_id, None)
+        if card is None:
+            return
+        parent = card.parentWidget()
+        if parent is not None:
+            layout = parent.layout()
+            if layout is not None:
+                layout.removeWidget(card)
+        card.setParent(None)
+        card.deleteLater()
+
     def add_worker_summary(
         self, tool_call_id: str, goal: str, ok: bool, summary: str,
         needs_followup: bool = False, status: str | None = None,

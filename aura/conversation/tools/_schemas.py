@@ -779,7 +779,9 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                     "type": "string",
                                     "description": (
                                         "Alias for symbol_name when targeting a method, including "
-                                        "replace_method and insert_after_symbol with symbol_type 'method'."
+                                        "replace_method and insert_after_symbol with symbol_type 'method'. "
+                                        "May be fully qualified as Class.method; unqualified names resolve "
+                                        "when exactly one top-level class has that method."
                                     ),
                                 },
                                 "name": {
@@ -792,14 +794,18 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                 "class_name": {
                                     "type": "string",
                                     "description": (
-                                        "Containing class name for replace_method and method insert operations. "
+                                        "Optional containing class name for replace_method and method "
+                                        "insert operations. "
                                         "For replace_class, and for insert_after_symbol with symbol_type 'class', "
                                         "class_name may identify the target class when symbol_name is omitted."
                                     ),
                                 },
                                 "new_definition": {
                                     "type": "string",
-                                    "description": "Complete replacement definition for replace_function, replace_method, or replace_class.",
+                                    "description": (
+                                        "Complete replacement definition for replace_function, "
+                                        "replace_method, or replace_class."
+                                    ),
                                 },
                                 "content": {
                                     "type": "string",
@@ -812,6 +818,21 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                 "new": {
                                     "type": "string",
                                     "description": "Replacement text for replace_text_once.",
+                                },
+                                "occurrence": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "description": (
+                                        "1-based occurrence to replace when replace_text_once old "
+                                        "text appears multiple times."
+                                    ),
+                                },
+                                "allow_multiple": {
+                                    "type": "boolean",
+                                    "description": (
+                                        "For replace_text_once only: replace all matching old text "
+                                        "occurrences instead of requiring a unique match."
+                                    ),
                                 },
                             },
                             "required": ["op"],

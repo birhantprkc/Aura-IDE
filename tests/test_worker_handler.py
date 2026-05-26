@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from aura.conversation.workflow_state import WorkflowStatus
 from aura.gui.worker_handler import WorkerEventHandler
 
 
@@ -413,6 +414,7 @@ class TestActiveSpecHost:
 
         card.mark_worker_running.assert_called_once_with()
         card.worker_finished.assert_called_once_with(True, "done", status="completed")
+        spec_host.remove_spec_card.assert_called_once_with("tc1")
 
     def test_auto_dispatch_from_active_host_still_dispatches(
         self, bridge: Mock, chat: Mock, playground: Mock, settings: Mock, spec_host: Mock
@@ -437,6 +439,26 @@ class TestActiveSpecHost:
         bridge.user_dispatched.assert_called_once_with(
             "tc1", "goal", ["f.py"], "spec", "acc", "summary",
         )
+
+    def test_terminal_states_clear_active_host_card(
+        self, bridge: Mock, chat: Mock, playground: Mock, settings: Mock, spec_host: Mock
+    ) -> None:
+        card = _mock_spec_card()
+        spec_host.get_spec_card.return_value = card
+        handler = WorkerEventHandler(
+            bridge=bridge,
+            chat=chat,
+            playground=playground,
+            settings=settings,
+            spec_host=spec_host,
+            parent=None,
+        )
+
+        handler._on_worker_cancelled("tc1")
+        handler._on_worker_api_error("tc2", 500, "boom")
+
+        spec_host.remove_spec_card.assert_any_call("tc1")
+        spec_host.remove_spec_card.assert_any_call("tc2")
 
 
 # Signal wiring
@@ -574,6 +596,54 @@ class TestDispatchActions:
         handler._on_worker_todo_list_updated("tc1", tasks)
         playground.update_todo_list.assert_called_once_with(tasks)
 
+    def test_active_workflow_tracks_worker_progress(
+        self, bridge: Mock, chat: Mock, playground: Mock, settings: Mock,
+    ) -> None:
+        card = _mock_spec_card()
+        card.current_spec.return_value = (
+            "Fix auth",
+            ["aura/auth.py"],
+            "spec",
+            "python -m py_compile aura/auth.py",
+            "summary",
+        )
+        chat.add_spec_card.return_value = card
+        chat.get_spec_card.return_value = card
+        handler = WorkerEventHandler(
+            bridge=bridge,
+            chat=chat,
+            playground=playground,
+            settings=settings,
+            parent=None,
+        )
+
+        handler._on_worker_dispatch_requested(
+            "tc1",
+            "Fix auth",
+            ["aura/auth.py"],
+            "spec",
+            "python -m py_compile aura/auth.py",
+            "summary",
+        )
+        assert handler.active_workflow is not None
+        assert handler.active_workflow.status == WorkflowStatus.plan_ready
+
+        handler._on_dispatch_clicked("tc1")
+        assert handler.active_workflow.status == WorkflowStatus.dispatched
+
+        handler._on_worker_tool_result(
+            "tc1",
+            "wt1",
+            "write_file",
+            True,
+            '{"ok": true, "path": "aura/auth.py"}',
+            {},
+        )
+        assert handler.active_workflow.changed_files == ("aura/auth.py",)
+
+        handler._on_worker_finished("tc1", True, "done", needs_followup=False, status="completed")
+        assert handler.active_workflow.status == WorkflowStatus.done
+
     def test_current_spec_returns_five_values(self, qapp) -> None:
         """SpecCard.current_spec must return (goal, files, spec, acceptance, summary)."""
         from aura.gui.cards.spec_card import SpecCard
@@ -589,3 +659,17 @@ class TestDispatchActions:
         card.update_spec("new goal", ["g.py"], "new spec", "new acc", summary="new sum")
         _, _, _, _, summary = card.current_spec()
         assert summary == "new sum"
+
+    def test_spec_card_workflow_status_labels_match_active_states(self, qapp) -> None:
+        from aura.gui.cards.spec_card import SpecCard
+
+        assert (
+            SpecCard._workflow_status_label(WorkflowStatus.plan_ready)[0]
+            == "Awaiting dispatch"
+        )
+        assert SpecCard._workflow_status_label(WorkflowStatus.dispatched)[0] == "Running"
+        assert SpecCard._workflow_status_label(WorkflowStatus.editing)[0] == "Editing"
+        assert SpecCard._workflow_status_label(WorkflowStatus.validating)[0] == "Validating"
+        assert SpecCard._workflow_status_label(WorkflowStatus.blocked)[0] == "Blocked"
+        assert SpecCard._workflow_status_label(WorkflowStatus.failed_retryable)[0] == "Failed"
+        assert SpecCard._workflow_status_label(WorkflowStatus.done)[0] == "Done"

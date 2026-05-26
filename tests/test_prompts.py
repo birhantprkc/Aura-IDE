@@ -71,6 +71,11 @@ def test_snappy_planner_worker_rules():
     assert "continuation_report" in WORKER_SYSTEM_PROMPT
 
 
+def test_planner_has_concise_completion_rule():
+    rule = "After Worker or built-in action completes, emit one concise final response and stop."
+    assert rule in PLANNER_SYSTEM_PROMPT
+
+
 def test_planner_prompt_does_not_carry_worker_quality_blocks():
     """Planner should stay lightweight; Worker owns implementation quality."""
     assert "Code quality contract" not in PLANNER_SYSTEM_PROMPT
