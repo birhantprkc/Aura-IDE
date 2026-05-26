@@ -519,12 +519,13 @@ def test_dispatch_allows_specs_without_quality_sections(manager, mock_client, mo
             "goal": "Fix bug",
             "files": ["test.py"],
             "spec": "Change X to Y",
-            "acceptance": "Done",
+            "acceptance": "Verify X changes to Y.",
         })
         dispatch_cb = MagicMock(return_value=WorkerDispatchResult(ok=True, summary="done"))
 
         mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
+            iter([ContentDelta(text="Done."), _make_done(content="Done.")]),
         ]
 
         manager.send(
@@ -545,6 +546,7 @@ def test_dispatch_allows_specs_without_quality_sections(manager, mock_client, mo
         assert dispatch_results[0].ok is True
         parsed = json.loads(dispatch_results[0].result)
         assert parsed["ok"] is True
+        assert history.messages[-1]["content"] == "Done."
 
 def test_dispatch_cb_raises(manager, mock_client, mock_tools, on_event,
                                 captured_events, cancel_event, history):
@@ -650,6 +652,145 @@ def test_recoverable_worker_phase_boundary_allows_planner_to_continue(
     api_errors = [e for e in captured_events if isinstance(e, ApiError)]
     assert api_errors == []
     assert history.messages[-1]["content"] == "Continuing"
+
+
+def test_completed_worker_result_accepts_one_final_message(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc])]),
+        iter([
+            ContentDelta(text="All set. Validation passed."),
+            _make_done(content="All set. Validation passed."),
+        ]),
+    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
+        ok=True,
+        summary="done",
+        needs_followup=False,
+        status="completed",
+    ))
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    assert mock_client.call_count == 2
+    assert history.messages[-1]["content"] == "All set. Validation passed."
+    assert any(
+        isinstance(e, ContentDelta) and e.text == "All set. Validation passed."
+        for e in captured_events
+    )
+
+
+def test_completed_worker_result_stops_before_second_repetitive_final(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc])]),
+        iter([
+            ContentDelta(text="All set. Staged and ready."),
+            _make_done(content="All set. Staged and ready."),
+        ]),
+        iter([
+            ContentDelta(text="All set, staged and ready. Let me know if you need anything else."),
+            _make_done(
+                content="All set, staged and ready. Let me know if you need anything else."
+            ),
+        ]),
+    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
+        ok=True,
+        summary="done",
+        needs_followup=False,
+        status="completed",
+    ))
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    assert mock_client.call_count == 2
+    assert history.messages[-1]["content"] == "All set. Staged and ready."
+    assert not any(
+        isinstance(e, ContentDelta) and "Let me know" in e.text
+        for e in captured_events
+    )
+
+
+def test_repeated_completion_chatter_does_not_stream_indefinitely(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc])]),
+        iter([
+            ContentDelta(text="All set. Everything else is in good shape."),
+            _make_done(content="All set. Everything else is in good shape."),
+        ]),
+        iter([
+            ContentDelta(text="All set. No further action needed. Let me know."),
+            _make_done(content="All set. No further action needed. Let me know."),
+        ]),
+    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
+        ok=True,
+        summary="done",
+        needs_followup=False,
+        status="completed_with_caveats",
+    ))
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    assert mock_client.call_count == 2
+    streamed_text = "".join(e.text for e in captured_events if isinstance(e, ContentDelta))
+    assert "No further action needed" not in streamed_text
+
+
+def test_normal_explanation_without_worker_completion_is_not_blocked(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    mock_client.side_effect = [
+        iter([
+            ContentDelta(text="All set means the task has no remaining work."),
+            _make_done(content="All set means the task has no remaining work."),
+        ]),
+    ]
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=MagicMock(),
+    )
+
+    assert mock_client.call_count == 1
+    assert history.messages[-1]["content"] == "All set means the task has no remaining work."
 
 
 def test_redispatch_counter_stops_runaway_followups(
@@ -1700,11 +1841,12 @@ class TestToolLimitIntegration:
             "goal": "Fix B",
             "files": ["b.py"],
             "spec": "Change B",
-            "acceptance": "Done",
+            "acceptance": "Verify B changed.",
         })
         dispatch_cb = MagicMock(return_value=WorkerDispatchResult(ok=True, summary="done"))
         mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc1, tc2])]),
+            iter([ContentDelta(text="Done."), _make_done(content="Done.")]),
         ]
         manager.send(
             on_event=on_event,
@@ -1722,6 +1864,7 @@ class TestToolLimitIntegration:
         assert dispatch_results[1].ok is True
         tool_msgs = [m for m in history.messages if m["role"] == "tool"]
         assert len(tool_msgs) == 2
+        assert history.messages[-1]["content"] == "Done."
 
     def test_worker_limit_allows_many_reads(self, manager, mock_client, mock_tools,
                                             on_event, captured_events, cancel_event,

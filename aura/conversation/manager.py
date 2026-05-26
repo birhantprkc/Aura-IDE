@@ -44,6 +44,8 @@ from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
     WorkerDispatchResult,
+    WorkerOutcomeStatus,
+    infer_outcome_status,
 )
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
@@ -78,6 +80,28 @@ EDIT_TRANSACTION_FAILURE_CLASSES = {
     "edit_transaction_invalid_operation",
     "edit_transaction_invalid_syntax",
     "edit_transaction_not_applicable",
+}
+
+COMPLETION_PHRASE_MARKERS = (
+    "all set",
+    "staged and ready",
+    "ready for you",
+    "let me know",
+    "if you need anything else",
+    "committed and done",
+    "everything else is in good shape",
+    "when you want to commit",
+    "no further action needed",
+)
+
+TASK_COMPLETION_TOOL_NAMES = {
+    "run_terminal_command",
+    "run_diagnostic_command",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_show",
+    "git_log_file",
 }
 
 WORKER_EDIT_RECOVERY_INSTRUCTION = (
@@ -185,8 +209,18 @@ class ConversationManager:
         write_attempts_by_path: dict[str, int] = {}
         worker_recovery_nudge_sent = False
         patch_quality_unresolved: dict[str, Any] | None = None
+        task_completion_context = False
+        final_messages_after_completion = 0
+        last_completion_final_text = ""
 
         while True:
+            if (
+                mode in {"planner", "single"}
+                and task_completion_context
+                and final_messages_after_completion >= 1
+            ):
+                return
+
             rounds_used += 1
             if max_tool_rounds is not None and rounds_used > max_tool_rounds:
                 on_event(ApiError(status_code=None, message=f"Exceeded max tool rounds ({max_tool_rounds})."))
@@ -241,9 +275,27 @@ class ConversationManager:
                 # Should not happen in normal stream completion
                 return
 
+            tool_calls = full_message.get("tool_calls") or []
+            if (
+                not tool_calls
+                and mode in {"planner", "single"}
+                and task_completion_context
+            ):
+                content_text = self._assistant_message_text(full_message)
+                if final_messages_after_completion >= 1:
+                    if self._is_repetitive_completion_final(
+                        content_text,
+                        last_completion_final_text,
+                    ):
+                        return
+                    return
+                self._history.append_assistant(full_message)
+                final_messages_after_completion += 1
+                last_completion_final_text = content_text
+                return
+
             self._history.append_assistant(full_message)
 
-            tool_calls = full_message.get("tool_calls") or []
             if worker_needs_final_report:
                 for tc in tool_calls:
                     fn = tc["function"]
@@ -379,6 +431,7 @@ class ConversationManager:
                                 self._history.append_user_text(instruction)
                                 continue
                     return
+                return
 
             _terminal_dispatch = False
             _worker_phase_boundary_info: dict[str, Any] | None = None
@@ -472,7 +525,11 @@ class ConversationManager:
                                     "result": result,
                                     "blocker_reason": blocker_reason,
                                 }
-                    return {"id": tool_call_id, "skip": True}
+                    return {
+                        "id": tool_call_id,
+                        "skip": True,
+                        "completed_dispatch_for_final": self._is_completed_worker_result(result),
+                    }
 
                 if name == "run_research":
                     ok = self._tool_runner.handle_research(
@@ -505,7 +562,11 @@ class ConversationManager:
                         )
                     if self._is_recoverable_phase_boundary(loop_info):
                         _worker_phase_boundary_info = loop_info
-                    return {"id": tool_call_id, "skip": True}
+                    return {
+                        "id": tool_call_id,
+                        "skip": True,
+                        "completed_tool_result_for_final": self._terminal_result_completed(loop_info),
+                    }
 
                 if reject_all_for_turn and name in WRITE_TOOLS:
                     payload = json.dumps(
@@ -584,6 +645,11 @@ class ConversationManager:
                         and not parsed_after_recovery.get("patch_quality_unresolved")
                         else ""
                     ),
+                    "completed_tool_result_for_final": (
+                        mode in {"planner", "single"}
+                        and exec_result.ok
+                        and name in TASK_COMPLETION_TOOL_NAMES
+                    ),
                 }
 
             # Only parallelize read-only tools to avoid race conditions.
@@ -620,6 +686,8 @@ class ConversationManager:
             results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
 
             quality_instructions: list[str] = []
+            completed_dispatch_for_final = False
+            completed_tool_result_for_final = False
             for task in tasks:
                 if cancel_event.is_set():
                     self._cleanup_cancelled(on_event)
@@ -634,6 +702,10 @@ class ConversationManager:
                         res["result"], str(res.get("blocker_reason", "")), on_event
                     )
                     return
+                if res.get("completed_dispatch_for_final"):
+                    completed_dispatch_for_final = True
+                if res.get("completed_tool_result_for_final"):
+                    completed_tool_result_for_final = True
                 if res.get("skip"):
                     continue
 
@@ -663,10 +735,73 @@ class ConversationManager:
                 worker_needs_final_report = True
                 continue
 
-            # If any dispatch_to_worker or run_research completed, stop the loop.
-            # The Worker Completed card is the final user-facing result.
+            if completed_dispatch_for_final or completed_tool_result_for_final:
+                task_completion_context = True
+                continue
+
+            # If research completed, stop the loop.
+            # The Research Completed card is the final user-facing result.
             if _terminal_dispatch:
                 return
+
+    @staticmethod
+    def _assistant_message_text(message: dict[str, Any]) -> str:
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+            return "\n".join(parts)
+        return ""
+
+    @staticmethod
+    def _is_completed_worker_result(result: WorkerDispatchResult | None) -> bool:
+        if result is None or result.cancelled:
+            return False
+        if result.needs_followup or result.recoverable or result.phase_boundary:
+            return False
+        status = infer_outcome_status(result)
+        return status in {
+            WorkerOutcomeStatus.completed.value,
+            WorkerOutcomeStatus.completed_with_caveats.value,
+        }
+
+    @staticmethod
+    def _terminal_result_completed(info: dict[str, Any] | None) -> bool:
+        payload = info.get("_terminal_payload") if isinstance(info, dict) else None
+        return isinstance(payload, dict) and payload.get("ok") is True
+
+    @staticmethod
+    def _completion_phrase_hits(text: str) -> set[str]:
+        lowered = " ".join(str(text or "").lower().split())
+        return {
+            marker
+            for marker in COMPLETION_PHRASE_MARKERS
+            if marker in lowered
+        }
+
+    @classmethod
+    def _is_completion_style_message(cls, text: str) -> bool:
+        return bool(cls._completion_phrase_hits(text))
+
+    @classmethod
+    def _is_repetitive_completion_final(cls, current: str, previous: str) -> bool:
+        current_hits = cls._completion_phrase_hits(current)
+        previous_hits = cls._completion_phrase_hits(previous)
+        if current_hits and (current_hits & previous_hits):
+            return True
+        return cls._text_overlap_ratio(current, previous) >= 0.7
+
+    @staticmethod
+    def _text_overlap_ratio(left: str, right: str) -> float:
+        left_words = set(re.findall(r"[a-z0-9_]+", str(left).lower()))
+        right_words = set(re.findall(r"[a-z0-9_]+", str(right).lower()))
+        if not left_words or not right_words:
+            return 0.0
+        return len(left_words & right_words) / max(len(left_words), len(right_words))
 
     @staticmethod
     def _syntax_repair_paths(

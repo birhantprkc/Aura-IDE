@@ -196,8 +196,11 @@ class SendHandler(QObject):
 
     def _handle_built_in_action(self, action: str) -> None:
         """Run deterministic built-in actions without model or Worker dispatch."""
-        if action in {"undo", "restore_snapshot"}:
+        if action == "undo":
             self._handle_undo()
+            return
+        if action == "restore_snapshot":
+            self._handle_restore_snapshot()
             return
         if action == "git_status":
             self._handle_git_status()
@@ -210,6 +213,13 @@ class SendHandler(QObject):
             return
 
         self._chat.add_error("Built-in action", f"Unsupported action: {action}")
+
+    def _handle_restore_snapshot(self) -> None:
+        """Prompt users to choose an explicit snapshot instead of guessing."""
+        self._chat.add_error(
+            "Restore snapshot",
+            "Choose a specific snapshot to restore.",
+        )
 
     def _handle_undo(self) -> None:
         """Handle /undo command — restore to pre-worker snapshot or git reset."""

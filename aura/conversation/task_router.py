@@ -72,29 +72,29 @@ def _normalize(text: str) -> str:
 def _classify_built_in(normalized: str) -> str | None:
     if normalized == "/undo":
         return "undo"
+    if re.search(r"\bundo\b.*\b(?:last|most recent)\b.*\bcommit\b", normalized):
+        return "undo"
+    if "reset --soft" in normalized or "soft reset" in normalized:
+        return "undo"
+
     if normalized in {
-        "undo last commit",
-        "undo most recent commit",
-        "undo commit but keep changes",
-        "soft reset",
-        "reset --soft",
+        "git status",
+        "show git status",
+        "what is git status",
+        "current git status",
     }:
-        return "undo"
-    if re.fullmatch(
-        r"undo (?:the )?(?:last|most recent) commit(?: but keep changes)?",
-        normalized,
-    ):
-        return "undo"
-    if re.fullmatch(
-        r"undo (?:the )?(?:last|most recent) commit and keep changes",
-        normalized,
-    ):
-        return "undo"
-    if normalized == "git status":
         return "git_status"
-    if normalized == "git diff" or normalized.startswith("git diff "):
+    if (
+        normalized == "git diff"
+        or normalized.startswith("git diff ")
+        or normalized == "show git diff"
+    ):
         return "git_diff"
-    if normalized == "git log" or normalized.startswith("git log "):
+    if (
+        normalized == "git log"
+        or normalized.startswith("git log ")
+        or normalized == "show git log"
+    ):
         return "git_log"
     if normalized == "restore snapshot":
         return "restore_snapshot"

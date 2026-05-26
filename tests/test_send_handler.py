@@ -128,6 +128,44 @@ class TestUndoIntercept:
         chat.begin_assistant.assert_not_called()
         bridge.send.assert_not_called()
 
+    def test_long_natural_language_undo_does_not_call_bridge_send(
+        self, handler: SendHandler, chat: Mock, bridge: Mock
+    ) -> None:
+        """Long-form undo should stay on the built-in undo path."""
+        text = (
+            "undo the most recent commit but keep all working tree changes "
+            "uncommitted for review"
+        )
+        with patch(
+            "aura.gui.send_handler.undo_last_commit", return_value=(True, "undone")
+        ) as mock_u:
+            handler.handle_send(SendPayload(text=text, attachments=[]), "model", "off")
+
+        mock_u.assert_called_once_with(Path("/test/workspace"))
+        chat.add_user.assert_called_once_with(text)
+        chat.begin_assistant.assert_not_called()
+        bridge.send.assert_not_called()
+
+    def test_restore_snapshot_does_not_call_undo_last_commit(
+        self, handler: SendHandler, chat: Mock, bridge: Mock
+    ) -> None:
+        """Bare restore snapshot should not fall through to undo."""
+        with patch("aura.gui.send_handler.undo_last_commit") as mock_undo:
+            handler.handle_send(
+                SendPayload(text="restore snapshot", attachments=[]),
+                "model",
+                "off",
+            )
+
+        mock_undo.assert_not_called()
+        chat.add_user.assert_called_once_with("restore snapshot")
+        chat.add_error.assert_called_once_with(
+            "Restore snapshot",
+            "Choose a specific snapshot to restore.",
+        )
+        chat.begin_assistant.assert_not_called()
+        bridge.send.assert_not_called()
+
     def test_git_status_uses_builtin_path(
         self, handler: SendHandler, chat: Mock, bridge: Mock
     ) -> None:
