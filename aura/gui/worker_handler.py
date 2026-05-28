@@ -377,7 +377,11 @@ class WorkerEventHandler(QObject):
     ) -> None:
         """Forward diff decision to playground."""
         self._playground.show_code_diff(worker_tool_id, rel_path, old, new, decision)
-        if self._active_workflow is not None and self._active_workflow.tool_call_id == parent_tool_id:
+        if (
+            decision == "approve"
+            and self._active_workflow is not None
+            and self._active_workflow.tool_call_id == parent_tool_id
+        ):
             self._set_active_workflow(self._active_workflow.with_changed_file(rel_path))
 
     def _on_worker_api_error(self, tool_call_id: str, status: int, message: str) -> None:
