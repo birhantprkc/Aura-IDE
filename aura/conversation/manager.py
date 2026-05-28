@@ -572,7 +572,13 @@ class ConversationManager:
 
                 if reject_all_for_turn and name in WRITE_TOOLS:
                     payload = json.dumps(
-                        {"ok": False, "error": "User rejected all writes in this turn.", "failure_class": "approval_rejected"}
+                        {
+                            "ok": False,
+                            "error": "User rejected all writes in this turn.",
+                            "failure_class": "approval_rejected",
+                            "applied": False,
+                            "write_outcome": "not_applied_user_rejected",
+                        }
                     )
                     return {
                         "id": tool_call_id,
@@ -1215,6 +1221,8 @@ class ConversationManager:
         failure_class = str(parsed.get("failure_class", ""))
         shape = self._edit_shape_signature(name, args)
         if path and failure_class in EDIT_TRANSACTION_FAILURE_CLASSES:
+            parsed.setdefault("applied", False)
+            parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
             parsed["recoverable"] = False
             parsed.pop("suggested_tool", None)
             parsed.pop("suggested_next_tool", None)
@@ -1234,18 +1242,24 @@ class ConversationManager:
                 )
             content = json.dumps(parsed, ensure_ascii=False)
         elif path and failure_class in EDIT_MECHANICS_FAILURE_CLASSES:
+            parsed.setdefault("applied", False)
+            parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
             edit_fallback_required[path] = parsed
             parsed["recoverable"] = True
             parsed["suggested_next_tool"] = "apply_edit_transaction"
             parsed["suggested_next_action"] = "Do not retry this low-level edit shape. Re-read the file and submit one apply_edit_transaction for existing-file code changes."
             content = json.dumps(parsed, ensure_ascii=False)
         elif path and failure_class == "edit_mechanics_stale_line_range":
+            parsed.setdefault("applied", False)
+            parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
             line_range_reread_required[path] = parsed
             parsed["recoverable"] = True
             parsed["suggested_next_tool"] = "read_file"
             parsed["suggested_next_action"] = "Re-read the file before retrying an edit."
             content = json.dumps(parsed, ensure_ascii=False)
         elif path and failure_class in {"patch_hunk_not_found", "patch_hunk_ambiguous"}:
+            parsed.setdefault("applied", False)
+            parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
             edit_fallback_required[path] = parsed
             parsed["recoverable"] = True
             parsed["suggested_next_tool"] = "apply_edit_transaction"
@@ -1255,6 +1269,8 @@ class ConversationManager:
             )
             content = json.dumps(parsed, ensure_ascii=False)
         elif path and failure_class == "syntax_invalid":
+            parsed.setdefault("applied", False)
+            parsed.setdefault("write_outcome", "not_applied_craft_rejected")
             state = syntax_repair_required.setdefault(path, {"failed_repairs": 0})
             state["awaiting_validation"] = False
             if name in WRITE_TOOLS:
@@ -1515,9 +1531,45 @@ class ConversationManager:
             )
         elif name == "edit_line_range":
             marker = f"{args.get('start_line')}:{args.get('end_line')}"
+        elif name == "apply_edit_transaction":
+            marker = ConversationManager._transaction_shape_marker(args)
         else:
             marker = json.dumps(args, sort_keys=True, ensure_ascii=False)
         return json.dumps({"tool": name, "path": path, "shape": marker}, sort_keys=True)
+
+    @staticmethod
+    def _transaction_shape_marker(args: dict[str, Any]) -> list[dict[str, Any]]:
+        operations = args.get("operations")
+        if not isinstance(operations, list):
+            return []
+        markers: list[dict[str, Any]] = []
+        for op in operations:
+            if not isinstance(op, dict):
+                markers.append({"op": "invalid"})
+                continue
+            kind = str(op.get("op") or op.get("type") or "")
+            marker: dict[str, Any] = {
+                "op": kind,
+                "symbol_type": op.get("symbol_type"),
+                "symbol_name": op.get("symbol_name") or op.get("function_name") or op.get("method_name") or op.get("name"),
+                "class_name": op.get("class_name"),
+                "occurrence": op.get("occurrence"),
+                "allow_multiple": op.get("allow_multiple"),
+            }
+            for source_key, marker_key in (
+                ("old", "old_hash"),
+                ("new", "new_hash"),
+                ("text", "text_hash"),
+                ("new_definition", "new_definition_hash"),
+                ("content", "content_hash"),
+                ("start_marker", "start_marker_hash"),
+                ("end_marker", "end_marker_hash"),
+            ):
+                value = op.get(source_key)
+                if isinstance(value, str):
+                    marker[marker_key] = hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
+            markers.append({k: v for k, v in marker.items() if v not in (None, "")})
+        return markers
 
     @staticmethod
     def _has_replace_text_once_operation(args: dict[str, Any]) -> bool:

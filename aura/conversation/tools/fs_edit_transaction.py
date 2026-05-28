@@ -324,6 +324,119 @@ def _replace_nth_occurrence(text: str, old: str, new: str, occurrence: int) -> s
     return text[:start] + new + text[start + len(old):]
 
 
+def _clean_removed_newlines(text: str, newline: str) -> str:
+    doubled = newline * 3
+    while doubled in text:
+        text = text.replace(doubled, newline * 2)
+    return text
+
+
+def _remove_text_once(
+    proposed: str,
+    *,
+    text: str,
+    newline: str,
+    occurrence: int | None = None,
+) -> tuple[bool, str, dict[str, Any]]:
+    if not isinstance(text, str) or text == "":
+        return False, proposed, {
+            "failure_class": "edit_transaction_invalid_operation",
+            "error": "remove_text_once requires non-empty string text",
+        }
+    text = _normalize_newlines(text, newline)
+    count = proposed.count(text)
+    if count == 0:
+        return False, proposed, {
+            "failure_class": "edit_transaction_not_applicable",
+            "error": "remove_text_once text was not found",
+            "occurrence_count": 0,
+        }
+    if occurrence is not None:
+        if occurrence < 1 or occurrence > count:
+            return False, proposed, {
+                "failure_class": "edit_transaction_invalid_operation",
+                "error": (
+                    "remove_text_once occurrence must be between 1 and "
+                    f"occurrence_count ({count})"
+                ),
+                "occurrence_count": count,
+            }
+        return True, _clean_removed_newlines(
+            _replace_nth_occurrence(proposed, text, "", occurrence),
+            newline,
+        ), {"occurrence_count": count}
+    if count > 1:
+        return False, proposed, {
+            "failure_class": "edit_transaction_ambiguous_symbol",
+            "error": "remove_text_once text is ambiguous; provide a 1-based occurrence",
+            "occurrence_count": count,
+            "suggested_next_action": "Provide occurrence to remove exactly one match, or use remove_text_all with allow_multiple true.",
+        }
+    return True, _clean_removed_newlines(proposed.replace(text, "", 1), newline), {"occurrence_count": count}
+
+
+def _remove_text_all(
+    proposed: str,
+    *,
+    text: str,
+    allow_multiple: bool,
+    newline: str,
+) -> tuple[bool, str, dict[str, Any]]:
+    if not isinstance(text, str) or text == "":
+        return False, proposed, {
+            "failure_class": "edit_transaction_invalid_operation",
+            "error": "remove_text_all requires non-empty string text",
+        }
+    if allow_multiple is not True:
+        return False, proposed, {
+            "failure_class": "edit_transaction_invalid_operation",
+            "error": "remove_text_all requires allow_multiple=true",
+        }
+    text = _normalize_newlines(text, newline)
+    count = proposed.count(text)
+    if count == 0:
+        return False, proposed, {
+            "failure_class": "edit_transaction_not_applicable",
+            "error": "remove_text_all text was not found",
+            "occurrence_count": 0,
+        }
+    return True, _clean_removed_newlines(proposed.replace(text, ""), newline), {"occurrence_count": count}
+
+
+def _remove_between_markers(
+    proposed: str,
+    *,
+    start_marker: str,
+    end_marker: str,
+    newline: str,
+) -> tuple[bool, str, dict[str, Any]]:
+    if not start_marker or not end_marker:
+        return False, proposed, {
+            "failure_class": "edit_transaction_invalid_operation",
+            "error": "remove_between_markers requires start_marker and end_marker",
+        }
+    start_marker = _normalize_newlines(start_marker, newline)
+    end_marker = _normalize_newlines(end_marker, newline)
+    start_count = proposed.count(start_marker)
+    end_count = proposed.count(end_marker)
+    if start_count != 1 or end_count != 1:
+        return False, proposed, {
+            "failure_class": "edit_transaction_ambiguous_symbol",
+            "error": "remove_between_markers requires exact unique start and end markers",
+            "start_marker_count": start_count,
+            "end_marker_count": end_count,
+        }
+    start = proposed.find(start_marker)
+    end = proposed.find(end_marker, start + len(start_marker))
+    if end < 0:
+        return False, proposed, {
+            "failure_class": "edit_transaction_not_applicable",
+            "error": "end_marker does not occur after start_marker",
+        }
+    end += len(end_marker)
+    return True, _clean_removed_newlines(proposed[:start] + proposed[end:], newline), {}
+
+
 def propose_edit_transaction(
     workspace_root: Path,
     target: Path,
@@ -458,6 +571,66 @@ def propose_edit_transaction(
                 newline=newline,
                 occurrence=occurrence,
                 allow_multiple=allow_multiple,
+            )
+        elif kind == "remove_text_once":
+            occurrence = op.get("occurrence")
+            if occurrence is not None and (
+                not isinstance(occurrence, int) or isinstance(occurrence, bool)
+            ):
+                return _failure_payload(
+                    workspace_root,
+                    target,
+                    "remove_text_once occurrence must be an integer",
+                    "edit_transaction_invalid_operation",
+                    operation_index=index,
+                    old_content=original,
+                    new_content="",
+                    is_new_file=False,
+                )
+            ok, proposed, failure = _remove_text_once(
+                proposed,
+                text=op.get("text", op.get("old")),
+                newline=newline,
+                occurrence=occurrence,
+            )
+        elif kind == "remove_text_all":
+            allow_multiple = op.get("allow_multiple", False)
+            if not isinstance(allow_multiple, bool):
+                return _failure_payload(
+                    workspace_root,
+                    target,
+                    "remove_text_all allow_multiple must be a boolean",
+                    "edit_transaction_invalid_operation",
+                    operation_index=index,
+                    old_content=original,
+                    new_content="",
+                    is_new_file=False,
+                )
+            ok, proposed, failure = _remove_text_all(
+                proposed,
+                text=op.get("text", op.get("old")),
+                allow_multiple=allow_multiple,
+                newline=newline,
+            )
+        elif kind == "remove_between_markers":
+            start_marker = op.get("start_marker")
+            end_marker = op.get("end_marker")
+            if not isinstance(start_marker, str) or not isinstance(end_marker, str):
+                return _failure_payload(
+                    workspace_root,
+                    target,
+                    "remove_between_markers requires string start_marker and end_marker",
+                    "edit_transaction_invalid_operation",
+                    operation_index=index,
+                    old_content=original,
+                    new_content="",
+                    is_new_file=False,
+                )
+            ok, proposed, failure = _remove_between_markers(
+                proposed,
+                start_marker=start_marker,
+                end_marker=end_marker,
+                newline=newline,
             )
         else:
             return _failure_payload(

@@ -753,6 +753,9 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                         "replace_class",
                                         "insert_after_symbol",
                                         "replace_text_once",
+                                        "remove_text_once",
+                                        "remove_text_all",
+                                        "remove_between_markers",
                                     ],
                                 },
                                 "symbol_type": {
@@ -813,11 +816,23 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                 },
                                 "old": {
                                     "type": "string",
-                                    "description": "Exact text to replace once; escape hatch only.",
+                                    "description": "Exact text to replace or remove; escape hatch only.",
                                 },
                                 "new": {
                                     "type": "string",
                                     "description": "Replacement text for replace_text_once.",
+                                },
+                                "text": {
+                                    "type": "string",
+                                    "description": "Exact text block to remove for remove_text_once or remove_text_all.",
+                                },
+                                "start_marker": {
+                                    "type": "string",
+                                    "description": "Exact unique starting marker for remove_between_markers.",
+                                },
+                                "end_marker": {
+                                    "type": "string",
+                                    "description": "Exact unique ending marker for remove_between_markers.",
                                 },
                                 "occurrence": {
                                     "type": "integer",
@@ -830,8 +845,8 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                 "allow_multiple": {
                                     "type": "boolean",
                                     "description": (
-                                        "For replace_text_once only: replace all matching old text "
-                                        "occurrences instead of requiring a unique match."
+                                        "For replace_text_once: replace all matching old text. "
+                                        "For remove_text_all: required and must be true."
                                     ),
                                 },
                             },

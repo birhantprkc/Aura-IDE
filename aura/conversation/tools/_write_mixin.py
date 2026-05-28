@@ -373,6 +373,10 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
             
         if isinstance(result, CompiledPatch):
             proposal["new_content"] = result.cleaned_code
+            proposal["craft_metadata"] = dict(result.metadata)
+            proposal["write_outcome"] = str(result.metadata.get("write_outcome") or "applied")
+            if result.metadata.get("pre_existing_environment_issues"):
+                proposal["pre_existing_environment_issues"] = result.metadata.get("pre_existing_environment_issues")
             return None
             
         if isinstance(result, CompilerBounce):
@@ -382,12 +386,18 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
                 payload={
                     "ok": True,
                     "applied": False,
+                    "write_outcome": str(result.metadata.get("write_outcome") or "not_applied_craft_rejected"),
+                    "failure_class": str(result.metadata.get("failure_class") or "compiler_rejected"),
+                    "syntax_valid": bool(result.metadata.get("syntax_valid", True)),
+                    "pre_existing_environment_issues": result.metadata.get("pre_existing_environment_issues", []),
+                    "introduced_environment_issues": result.metadata.get("introduced_environment_issues", []),
                     "quality_bounce": True,
                     "path": rel_path,
                     "tool_name": tool_name,
                     "repair_instructions": result.repair_instructions,
                     "is_new_file": is_new_file,
                     "craft_issues": [_craft_issue_payload(issue) for issue in result.issues],
+                    "craft_metadata": dict(result.metadata),
                     "suggested_next_action": "Repair the proposed patch and retry this file.",
                 },
             )
@@ -401,9 +411,15 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
                     "error": result.reason,
                     "path": rel_path,
                     "failure_class": "compiler_rejected",
+                    "write_outcome": str(result.metadata.get("write_outcome") or "not_applied_craft_rejected"),
+                    "applied": False,
+                    "syntax_valid": bool(result.metadata.get("syntax_valid", True)),
+                    "pre_existing_environment_issues": result.metadata.get("pre_existing_environment_issues", []),
+                    "introduced_environment_issues": result.metadata.get("introduced_environment_issues", []),
                     "reject": True,
                     "is_new_file": is_new_file,
                     "craft_issues": [_craft_issue_payload(issue) for issue in result.issues],
+                    "craft_metadata": dict(result.metadata),
                 },
             )
             
@@ -423,6 +439,29 @@ def _craft_issue_payload(issue) -> dict:
         "suggestion": getattr(issue, "suggestion", ""),
         "severity": getattr(severity, "value", str(severity)),
     }
+
+
+def _write_outcome_for_failure(failure_class: str) -> str:
+    if failure_class == "approval_rejected":
+        return "not_applied_user_rejected"
+    if failure_class in {"compiler_rejected", "introduced_environment_issue", "syntax_invalid"}:
+        return "not_applied_craft_rejected"
+    if failure_class == "pre_existing_environment_issue":
+        return "not_applied_pre_existing_environment_blocked"
+    if failure_class == "internal_error":
+        return "failed_harness_error"
+    return "not_applied_edit_mechanics_blocked"
+
+
+def _mark_not_applied(payload: dict, failure_class: str | None = None) -> dict:
+    payload.setdefault("applied", False)
+    if failure_class:
+        payload.setdefault("failure_class", failure_class)
+    payload.setdefault(
+        "write_outcome",
+        _write_outcome_for_failure(str(payload.get("failure_class") or failure_class or "")),
+    )
+    return payload
 
 
 def _is_new_root_validation_scratch(root: Path, target: Path) -> bool:
@@ -594,7 +633,10 @@ class WriteHandlersMixin:
         if reject_all:
             return ToolExecResult(
                 ok=False,
-                payload={"ok": False, "error": "User rejected all writes in this turn.", "failure_class": "approval_rejected"},
+                payload=_mark_not_applied(
+                    {"ok": False, "error": "User rejected all writes in this turn.", "failure_class": "approval_rejected"},
+                    "approval_rejected",
+                ),
                 extras={"rejected_all": True},
             )
 
@@ -647,7 +689,7 @@ class WriteHandlersMixin:
                 )
             proposal = _reg.propose_write(self._root, target, content)
             if not proposal.get("ok", False):
-                return ToolExecResult(ok=False, payload=proposal)
+                return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
             # Humanizer: clean new Python file content before approval
             if proposal.get("is_new_file", False):
@@ -693,7 +735,7 @@ class WriteHandlersMixin:
                 description=description,
             )
             if not proposal.get("ok", False):
-                return ToolExecResult(ok=False, payload=proposal)
+                return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
             gate_error = _maybe_humanize_proposal(proposal)
             if gate_error is not None:
@@ -719,7 +761,7 @@ class WriteHandlersMixin:
                 )
             proposal = _reg.propose_edit(self._root, target, old_str, new_str)
             if not proposal.get("ok", False):
-                return ToolExecResult(ok=False, payload=proposal)
+                return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
             # Humanizer: observe-only for existing file edits
             _maybe_observe_humanizer(proposal)
@@ -766,7 +808,7 @@ class WriteHandlersMixin:
                 expected_old_hash=expected_old_hash,
             )
             if not proposal.get("ok", False):
-                return ToolExecResult(ok=False, payload=proposal)
+                return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
             _maybe_observe_humanizer(proposal)
             craft_error = _run_compiler_pipeline(proposal, "edit_line_range", contract=self.get_contract(), workspace_root=self._root)
@@ -807,7 +849,7 @@ class WriteHandlersMixin:
                 description=description,
             )
             if not proposal.get("ok", False):
-                return ToolExecResult(ok=False, payload=proposal)
+                return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
             _maybe_observe_humanizer(proposal)
             craft_error = _run_compiler_pipeline(proposal, "patch_file", contract=self.get_contract(), workspace_root=self._root)
@@ -835,7 +877,7 @@ class WriteHandlersMixin:
                 self._root, target, symbol_type, symbol_name, new_definition, class_name
             )
             if not proposal.get("ok", False):
-                return ToolExecResult(ok=False, payload=proposal)
+                return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
             # Humanizer: behavior-changing for existing Python file edits
             gate_error = _maybe_humanize_proposal(proposal)
@@ -858,7 +900,10 @@ class WriteHandlersMixin:
         if decision.action == "reject":
             return ToolExecResult(
                 ok=False,
-                payload={"ok": False, "error": "User rejected this change.", "path": req.rel_path, "failure_class": "approval_rejected"},
+                payload=_mark_not_applied(
+                    {"ok": False, "error": "User rejected this change.", "path": req.rel_path, "failure_class": "approval_rejected"},
+                    "approval_rejected",
+                ),
                 extras={
                     "approval": "reject",
                     "rel_path": req.rel_path,
@@ -873,6 +918,8 @@ class WriteHandlersMixin:
                     "error": "User rejected this change and all further writes in this turn.",
                     "path": req.rel_path,
                     "failure_class": "approval_rejected",
+                    "applied": False,
+                    "write_outcome": "not_applied_user_rejected",
                 },
                 extras={
                     "approval": "reject_all",
@@ -894,10 +941,16 @@ class WriteHandlersMixin:
         payload = {
             "ok": True,
             "path": req.rel_path,
-            "applied": name,
+            "applied": True,
+            "applied_tool": name,
+            "write_outcome": proposal.get("write_outcome") or "applied",
             "is_new_file": req.is_new_file,
             "backup": rel_backup,
         }
+        if proposal.get("pre_existing_environment_issues"):
+            payload["pre_existing_environment_issues"] = proposal.get("pre_existing_environment_issues")
+        if proposal.get("craft_metadata"):
+            payload["craft_metadata"] = proposal.get("craft_metadata")
         if name == "edit_line_range":
             payload["start_line"] = proposal.get("start_line")
             payload["end_line"] = proposal.get("end_line")

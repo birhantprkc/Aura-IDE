@@ -404,6 +404,7 @@ class _DispatchProxy(QObject):
         failed_validation = _unrecovered_validation_failures(validation_results)
         validation_ran = bool(validation_results)
         quality_bounces = list(getattr(relay, "quality_bounces", []))
+        not_applied_writes = list(getattr(relay, "not_applied_writes", []))
 
         # Compute acceptance-unverified
         acceptance_unverified = False
@@ -467,6 +468,15 @@ class _DispatchProxy(QObject):
             )
 
         result_caveats: list[str] = []
+        for write in relay.write_results:
+            issues = write.get("pre_existing_environment_issues")
+            if isinstance(issues, list) and issues:
+                first = issues[0]
+                if isinstance(first, dict):
+                    msg = str(first.get("message") or first.get("code") or "pre-existing environment issue")
+                else:
+                    msg = str(first)
+                result_caveats.append(f"Pre-existing environment issue on {write.get('path')}: {msg}")
 
         if recoverable_write_failures and not relay.write_results and not structured_failure:
             result_caveats.append(_format_recoverable_write_failure(recoverable_write_failures[0]))
@@ -501,7 +511,7 @@ class _DispatchProxy(QObject):
         has_hard_failure = bool(result_errors)
         has_internal_failure = bool(internal_error or relay.api_errors)
         has_validation_failure = bool(failed_validation)
-        has_recoverable_edit_blocker = bool(recoverable_write_failures) and not relay.write_results
+        has_recoverable_edit_blocker = (bool(recoverable_write_failures) or bool(not_applied_writes)) and not relay.write_results
         has_quality_bounce_blocker = bool(quality_bounces) and not relay.write_results
         has_source_inspection_blocker = bool(source_inspection_blockers)
         has_terminal_policy_blocker = bool(terminal_policy_blockers)
@@ -595,6 +605,9 @@ class _DispatchProxy(QObject):
             result_errors,
             summary_continuation,
             result_caveats,
+            validation_results=validation_results,
+            not_applied_writes=not_applied_writes,
+            status=status,
         )
         modified_files = continuation.get("modified_files") or [
             str(w["path"]) for w in relay.write_results if isinstance(w.get("path"), str) and w.get("path")
@@ -661,6 +674,8 @@ class _DispatchProxy(QObject):
             suggested_next_spec=continuation.get("recommended_next_step"),
             extras={
                 "writes": relay.write_results,
+                "not_applied_writes": not_applied_writes,
+                "write_outcome": _final_write_outcome(relay.write_results, not_applied_writes, internal_error),
                 "failed_write_tools": failed_write_tools,
                 "internal_recovery_steers": internal_recovery_steers,
                 "recoverable_write_failures": recoverable_write_failures,
@@ -930,7 +945,7 @@ def _format_recoverable_write_failure(result: dict[str, Any]) -> str:
     name = str(result.get("name") or "write_tool")
     path = str(result.get("path") or "")
     error = str(result.get("error") or result.get("result_preview") or "recoverable edit mechanics failure")
-    suggested = str(result.get("suggested_next_tool") or result.get("suggested_tool") or "edit_line_range")
+    suggested = str(result.get("suggested_next_tool") or result.get("suggested_tool") or "apply_edit_transaction")
     target = f" on {path}" if path else ""
     return f"Recoverable edit mechanics failure from {name}{target}: {error}. Next tactic: {suggested}."
 
@@ -1087,10 +1102,15 @@ def _build_worker_summary(
     errors: list[str],
     continuation: dict[str, Any] | None = None,
     caveats: list[str] | None = None,
+    validation_results: list[dict[str, Any]] | None = None,
+    not_applied_writes: list[dict[str, Any]] | None = None,
+    status: str | None = None,
 ) -> str:
     lines: list[str] = []
     continuation = continuation or {}
     caveats = caveats or []
+    validation_results = validation_results or []
+    not_applied_writes = not_applied_writes or []
 
     # Severity prefix
     if continuation.get("status") == "patch_quality_unresolved":
@@ -1124,6 +1144,11 @@ def _build_worker_summary(
         for caveat in caveats:
             lines.append(f"  - {caveat}")
 
+    lines.append("")
+    lines.append("Structured receipt:")
+    lines.append(f"  - Final status: {status or 'unknown'}")
+    lines.append(f"  - Write outcome: {_final_write_outcome(writes, not_applied_writes, None)}")
+
     # 2. Planner's intended summary (if no errors, or as context)
     if req.summary:
         if lines:
@@ -1132,12 +1157,34 @@ def _build_worker_summary(
 
     # 3. List of modified files
     if writes:
-        if lines:
-            lines.append("")
         lines.append("Files modified:")
         for w in writes:
-            tag = "(new)" if w.get("is_new_file") else f"({w.get('tool')})"
-            lines.append(f"  - {w.get('path')} {tag}")
+            tag = "(new)" if w.get("is_new_file") else f"({w.get('applied_tool') or w.get('tool')})"
+            outcome = w.get("write_outcome") or "applied"
+            lines.append(f"  - {w.get('path')} {tag} [{outcome}]")
+    else:
+        lines.append("Files modified:")
+        lines.append("  - none")
+
+    if not_applied_writes:
+        lines.append("Not-applied write attempts:")
+        for w in not_applied_writes[:5]:
+            path = w.get("path") or "(unknown path)"
+            outcome = w.get("write_outcome") or "not_applied"
+            failure = w.get("failure_class") or ""
+            lines.append(f"  - {path} [{outcome}] {failure}".rstrip())
+
+    if validation_results:
+        lines.append("Validation commands:")
+        for item in validation_results:
+            command = str(item.get("command") or "")
+            exit_code = item.get("exit_code")
+            verdict = "passed" if item.get("ok") else "failed"
+            suffix = f" exit {exit_code}" if exit_code is not None else ""
+            lines.append(f"  - {command}: {verdict}{suffix}")
+    else:
+        lines.append("Validation commands:")
+        lines.append("  - none recorded")
 
     if continuation.get("remaining"):
         if lines:
@@ -1167,6 +1214,23 @@ def _is_internal_error_summary(error: str) -> bool:
         or "worker_internal_error" in text
         or "internal_error" in text
     )
+
+
+def _final_write_outcome(
+    writes: list[dict[str, Any]],
+    not_applied_writes: list[dict[str, Any]],
+    internal_error: str | None,
+) -> str:
+    if internal_error:
+        return "failed_harness_error"
+    if writes:
+        outcomes = [str(w.get("write_outcome") or "applied") for w in writes]
+        if any(outcome == "applied_with_environment_caveat" for outcome in outcomes):
+            return "applied_with_environment_caveat"
+        return outcomes[-1] if outcomes else "applied"
+    if not_applied_writes:
+        return str(not_applied_writes[-1].get("write_outcome") or "not_applied_edit_mechanics_blocked")
+    return "no_write_needed"
 
 
 def _check_read_before_edit(

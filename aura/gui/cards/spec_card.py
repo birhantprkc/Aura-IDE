@@ -459,7 +459,7 @@ class SpecCard(QFrame):
         self._status_label.setText("Worker running...")
         self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         self._status_label.setVisible(True)
-        self._view_worker_btn.setVisible(True)
+        self._view_worker_btn.setVisible(False)
 
     def mark_worker_running(self) -> None:
         """Update status to indicate worker is running."""
@@ -469,7 +469,7 @@ class SpecCard(QFrame):
         self._status_label.setText("Worker running...")
         self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         self._status_label.setVisible(True)
-        self._view_worker_btn.setVisible(True)
+        self._view_worker_btn.setVisible(False)
 
     def mark_stale(self) -> None:
         """Update status to indicate the card is stale/non-pending."""
@@ -558,7 +558,7 @@ class SpecCard(QFrame):
             WorkflowStatus.blocked,
         }:
             self._buttons_row.setVisible(False)
-            self._view_worker_btn.setVisible(True)
+            self._view_worker_btn.setVisible(False)
         elif state.status in {
             WorkflowStatus.done,
             WorkflowStatus.cancelled,
@@ -606,6 +606,12 @@ class SpecCard(QFrame):
                     suffix += f" ({run.exit_code})"
                 commands.append(f"{run.command}{suffix}")
             lines.append("Validation commands: " + " | ".join(commands))
+        if state.write_outcome:
+            lines.append(f"Write outcome: {state.write_outcome}")
+        if state.caveats:
+            lines.append("Caveats: " + " | ".join(state.caveats[-3:]))
+        if state.blockers:
+            lines.append("Blockers: " + " | ".join(state.blockers[-3:]))
         if state.blocker_reason:
             lines.append(f"Blocker: {state.blocker_reason}")
         if state.failure_reason and state.failure_reason != state.blocker_reason:

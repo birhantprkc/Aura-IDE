@@ -72,8 +72,8 @@ def worker_terminal_command_allowed(
         False,
         "Worker terminal is validation-only. This command is not a recognized validation/build/test command.",
         "worker_terminal_not_validation",
-        "run_terminal_command",
-        "Run only validation/build/test commands, or use an explicit validation command from the Worker handoff.",
+        "typed_blocker",
+        "Run only validation/build/test commands, or report a typed blocker if validation cannot be performed with available tools.",
     )
 
 

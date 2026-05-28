@@ -59,6 +59,7 @@ class WorkerEventRelay(QObject):
         self._worker_model = worker_model
         self.index_to_id: dict[int, str] = {}
         self.write_results: list[dict[str, Any]] = []
+        self.not_applied_writes: list[dict[str, Any]] = []
         self.api_errors: list[str] = []
         self.phase_boundary_info: dict[str, Any] | None = None
         self.tool_results: list[dict] = []
@@ -165,18 +166,37 @@ class WorkerEventRelay(QObject):
                     "payload": parsed,
                 }
                 self.quality_bounces.append(bounce_record)
+                self.not_applied_writes.append(
+                    {
+                        "tool": ev.name,
+                        "path": parsed.get("path") or parsed.get("rel_path"),
+                        "applied": False,
+                        "write_outcome": parsed.get("write_outcome") or "not_applied_craft_rejected",
+                        "failure_class": parsed.get("failure_class") or "compiler_rejected",
+                        "error": parsed.get("repair_instructions", ""),
+                        "quality_bounce": True,
+                        "craft_issues": parsed.get("craft_issues", []),
+                        "pre_existing_environment_issues": parsed.get("pre_existing_environment_issues", []),
+                        "introduced_environment_issues": parsed.get("introduced_environment_issues", []),
+                    }
+                )
             elif (
                 ev.name in WRITE_TOOLS
                 and isinstance(parsed, dict)
                 and parsed.get("ok")
+                and parsed.get("applied") is True
             ):
                 write_record = {
                     "tool": ev.name,
                     "path": parsed.get("path"),
                     "is_new_file": parsed.get("is_new_file", False),
-                    "applied": parsed.get("applied"),
+                    "applied": True,
+                    "applied_tool": parsed.get("applied_tool") or ev.name,
+                    "write_outcome": parsed.get("write_outcome") or "applied",
                     "backup": parsed.get("backup"),
                 }
+                if parsed.get("pre_existing_environment_issues"):
+                    write_record["pre_existing_environment_issues"] = parsed.get("pre_existing_environment_issues")
                 if "start_line" in parsed:
                     write_record["start_line"] = parsed.get("start_line")
                 if "end_line" in parsed:
@@ -193,6 +213,22 @@ class WorkerEventRelay(QObject):
                         self.wrote_new_files.append(path)
                     else:
                         self.edited_existing_files.append(path)
+            elif ev.name in WRITE_TOOLS and isinstance(parsed, dict):
+                if parsed.get("applied") is False or str(parsed.get("write_outcome") or "").startswith("not_applied_"):
+                    self.not_applied_writes.append(
+                        {
+                            "tool": ev.name,
+                            "path": parsed.get("path") or parsed.get("rel_path"),
+                            "applied": False,
+                            "write_outcome": parsed.get("write_outcome") or "not_applied_edit_mechanics_blocked",
+                            "failure_class": parsed.get("failure_class", ""),
+                            "error": parsed.get("error", ""),
+                            "quality_bounce": bool(parsed.get("quality_bounce")),
+                            "craft_issues": parsed.get("craft_issues", []),
+                            "pre_existing_environment_issues": parsed.get("pre_existing_environment_issues", []),
+                            "introduced_environment_issues": parsed.get("introduced_environment_issues", []),
+                        }
+                    )
             # Track reads for read-before-edit enforcement
             if ev.ok and ev.name == "read_file" and isinstance(parsed, dict):
                 path = parsed.get("path")
@@ -253,6 +289,7 @@ class WorkerEventRelay(QObject):
         """Clear all tracking fields so the relay can be reused."""
         self.index_to_id.clear()
         self.write_results.clear()
+        self.not_applied_writes.clear()
         self.api_errors.clear()
         self.phase_boundary_info = None
         self.tool_results.clear()
@@ -308,6 +345,10 @@ class WorkerEventRelay(QObject):
             "hunk_count",
             "backup",
             "blocked_command",
+            "write_outcome",
+            "pre_existing_environment_issues",
+            "introduced_environment_issues",
+            "syntax_valid",
         )
         for key in fields:
             if key in parsed:

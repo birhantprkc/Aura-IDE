@@ -216,6 +216,12 @@ class SendHandler(QObject):
 
     def _handle_restore_snapshot(self) -> None:
         """Prompt users to choose an explicit snapshot instead of guessing."""
+        if self._bridge.is_running():
+            self._chat.add_error(
+                "Restore snapshot",
+                "Stop the running task before undoing or restoring a snapshot.",
+            )
+            return
         self._chat.add_error(
             "Restore snapshot",
             "Choose a specific snapshot to restore.",
@@ -224,6 +230,12 @@ class SendHandler(QObject):
     def _handle_undo(self) -> None:
         """Handle /undo command — restore to pre-worker snapshot or git reset."""
         ws_root = self._workspace_root
+        if self._bridge.is_running():
+            self._chat.add_error(
+                "Undo",
+                "Stop the running task before undoing or restoring a snapshot.",
+            )
+            return
         if ws_root is None:
             self._chat.add_error("Undo", "No workspace root set.")
             return

@@ -111,6 +111,7 @@ class CraftDecision:
     approved: bool
     cleaned_code: str = ""
     issues: list[CraftIssue] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def soft_issues(self) -> list[CraftIssue]:
@@ -127,6 +128,7 @@ class CompiledPatch:
     cleaned_code: str
     checks_passed: list[str] = field(default_factory=list)
     checks_warned: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -137,6 +139,7 @@ class CompilerBounce:
     repair_instructions: str
     attempt_number: int
     max_attempts: int
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -146,6 +149,7 @@ class CompilerReject:
     issues: list[CraftIssue]
     total_attempts: int
     reason: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def line_in_ranges(line: int, ranges: list[tuple[int, int]]) -> bool:

@@ -52,6 +52,9 @@ class WorkflowState:
     blocker_reason: str = ""
     failure_reason: str = ""
     follow_up_required: bool = False
+    write_outcome: str = ""
+    caveats: tuple[str, ...] = ()
+    blockers: tuple[str, ...] = ()
 
     @classmethod
     def intent_captured(
@@ -128,17 +131,31 @@ class WorkflowState:
 
         if name in WRITE_TOOLS:
             path = _first_string(parsed, "path", "rel_path") or _first_string(extras or {}, "rel_path")
-            if ok and path:
+            applied = parsed.get("applied")
+            write_outcome = str(parsed.get("write_outcome") or "")
+            if ok and applied is True and path:
                 state = state.with_changed_file(path).with_status(
                     WorkflowStatus.editing,
                     pending_user_action="",
                 )
-            elif not ok:
+                if write_outcome:
+                    state = replace(state, write_outcome=write_outcome)
+                caveats = _environment_caveats(parsed)
+                if caveats:
+                    state = replace(state, caveats=(*state.caveats, *caveats))
+            elif (not ok) or applied is False:
                 reason = _failure_text(parsed, fallback=result)
+                if not reason and write_outcome:
+                    reason = write_outcome
                 state = state.with_status(
                     WorkflowStatus.blocked,
                     blocker_reason=reason,
                     follow_up_required=True,
+                )
+                state = replace(
+                    state,
+                    write_outcome=write_outcome or state.write_outcome,
+                    blockers=(*state.blockers, reason) if reason else state.blockers,
                 )
 
         if name == "run_terminal_command" and isinstance(parsed, dict):
@@ -183,13 +200,23 @@ class WorkflowState:
                         str(item.get("command") or ""),
                         ok=bool(item.get("ok")) if "ok" in item else None,
                         exit_code=_int_or_none(item.get("exit_code")),
-                    )
+                )
 
         outcome = normalize_outcome_status(status)
         failure_reason = _first_error(summary, extras)
+        write_outcome = _first_string(extras or {}, "write_outcome") if isinstance(extras, dict) else ""
+        if not write_outcome and isinstance(extras, dict):
+            writes = extras.get("writes")
+            if isinstance(writes, list) and writes:
+                write_outcome = str(writes[-1].get("write_outcome") or "")
+            not_applied = extras.get("not_applied_writes")
+            if not write_outcome and isinstance(not_applied, list) and not_applied:
+                write_outcome = str(not_applied[-1].get("write_outcome") or "")
+        caveats = tuple(str(item) for item in (extras or {}).get("caveats", []) if isinstance(extras, dict))
+        blockers = tuple(str(item) for item in (extras or {}).get("errors", []) if isinstance(extras, dict))
         if outcome == WorkerOutcomeStatus.cancelled.value:
             final_status = WorkflowStatus.cancelled
-        elif ok and not needs_followup:
+        elif ok and not needs_followup and not _not_applied_outcome(write_outcome):
             final_status = WorkflowStatus.done
         elif outcome in {
             WorkerOutcomeStatus.harness_error.value,
@@ -208,6 +235,9 @@ class WorkflowState:
             failure_reason="" if final_status == WorkflowStatus.done else failure_reason,
             follow_up_required=needs_followup or final_status == WorkflowStatus.failed_retryable,
             validation_status=state.validation_status,
+            write_outcome=write_outcome or state.write_outcome,
+            caveats=(*state.caveats, *caveats),
+            blockers=(*state.blockers, *blockers),
         )
 
 
@@ -268,6 +298,22 @@ def _failure_text(parsed: dict[str, Any], *, fallback: str) -> str:
         or parsed.get("result_preview")
         or fallback
     )[:500]
+
+
+def _environment_caveats(parsed: dict[str, Any]) -> tuple[str, ...]:
+    issues = parsed.get("pre_existing_environment_issues")
+    if not isinstance(issues, list) or not issues:
+        return ()
+    first = issues[0]
+    if isinstance(first, dict):
+        msg = str(first.get("message") or first.get("code") or "pre-existing environment issue")
+    else:
+        msg = str(first)
+    return (f"Pre-existing environment issue: {msg}",)
+
+
+def _not_applied_outcome(outcome: str) -> bool:
+    return str(outcome).startswith("not_applied_") or str(outcome) == "failed_harness_error"
 
 
 def _first_error(summary: str, extras: dict[str, Any] | None) -> str:
