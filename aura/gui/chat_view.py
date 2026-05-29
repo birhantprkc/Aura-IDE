@@ -342,15 +342,16 @@ class ChatView(QScrollArea):
         card.set_result(ok)
 
     def _cleanup_failed_code_cards(self, tool_call_id: str) -> None:
-        """Remove any failed CodeWriterCards from the current assistant's tool cluster.
-
-        Worker write attempts go to the playground, not the main chat.
-        This is a safety net in case any write-tool cards leaked into the
-        main chat tool cluster during Worker dispatch.
-        """
-        ac = self._current_assistant
+        """Remove any failed CodeWriterCards from the correct assistant's tool cluster."""
+        ac = self._tool_owner.get(tool_call_id)
+        if ac is None:
+            ac = self._current_assistant
         if ac is None:
             return
+        self._remove_failed_write_cards_from_assistant(ac)
+
+    def _remove_failed_write_cards_from_assistant(self, ac: AssistantCard) -> None:
+        """Remove failed CodeWriterCards from an assistant card's tool cluster."""
         tool_cluster = ac._tool_cluster if hasattr(ac, '_tool_cluster') else None
         if tool_cluster is None:
             return
