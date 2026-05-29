@@ -513,7 +513,9 @@ class ChatView(QScrollArea):
                 # Finalize controller FIRST (updates planner/spec UI above)
                 controller.finalize(ok, result_text)
 
-                # THEN add summary card or update spec card (appears at bottom as final receipt)
+                # THEN update spec card for not-started scenarios (stale/cancelled/expired).
+                # Do NOT insert a WorkerSummaryCard — the Planner/assistant produces the
+                # user-facing final summary after receiving the dispatch result.
                 if dispatch_not_started:
                     spec_card = self.get_spec_card(tool_call_id)
                     if spec_card:
@@ -523,12 +525,6 @@ class ChatView(QScrollArea):
                             spec_card.mark_cancelled()
                         else:
                             spec_card.mark_stale()
-                elif summary:
-                    self.add_worker_summary(
-                        tool_call_id, controller.goal or "", ok, summary,
-                        needs_followup=needs_followup,
-                        status=status,
-                    )
 
             elif controller.tool_name == "run_research":
                 report = ""
