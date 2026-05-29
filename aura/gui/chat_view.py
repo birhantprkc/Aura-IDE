@@ -485,6 +485,12 @@ class ChatView(QScrollArea):
         controller = self._controllers.pop(tool_call_id, None)
         if controller:
             if controller.tool_name == "dispatch_to_worker":
+                summary = ""
+                needs_followup = False
+                status = None
+                dispatch_not_started = False
+                approval_timeout = False
+                cancelled = False
                 try:
                     data = json.loads(result_text)
                     extras = data.get("extras", {})
@@ -494,46 +500,59 @@ class ChatView(QScrollArea):
                         or extras.get("dispatch_not_started")
                         or extras.get("dispatch_spec_rejected")
                     )
-
                     if dispatch_not_started:
-                        # Worker never started — update SpecCard, do NOT create WorkerSummaryCard
-                        spec_card = self.get_spec_card(tool_call_id)
-                        if spec_card:
-                            if extras.get("dispatch_approval_timeout"):
-                                spec_card.mark_dispatch_expired()
-                            elif extras.get("dispatch_cancelled"):
-                                spec_card.mark_cancelled()
-                            else:
-                                spec_card.mark_stale()
+                        approval_timeout = extras.get("dispatch_approval_timeout", False)
+                        cancelled = extras.get("dispatch_cancelled", False)
                     else:
-                        # Worker actually started and finished (or errored during run)
                         summary = data.get("summary", "")
-                        if summary:
-                            needs_followup = bool(data.get("needs_followup", False))
-                            status = data.get("status")
-                            self.add_worker_summary(
-                                tool_call_id, controller.goal or "", ok, summary,
-                                needs_followup=needs_followup,
-                                status=status,
-                            )
+                        needs_followup = bool(data.get("needs_followup", False))
+                        status = data.get("status")
                 except Exception:
                     pass
+
+                # Finalize controller FIRST (updates planner/spec UI above)
+                controller.finalize(ok, result_text)
+
+                # THEN add summary card or update spec card (appears at bottom as final receipt)
+                if dispatch_not_started:
+                    spec_card = self.get_spec_card(tool_call_id)
+                    if spec_card:
+                        if approval_timeout:
+                            spec_card.mark_dispatch_expired()
+                        elif cancelled:
+                            spec_card.mark_cancelled()
+                        else:
+                            spec_card.mark_stale()
+                elif summary:
+                    self.add_worker_summary(
+                        tool_call_id, controller.goal or "", ok, summary,
+                        needs_followup=needs_followup,
+                        status=status,
+                    )
+
             elif controller.tool_name == "run_research":
+                report = ""
+                needs_followup = False
                 try:
                     data = json.loads(result_text)
                     report = data.get("report", "")
-                    if report:
-                        needs_followup = data.get("needs_followup", False)
-                        self.add_worker_summary(
-                            tool_call_id, controller.goal or "Research", ok, report,
-                            needs_followup=needs_followup,
-                        )
+                    needs_followup = data.get("needs_followup", False)
                 except Exception:
                     pass
 
-            controller.finalize(ok, result_text)
-            if controller.tool_name == "run_terminal_command":
-                self._terminal_cards.pop(tool_call_id, None)
+                controller.finalize(ok, result_text)
+
+                if report:
+                    self.add_worker_summary(
+                        tool_call_id, controller.goal or "Research", ok, report,
+                        needs_followup=needs_followup,
+                    )
+
+            else:
+                controller.finalize(ok, result_text)
+                if controller.tool_name == "run_terminal_command":
+                    self._terminal_cards.pop(tool_call_id, None)
+
             self._scroll_to_bottom()
 
     def append_terminal_output(self, tool_call_id: str, text: str) -> None:
