@@ -341,6 +341,32 @@ class ChatView(QScrollArea):
             return
         card.set_result(ok)
 
+    def _cleanup_failed_code_cards(self, tool_call_id: str) -> None:
+        """Remove any failed CodeWriterCards from the current assistant's tool cluster.
+
+        Worker write attempts go to the playground, not the main chat.
+        This is a safety net in case any write-tool cards leaked into the
+        main chat tool cluster during Worker dispatch.
+        """
+        ac = self._current_assistant
+        if ac is None:
+            return
+        tool_cluster = ac._tool_cluster if hasattr(ac, '_tool_cluster') else None
+        if tool_cluster is None:
+            return
+        layout = tool_cluster.layout()
+        if layout is None:
+            return
+        for i in range(layout.count() - 1, -1, -1):
+            item = layout.itemAt(i)
+            if item is None:
+                continue
+            widget = item.widget()
+            if isinstance(widget, CodeWriterCard) and widget.state == "failed":
+                layout.removeWidget(widget)
+                widget.setParent(None)
+                widget.deleteLater()
+
     def show_code_diff(
         self,
         tool_call_id: str,
@@ -525,6 +551,12 @@ class ChatView(QScrollArea):
                             spec_card.mark_cancelled()
                         else:
                             spec_card.mark_stale()
+
+                # Clean up any stale CodeWriterCards left in the tool cluster.
+                # Worker write events go to the playground, not the main chat.
+                # If a CodeWriterCard somehow ended up in the tool cluster in
+                # Failed state, remove it so it doesn't appear as the final item.
+                self._cleanup_failed_code_cards(tool_call_id)
 
             elif controller.tool_name == "run_research":
                 report = ""
