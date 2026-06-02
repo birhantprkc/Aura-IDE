@@ -7,27 +7,32 @@
 
 <img src="media/AurA.ico" alt="Aura icon" width="64" height="64" align="right">
 
-**Desktop AI Orchestration IDE - pair programming with full workspace awareness.**
+**An LLM coding harness — turns any model into a better engineer through process, tools, context, validation, and recovery.**
 
 ## Why Aura?
 
-Aura is for developers who want AI coding help without looking away.
-- The Planner reads your code and writes a spec.
-- You review or edit the spec.
-- The Worker applies changes.
-- Every file write shows a diff before it touches disk.
+Aura is an LLM coding harness. It takes your codebase, your prompt, and a capable model — then runs it through a real engineering loop:
+
+**repo awareness → Planner spec → Worker execution → surgical edits → validation → recovery → final receipt.**
+
+- The **Planner** reads your code, understands the project structure, and writes a precise technical specification.
+- You review (and edit) the spec before it reaches the Worker.
+- The **Worker** executes the spec with read/write filesystem access, runs validation commands, and reports back a summary.
+- Every file write shows a **diff** before it touches disk.
 - Backups and git commits make experiments reversible.
+- If validation fails, the Worker recovers and retries — no silent failures.
+
+Aura supports **multiple providers and models** — DeepSeek, OpenAI, Anthropic, Google Gemini, OpenRouter — and lets you mix different models for planning vs. execution. The architecture is a **process amplifier**: better output comes from better tooling, richer context, tighter validation loops, and structured recovery, not just from stronger prompts.
+
+Aura has been **heavily dogfooded on its own codebase** — it wrote most of itself.
 
 <p align="center">
   <img src="media/plan_and_code.gif" alt="Aura planning and coding workflow demo" width="900">
 </p>
 
-<p align="center"><em>Demo: A full Planner -> Worker cycle - spec writing, dispatch, code editing with diff approval, and auto-commit.</em></p>
+<p align="center"><em>Demo: A full Planner → Worker cycle — spec writing, dispatch, code editing with diff approval, and auto-commit.</em></p>
 
-**Real-world cost:** 161 million tokens processed for $11.36 USD across 6,346 API requests (DeepSeek, May 2026).
-<p align="center">
-  <img src="media/token-cost.png" alt="DeepSeek API usage dashboard showing 161M tokens for $11.36" width="600">
-</p>
+**Real dogfooding:** During May 2026, Aura processed over **1.1 billion visible DeepSeek tokens** across nearly **30,000 API requests** while building itself — roughly $35.18 in visible API spend for that month.
 
 If you find Aura useful, consider starring the repo to help others discover it.
 
@@ -416,6 +421,12 @@ Aura can update itself automatically:
 - **Source Installations** — If running from a git checkout, Aura can pull the latest changes directly from the repository using a fast-forward merge.
 - **Update status check** — The toolbar shows when a newer version is available.
 - **Safety** — The updater never touches your workspaces, `.aura` project folders, or user configuration.
+
+## Documentation
+
+- [Aura Blog](https://aura-ide.hashnode.dev/) — project updates, design deep-dives, and usage guides
+- [Planner/Worker: A Better Architecture for AI Code Generation](https://aura-ide.hashnode.dev/planner-worker-a-better-architecture-for-ai-code-generation) — why the dual-agent model is more token-efficient than single-agent approaches
+- [Token-Efficient Memory: How Aura Caches BM25, Repo Maps, and Long-Term Context](https://aura-ide.hashnode.dev/token-efficient-memory-how-aura-caches-bm25-repo-maps-and-long-term-context) — a deep dive into the three memory layers that keep context fresh without burning tokens
 
 ---
 
@@ -855,10 +866,3 @@ To publish a Windows release, bump `aura/version.py`, `pyproject.toml`, and the 
 Aura is released under the [MIT License](LICENSE).
 
 The application icon is located at [`media/AurA.ico`](media/AurA.ico).
-
-
-## Documentation
-
-- [Aura Blog](https://aura-ide.hashnode.dev/) — project updates, design deep-dives, and usage guides
-- [Planner/Worker: A Better Architecture for AI Code Generation](https://aura-ide.hashnode.dev/planner-worker-a-better-architecture-for-ai-code-generation) — why the dual-agent model is more token-efficient than single-agent approaches
-- [Token-Efficient Memory: How Aura Caches BM25, Repo Maps, and Long-Term Context](https://aura-ide.hashnode.dev/token-efficient-memory-how-aura-caches-bm25-repo-maps-and-long-term-context) — a deep dive into the three memory layers that keep context fresh without burning tokens
