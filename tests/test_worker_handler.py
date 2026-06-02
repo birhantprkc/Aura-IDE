@@ -95,7 +95,6 @@ def _mock_spec_card() -> Mock:
         "dispatch_clicked",
         "edit_clicked",
         "cancel_clicked",
-        "view_worker_clicked",
     ):
         setattr(card, signal_name, Mock(connect=Mock()))
     return card
@@ -176,11 +175,11 @@ class TestWorkerToolCalls:
         playground.set_tool_result.assert_called_once_with("wt1", True, "content")
 
 
-# Worker diff / error / view
+# Worker diff / error
 
 
 class TestWorkerDiffError:
-    """Verify diff, error, and placeholder slots."""
+    """Verify diff, error slots."""
 
     def test_worker_diff_decided_delegates(
         self, handler: WorkerEventHandler, playground: Mock,
@@ -204,12 +203,6 @@ class TestWorkerDiffError:
     ) -> None:
         handler._on_worker_api_error("tc1", 0, "connection failed")
         playground.add_error.assert_called_once_with("Worker Error: connection failed")
-
-    def test_view_worker_clicked_is_noop(
-        self, handler: WorkerEventHandler,
-    ) -> None:
-        # Should not raise and do nothing
-        handler._on_view_worker_clicked("tc1")
 
 
 # Usage accumulation

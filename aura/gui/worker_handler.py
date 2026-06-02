@@ -23,7 +23,6 @@ if TYPE_CHECKING:
     from aura.gui.playground import AuraPlayground
     from aura.gui.spec_card_host import SpecCardHost
 
-
 class WorkerEventHandler(QObject):
     """Owns worker signal wiring and forwards bridge worker events to the
     chat view and playground.
@@ -161,7 +160,6 @@ class WorkerEventHandler(QObject):
             card.dispatch_clicked.connect(self._on_dispatch_clicked)
             card.edit_clicked.connect(self._on_edit_spec_clicked)
             card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)
-            card.view_worker_clicked.connect(self._on_view_worker_clicked)
             self._wired_spec_cards.add(tool_call_id)
 
         if self._bridge.auto_dispatch:
@@ -396,9 +394,6 @@ class WorkerEventHandler(QObject):
             pending_user_action="Review the failure before retrying.",
         )
         self._clear_active_spec_card(tool_call_id)
-
-    def _on_view_worker_clicked(self, tool_call_id: str) -> None:
-        """No-op placeholder for view-worker button."""
 
     def _get_spec_card(self, tool_call_id: str):
         if self._spec_host is not None:

@@ -1,7 +1,6 @@
 """Worker dispatch spec — collapsible cockpit-style Plan Ready card.
 
-After dispatch, the buttons collapse into a status header and a "View Worker"
-button appears to open the pop-out WorkerWindow.
+After dispatch, the buttons collapse into a status header.
 """
 
 from __future__ import annotations
@@ -31,14 +30,12 @@ _RISKY_KEYWORDS = [
 class SpecCard(QFrame):
     """Worker dispatch spec — collapsible, with Dispatch/Edit/Cancel buttons.
 
-    After dispatch, the buttons collapse into a status header and a "View Worker"
-    button appears to open the pop-out WorkerWindow.
+    After dispatch, the buttons collapse into a status header.
     """
 
     dispatch_clicked = Signal(str)  # tool_call_id (with current spec values)
     edit_clicked = Signal(str)
     cancel_clicked = Signal(str)
-    view_worker_clicked = Signal(str)  # tool_call_id
 
     def __init__(
         self,
@@ -113,8 +110,7 @@ class SpecCard(QFrame):
         outer.addWidget(self._buttons_row)
 
         # ---- Status section ----
-        self._view_worker_btn, self._status_label = self._build_status_section()
-        outer.addWidget(self._view_worker_btn)
+        self._status_label = self._build_status_section()
         outer.addWidget(self._status_label)
         self._workflow_details_label = QLabel("", parent=self)
         self._workflow_details_label.setWordWrap(True)
@@ -248,19 +244,12 @@ class SpecCard(QFrame):
 
         return buttons_row, dispatch_btn, edit_btn, cancel_btn
 
-    def _build_status_section(self) -> tuple[QPushButton, QLabel]:
-        """Create the View Worker button (hidden) and status label (hidden)."""
-        view_worker_btn = QPushButton("View Worker", parent=self)
-        view_worker_btn.setVisible(False)
-        view_worker_btn.clicked.connect(
-            lambda: self.view_worker_clicked.emit(self._tool_call_id)
-        )
-
+    def _build_status_section(self) -> QLabel:
+        """Create the status label (hidden by default)."""
         status_label = QLabel("", parent=self)
         status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         status_label.setVisible(False)
-
-        return view_worker_btn, status_label
+        return status_label
 
     # Static helpers
 
@@ -442,7 +431,6 @@ class SpecCard(QFrame):
         self._status_label.setText("Worker running...")
         self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         self._status_label.setVisible(True)
-        self._view_worker_btn.setVisible(False)
 
     def mark_worker_running(self) -> None:
         """Update status to indicate worker is running."""
@@ -452,7 +440,6 @@ class SpecCard(QFrame):
         self._status_label.setText("Worker running...")
         self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         self._status_label.setVisible(True)
-        self._view_worker_btn.setVisible(False)
 
     def mark_stale(self) -> None:
         """Update status to indicate the card is stale/non-pending."""
@@ -462,7 +449,6 @@ class SpecCard(QFrame):
         self._status_label.setText("Stale plan — not pending")
         self._status_label.setStyleSheet(f"color: {DANGER}; font-size: 11px;")
         self._status_label.setVisible(True)
-        self._view_worker_btn.setVisible(False)
 
     def mark_dispatch_expired(self) -> None:
         """Update status when dispatch is no longer pending (stale card button)."""
@@ -472,7 +458,6 @@ class SpecCard(QFrame):
         self._status_label.setText("Plan expired — click Dispatch again or Cancel")
         self._status_label.setStyleSheet(f"color: {WARN}; font-size: 11px;")
         self._status_label.setVisible(True)
-        self._view_worker_btn.setVisible(False)
 
     def mark_cancelled(self) -> None:
         """Reflect a modal cancellation without emitting another cancel signal."""
@@ -538,7 +523,6 @@ class SpecCard(QFrame):
             WorkflowStatus.blocked,
         }:
             self._buttons_row.setVisible(False)
-            self._view_worker_btn.setVisible(False)
         elif state.status in {
             WorkflowStatus.done,
             WorkflowStatus.cancelled,
@@ -624,5 +608,3 @@ class SpecCard(QFrame):
         self._status_label.setText(verb)
         self._status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
         self._status_label.setVisible(True)
-        # Note: We don't show the "View Worker" button during replay because
-        # the background worker process doesn't exist anymore.
