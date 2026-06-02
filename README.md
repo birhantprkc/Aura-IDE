@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
-[![Version](https://img.shields.io/badge/version-1.4.3-orange)]()
+[![Version](https://img.shields.io/badge/version-1.4.4-orange)]()
 
 <img src="media/AurA.ico" alt="Aura icon" width="64" height="64" align="right">
 
@@ -90,13 +90,8 @@ If you find Aura useful, consider starring the repo to help others discover it.
 ## Screenshots
 
 <p align="center">
-  <img src="media/working.png" alt="Main interface" width="49%">
-  <img src="media/diff-view.png" alt="Diff approval dialog" width="49%">
+<img src="media/aura-may.png" alt="Tokens for the month" width="49%">
 </p>
-
-*Left: Main interface with three-pane layout - workspace tree, chat view, and worker activity panel. Right: Diff approval dialog - every file change is reviewed before being applied.*
-
-> **Note:** Screenshots may reflect an earlier version of the UI. The current interface includes a floating terminal window and a guided onboarding wizard not shown above.
 
 ---
 
