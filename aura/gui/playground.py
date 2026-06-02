@@ -275,7 +275,11 @@ class AuraPlayground(QWidget):
         self._terminal_window.set_result(process_id, exit_code)
 
     def worker_finished(self, ok: bool, summary: str, needs_followup: bool = False, status: str | None = None) -> None:
-        self.clear()
+        self._code_editor.close_all_tabs()
+        self._controllers.clear()
+        self._worker_code_paths.clear()
+        self._worker_code_tool_names.clear()
+        self._pending_worker_code_content.clear()
         self._info_hub.show_final_summary(ok, summary, needs_followup=needs_followup, status=status)
 
     def worker_cancelled(self):
