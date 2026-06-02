@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QPlainTextEdit,
+    QPushButton,
     QSizePolicy,
     QTabWidget,
     QVBoxLayout,
@@ -15,7 +17,7 @@ from aura.gui.widgets.todo_list import TodoListWidget
 from aura.gui.cards._helpers import _mono_font
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
-from aura.gui.theme import ACCENT, BG, BORDER, FG
+from aura.gui.theme import ACCENT, BG, BORDER, FG, FG_MUTED
 
 
 class InfoHubPane(QWidget):
@@ -159,6 +161,32 @@ class InfoHubPane(QWidget):
         # Auto-scroll to bottom
         sb = self._log_view.verticalScrollBar()
         sb.setValue(sb.maximum())
+
+        # Add Copy Summary button
+        btn = QPushButton("📋 Copy Summary", self._log_tab)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFlat(True)
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                color: {FG_MUTED};
+                font-size: 11px;
+                border: none;
+                padding: 2px 0;
+                text-decoration: none;
+            }}
+            QPushButton:hover {{
+                color: {ACCENT};
+            }}
+        """)
+        receipt_text = f"{'═' * 46}\n{prefix}\n{summary}\n{'═' * 46}"
+        btn.clicked.connect(lambda checked, b=btn, r=receipt_text: self._on_copy_summary(b, r))
+        self._cards_layout.addWidget(btn)
+
+    def _on_copy_summary(self, btn: QPushButton, receipt_text: str) -> None:
+        """Copy summary to clipboard and briefly show 'Copied!'."""
+        QGuiApplication.clipboard().setText(receipt_text)
+        btn.setText("Copied!")
+        QTimer.singleShot(1500, lambda: btn.setText("📋 Copy Summary"))
 
     def clear(self) -> None:
         """Reset the Worker Log: clear text, todo, and dynamic cards."""
