@@ -10,9 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
 # Configuration
-# ---------------------------------------------------------------------------
 
 APP_NAME = "Aura"
 PACKAGE_NAME = "aura"
@@ -56,9 +54,12 @@ SIGN_CERT = os.environ.get("AURA_SIGN_CERT")
 SIGN_PASS = os.environ.get("AURA_SIGN_PASS")
 
 
-# ---------------------------------------------------------------------------
+# Installer Configuration
+INSTALLER_ISS_PATH = "scripts/installer/Aura.iss"
+INSTALLER_BASE_NAME = "AuraSetup"
+
+
 # Version Management
-# ---------------------------------------------------------------------------
 
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -67,9 +68,7 @@ def normalize_version(version: str) -> str:
     """Normalize a version string and require X.Y.Z format."""
     clean_version = version.strip().lstrip("vV")
     if not VERSION_PATTERN.fullmatch(clean_version):
-        raise SystemExit(
-            "Invalid version. Expected X.Y.Z or vX.Y.Z, for example 1.3.4."
-        )
+        raise SystemExit("Invalid version. Expected X.Y.Z or vX.Y.Z, for example 1.3.4.")
     return clean_version
 
 
@@ -112,15 +111,14 @@ def update_files(root: Path, new_version: str) -> None:
     r_content = readme_file.read_text(encoding="utf-8")
     write_text_if_changed(
         readme_file,
-        re.sub(r'badge/version-([\d.]+)-orange', f'badge/version-{new_version}-orange', r_content),
+        re.sub(r"badge/version-([\d.]+)-orange", f"badge/version-{new_version}-orange", r_content),
     )
-    
+
     print(f"Version updated to {new_version} in version.py, pyproject.toml, and README.md")
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
+
 
 def run(cmd: list[str]) -> None:
     """Run a subprocess command and fail loudly if it errors."""
@@ -134,18 +132,19 @@ def create_build_venv(root: Path) -> Path:
     if venv_dir.exists():
         print("Cleaning up old build environment...")
         shutil.rmtree(venv_dir, ignore_errors=True)
-    
+
     print("Creating pristine build environment...")
     import venv
+
     venv.create(venv_dir, with_pip=True)
-    
+
     python_exe = venv_dir / "Scripts" / "python.exe"
     if not python_exe.exists():
         raise SystemExit(f"Failed to find python executable in {venv_dir}")
-        
+
     print("Installing Aura and build dependencies into pristine environment...")
     run([str(python_exe), "-m", "pip", "install", "-e", ".", "nuitka", "zstandard"])
-    
+
     return python_exe
 
 
@@ -160,11 +159,7 @@ def validate_project_paths(root: Path) -> None:
     ]
     missing = [path for path in required_paths if not path.exists()]
     media_dir = root / MEDIA_DIR
-    missing.extend(
-        media_dir / filename
-        for filename in REQUIRED_MEDIA_FILES
-        if not (media_dir / filename).is_file()
-    )
+    missing.extend(media_dir / filename for filename in REQUIRED_MEDIA_FILES if not (media_dir / filename).is_file())
     if missing:
         details = "\n".join(f"  - {path}" for path in missing)
         raise SystemExit(f"Missing required build files:\n{details}")
@@ -210,25 +205,87 @@ def zip_distribution(root: Path, final_dist_dir: Path) -> Path:
 def copy_to_desktop(zip_path: Path) -> None:
     """Copy the final ZIP to the user's desktop, handling OneDrive redirects."""
     home = Path.home()
-    
+
     # Try common desktop locations, prioritizing OneDrive
     candidates = [
         home / "OneDrive" / "Desktop",
         home / "Desktop",
     ]
-    
+
     target_desktop = None
     for cand in candidates:
         if cand.exists():
             target_desktop = cand
             break
-            
+
     if target_desktop:
         target = target_desktop / ZIP_NAME
         shutil.copy2(zip_path, target)
         print(f"Success! Release ZIP copied to: {target}")
     else:
         print("Could not find Desktop folder to copy the release ZIP.")
+
+
+def find_iscc() -> Path | None:
+    """Find Inno Setup's iscc.exe compiler."""
+    exe = shutil.which("iscc")
+    if exe:
+        return Path(exe)
+    candidates = [
+        "C:\\Program Files (x86)\\Inno Setup 6\\iscc.exe",
+        "C:\\Program Files\\Inno Setup 6\\iscc.exe",
+        "C:\\Program Files (x86)\\Inno Setup\\iscc.exe",
+        "C:\\Program Files\\Inno Setup\\iscc.exe",
+    ]
+    for candidate in candidates:
+        path = Path(candidate)
+        if path.exists():
+            return path
+    return None
+
+
+def create_installer(dist_dir: Path, version: str, installer_flag: bool | None) -> Path | None:
+    """Build an Inno Setup installer from the dist directory."""
+    if installer_flag is False:
+        print("Skipping installer creation (--no-installer).")
+        return None
+
+    iscc = find_iscc()
+    if installer_flag is True and iscc is None:
+        raise SystemExit(
+            "Cannot create installer: iscc.exe not found. Install Inno Setup 6 or ensure iscc.exe is on PATH."
+        )
+
+    if iscc is None:
+        print("iscc.exe not found. Skipping installer creation.")
+        print("Install Inno Setup 6 to enable installer builds.")
+        return None
+
+    root = Path(__file__).resolve().parent.parent
+    iss_path = root / INSTALLER_ISS_PATH
+    if not iss_path.exists():
+        raise SystemExit(f"Installer script not found: {iss_path}")
+
+    output_dir = root / OUTPUT_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        str(iscc),
+        f"/DMyAppVersion={version}",
+        f"/DSourceDir={dist_dir}",
+        str(iss_path),
+    ]
+    run(cmd)
+
+    installer_path = output_dir / f"{INSTALLER_BASE_NAME}-{version}.exe"
+    if not installer_path.exists():
+        raise SystemExit(
+            f"Expected installer not found: {installer_path}\n"
+            "Check that the ISS script outputs to the expected location."
+        )
+
+    print(f"Installer created: {installer_path}")
+    return installer_path
 
 
 def create_nuitka_command(
@@ -279,9 +336,8 @@ def create_nuitka_command(
     return cmd
 
 
-# ---------------------------------------------------------------------------
 # Main Build Flow
-# ---------------------------------------------------------------------------
+
 
 def resolve_build_version(
     root: Path,
@@ -305,14 +361,12 @@ def resolve_build_version(
 
     # Default to interactive if not skipping and no version provided
     current = read_current_version(root)
-    raw = input(
-        f"Enter release version X.Y.Z or leave blank to keep {current}: "
-    ).strip()
+    raw = input(f"Enter release version X.Y.Z or leave blank to keep {current}: ").strip()
     if raw:
         version = normalize_version(raw)
         update_files(root, version)
         return version
-    
+
     print(f"Using current version: {current}")
     return current
 
@@ -324,6 +378,7 @@ def build(
     copy_desktop: bool = True,
     low_memory: bool = True,
     jobs: int = DEFAULT_NUITKA_JOBS,
+    installer: bool | None = None,
 ) -> None:
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
@@ -361,9 +416,7 @@ def build(
     def get_venv_package_path(pkg: str) -> Path | None:
         try:
             out = subprocess.check_output(
-                [str(python_exe), "-c", f"import {pkg}; print({pkg}.__file__)"],
-                text=True,
-                stderr=subprocess.DEVNULL
+                [str(python_exe), "-c", f"import {pkg}; print({pkg}.__file__)"], text=True, stderr=subprocess.DEVNULL
             ).strip()
             return Path(out).resolve().parent
         except subprocess.CalledProcessError:
@@ -418,16 +471,17 @@ def build(
     if copy_desktop:
         copy_to_desktop(zip_path)
 
+    installer_path = create_installer(final_dist_dir, new_version, installer)
+    if installer_path:
+        print(f"Installer created at: {installer_path}")
+
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Build Aura with Nuitka.")
     parser.add_argument(
         "--version",
-        help=(
-            "Set project version before building. When omitted, the user "
-            "is prompted to enter a version (default)."
-        ),
+        help=("Set project version before building. When omitted, the user is prompted to enter a version (default)."),
     )
     parser.add_argument(
         "--skip-version-update",
@@ -453,16 +507,34 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Disable Nuitka low-memory mode. This may be faster but can trigger MSVC heap exhaustion.",
     )
+    parser.add_argument(
+        "--installer",
+        action="store_true",
+        default=None,
+        help="Enable installer creation. Auto-detects if iscc.exe is available.",
+    )
+    parser.add_argument(
+        "--no-installer",
+        action="store_true",
+        help="Explicitly skip installer creation.",
+    )
     return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
     args = parse_args(sys.argv[1:])
+
+    installer: bool | None = None
+    if args.installer:
+        installer = True
+    if args.no_installer:
+        installer = False
+
     build(
         args.version,
         skip_version_update=args.skip_version_update,
         copy_desktop=not args.no_copy_desktop,
         low_memory=not args.no_low_memory,
         jobs=args.jobs,
+        installer=installer,
     )
-

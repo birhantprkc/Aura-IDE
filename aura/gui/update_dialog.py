@@ -142,7 +142,7 @@ class UpdateDialog(QDialog):
         self._row1_val.setText("Packaged (Windows)")
         self._row2_label.setText("Current version:")
         self._row3_label.setText("Latest version:")
-        self._row4_label.setText("Update asset:")
+        self._row4_label.setText("Release assets:")
         self._action_btn.setText("Install Update")
 
     def reject(self) -> None:  # type: ignore[override]
@@ -173,7 +173,7 @@ class UpdateDialog(QDialog):
             reply = QMessageBox.question(
                 self,
                 "Install Update",
-                "Aura will close, install the update, and relaunch. Continue?",
+                "Aura will close and launch the installer.\n\nThe installer will replace the app files and relaunch Aura.\n\nContinue?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes,
             )
@@ -260,7 +260,7 @@ class UpdateDialog(QDialog):
 
         if result.success:
             if is_packaged():
-                self._summary.setText("Update script launched. Aura will now exit.")
+                self._summary.setText("Installer launched. Aura will now exit to complete the update.")
                 from PySide6.QtCore import QTimer
                 from PySide6.QtWidgets import QApplication
 

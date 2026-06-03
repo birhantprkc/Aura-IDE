@@ -923,7 +923,7 @@ def _launch_installer(
         "/SUPPRESSMSGBOXES",
         "/CURRENTUSER",
         "/NORESTART",
-        "/LAUNCHAFTER",
+        "LAUNCHAFTERUPDATE=1",
     ]
     cmd = [str(installer_path), *flags]
     if output_callback:
