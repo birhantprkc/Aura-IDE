@@ -356,6 +356,8 @@ class WorkerEventRelay(QObject):
             "hunk_count",
             "backup",
             "blocked_command",
+            "missing_dependency",
+            "environment_setup_needed",
             "write_outcome",
             "pre_existing_environment_issues",
             "introduced_environment_issues",
@@ -390,10 +392,11 @@ def _is_validation_terminal_record(record: dict[str, Any]) -> bool:
     if not command:
         return False
     normalized = " ".join(command.lower().split())
+    python_exe = r"(?:(?:\"[^\"]*python(?:\.exe)?\")|(?:'[^']*python(?:\.exe)?')|\S*python(?:\.exe)?|py)"
 
     known_patterns = (
-        r"(^|[;&|]\s*)(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+py_compile\b",
-        r"(^|[;&|]\s*)(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+(?:pytest|unittest)\b",
+        rf"(^|[;&|]\s*){python_exe}\s+-m\s+py_compile\b",
+        rf"(^|[;&|]\s*){python_exe}\s+-m\s+(?:pytest|unittest|ruff|mypy)\b",
         r"(^|[;&|]\s*)pytest\b",
         r"(^|[;&|]\s*)unittest\b",
         r"(^|[;&|]\s*)ruff\s+(?:check|format\s+--check)\b",
@@ -412,7 +415,8 @@ def _is_validation_terminal_record(record: dict[str, Any]) -> bool:
 
 
 def _is_python_assertion_command(normalized_command: str) -> bool:
-    if not re.search(r"(^|[;&|]\s*)(?:python(?:\d+(?:\.\d+)?)?|py)\s+-c\s+", normalized_command):
+    python_exe = r"(?:(?:\"[^\"]*python(?:\.exe)?\")|(?:'[^']*python(?:\.exe)?')|\S*python(?:\.exe)?|py)"
+    if not re.search(rf"(^|[;&|]\s*){python_exe}\s+-c\s+", normalized_command):
         return False
     return any(token in normalized_command for token in ("assert ", "raise systemexit", "sys.exit("))
 

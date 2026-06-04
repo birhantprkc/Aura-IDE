@@ -142,7 +142,7 @@ def test_worker_py_compile_still_executes(
     assert terminal_results[-1].ok is True
 
 
-def test_worker_pytest_still_executes(
+def test_worker_pytest_missing_from_project_env_reports_setup_needed(
     worker_manager: tuple[ConversationManager, MagicMock],
     worker_backend: MagicMock,
 ) -> None:
@@ -154,8 +154,47 @@ def test_worker_pytest_still_executes(
         iter([Done(finish_reason="stop", full_message={"role": "assistant", "content": "Done.", "reasoning_content": None})]),
     ]
 
+    with patch("aura.conversation.tool_runner.SandboxExecutor") as sandbox_cls:
+        manager.send(
+            on_event=events.append,
+            approval_cb=_approval_cb,
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            hook_name="generate_worker_code",
+        )
+
+    sandbox_cls.assert_not_called()
+    terminal_results = [
+        event for event in events
+        if isinstance(event, ToolResult) and event.name == "run_terminal_command"
+    ]
+    assert terminal_results[-1].ok is False
+    payload = json.loads(terminal_results[-1].result)
+    assert payload["failure_class"] == "project_environment_missing_dependency"
+    assert payload["missing_dependency"] == "pytest"
+    assert payload["blocked_command"] == command
+
+
+def test_worker_pytest_executes_through_project_venv_when_available(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, tools = worker_manager
+    workspace_root = tools.workspace_root
+    python = workspace_root / ".venv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    events: list[Event] = []
+    command = "pytest tests/test_x.py"
+    worker_backend.side_effect = [
+        iter([_done_with_tool("term1", "run_terminal_command", {"command": command})]),
+        iter([Done(finish_reason="stop", full_message={"role": "assistant", "content": "Done.", "reasoning_content": None})]),
+    ]
+
     with (
         patch("aura.conversation.tool_runner.load_settings") as load_settings,
+        patch("aura.python_env.project_module_available", return_value=True),
         patch("aura.conversation.tool_runner.SandboxExecutor") as sandbox_cls,
     ):
         load_settings.return_value = MagicMock(sandbox_mode="host")
@@ -178,12 +217,9 @@ def test_worker_pytest_still_executes(
         )
 
     sandbox.run_terminal_command.assert_called_once()
-    assert sandbox.run_terminal_command.call_args.kwargs["command"] == command
-    terminal_results = [
-        event for event in events
-        if isinstance(event, ToolResult) and event.name == "run_terminal_command"
-    ]
-    assert terminal_results[-1].ok is True
+    rewritten = sandbox.run_terminal_command.call_args.kwargs["command"]
+    assert str(python) in rewritten
+    assert "-m pytest tests/test_x.py" in rewritten
 
 
 def test_worker_explicit_validation_command_executes(

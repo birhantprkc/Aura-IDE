@@ -80,6 +80,7 @@ class CodeEditorPane(QWidget):
         self._tab_index_to_tool_id: dict[int, str] = {}
         self._file_tabs: dict[Path, QPlainTextEdit] = {}
         self._editor_file_paths: dict[QPlainTextEdit, Path] = {}
+        self._editor_highlighters: dict[QPlainTextEdit, PygmentsHighlighter] = {}
         self._workspace_root: Path | None = None
         self._read_only_mode = False
 
@@ -117,7 +118,9 @@ class CodeEditorPane(QWidget):
 
         editor = self._create_editor(resolved)
         editor.setPlainText(text)
-        PygmentsHighlighter(editor.document(), language_from_path(str(resolved)))
+        self._editor_highlighters[editor] = PygmentsHighlighter(
+            editor.document(), language_from_path(str(resolved))
+        )
 
         idx = self._tabs.addTab(editor, resolved.name)
         self._tabs.setTabToolTip(idx, self._rel_path(resolved))
@@ -170,7 +173,7 @@ class CodeEditorPane(QWidget):
         editor = self._create_editor(Path(file_path))
 
         # Attach syntax highlighter
-        PygmentsHighlighter(editor.document(), language)
+        self._editor_highlighters[editor] = PygmentsHighlighter(editor.document(), language)
 
         idx = self._tabs.addTab(editor, f"{basename} ●")
         self._tabs.setCurrentIndex(idx)
@@ -359,6 +362,7 @@ class CodeEditorPane(QWidget):
         self._tab_index_to_tool_id.clear()
         self._file_tabs.clear()
         self._editor_file_paths.clear()
+        self._clear_highlighters()
 
         # Remove all tabs without triggering close handlers
         self._tabs.blockSignals(True)
@@ -387,6 +391,7 @@ class CodeEditorPane(QWidget):
             if idx >= 0:
                 self._tabs.removeTab(idx)
             self._editor_file_paths.pop(editor, None)
+            self._detach_highlighter(editor)
         self._tabs.blockSignals(False)
 
     def ask_about_current_selection(self) -> None:
@@ -581,6 +586,7 @@ class CodeEditorPane(QWidget):
 
         if isinstance(closed_widget, QPlainTextEdit):
             self._editor_file_paths.pop(closed_widget, None)
+            self._detach_highlighter(closed_widget)
 
         # Rebuild the index -> tool_id mapping since indices shifted
         self._tab_index_to_tool_id.clear()
@@ -598,6 +604,19 @@ class CodeEditorPane(QWidget):
         for path in stale_paths:
             editor = self._file_tabs.pop(path)
             self._editor_file_paths.pop(editor, None)
+            self._detach_highlighter(editor)
+
+    def _detach_highlighter(self, editor: QPlainTextEdit) -> None:
+        highlighter = self._editor_highlighters.pop(editor, None)
+        if highlighter is not None:
+            highlighter.setDocument(None)
+            highlighter.deleteLater()
+
+    def _clear_highlighters(self) -> None:
+        for highlighter in self._editor_highlighters.values():
+            highlighter.setDocument(None)
+            highlighter.deleteLater()
+        self._editor_highlighters.clear()
 
     def _rel_path(self, path: Path) -> str:
         if self._workspace_root is None:

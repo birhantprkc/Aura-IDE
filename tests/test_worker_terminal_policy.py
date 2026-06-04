@@ -84,6 +84,22 @@ def test_worker_terminal_policy_blocks_unknown_commands_by_default() -> None:
     assert payload["failure_class"] == "worker_terminal_not_validation"
 
 
+def test_worker_terminal_policy_requires_explicit_project_env_setup() -> None:
+    command = "python -m venv .venv"
+
+    decision = worker_terminal_command_allowed(command)
+    payload = decision.to_blocked_payload(command)
+
+    assert decision.allowed is False
+    assert payload["failure_class"] == "project_environment_setup_needs_approval"
+
+    explicit = worker_terminal_command_allowed(
+        command,
+        explicit_validation_commands=[command],
+    )
+    assert explicit.allowed is True
+
+
 def test_worker_terminal_policy_blocks_generic_git_reset() -> None:
     command = "git reset --soft HEAD~1"
     decision = worker_terminal_command_allowed(command)

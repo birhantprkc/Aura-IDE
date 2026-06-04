@@ -405,6 +405,12 @@ class _DispatchProxy(QObject):
             if r.get("failure_class")
             in {"source_inspection_command_blocked", "worker_terminal_not_validation"}
         ]
+        environment_setup_blockers = [
+            r
+            for r in relay.failed_tool_results
+            if r.get("failure_class") == "project_environment_missing_dependency"
+            or r.get("environment_setup_needed")
+        ]
         failed_validation = _unrecovered_validation_failures(validation_results)
         validation_ran = bool(validation_results)
         quality_bounces = list(getattr(relay, "quality_bounces", []))
@@ -456,6 +462,14 @@ class _DispatchProxy(QObject):
                 suffix = f": {command}" if command else "."
                 result_errors.append(
                     "Worker terminal command was blocked because it was not validation/build/test"
+                    + suffix
+                )
+            for r in environment_setup_blockers:
+                dependency = str(r.get("missing_dependency") or "dependency")
+                command = str(r.get("blocked_command") or "")[:120]
+                suffix = f": {command}" if command else "."
+                result_errors.append(
+                    f"Project environment missing dependency '{dependency}'"
                     + suffix
                 )
             # Failed validation commands are hard errors
@@ -534,6 +548,7 @@ class _DispatchProxy(QObject):
         has_quality_bounce_blocker = bool(quality_bounces) and not relay.write_results
         has_source_inspection_blocker = bool(source_inspection_blockers)
         has_terminal_policy_blocker = bool(terminal_policy_blockers)
+        has_environment_setup_blocker = bool(environment_setup_blockers)
         has_no_work = not relay.touched_files and not relay.failed_tool_results and not quality_bounces and not internal_error and not relay.api_errors
         has_unverified_acceptance = acceptance_unverified or validation_not_run
 
@@ -546,7 +561,10 @@ class _DispatchProxy(QObject):
             ok = False
             needs_followup = not has_internal_failure
             recoverable = (
-                has_validation_failure or has_source_inspection_blocker or has_terminal_policy_blocker
+                has_validation_failure
+                or has_source_inspection_blocker
+                or has_terminal_policy_blocker
+                or has_environment_setup_blocker
             ) and not has_internal_failure
         elif has_quality_bounce_blocker:
             ok = False
@@ -609,6 +627,7 @@ class _DispatchProxy(QObject):
             has_recoverable_edit_blocker=has_recoverable_edit_blocker,
             has_quality_bounce_blocker=has_quality_bounce_blocker,
             has_source_inspection_blocker=has_source_inspection_blocker,
+            has_environment_setup_blocker=has_environment_setup_blocker,
             has_no_work=has_no_work,
             is_implementation=is_implementation,
             has_unverified_acceptance=has_unverified_acceptance,
@@ -644,6 +663,7 @@ class _DispatchProxy(QObject):
             "recoverable_write_failures": recoverable_write_failures,
             "source_inspection_blockers": source_inspection_blockers,
             "terminal_policy_blockers": terminal_policy_blockers,
+            "environment_setup_blockers": environment_setup_blockers,
             "quality_bounces": quality_bounces,
             "patch_quality_unresolved": patch_quality_unresolved,
             "terminal_results": getattr(relay, "terminal_results", []),
@@ -739,6 +759,7 @@ def _compute_outcome_status(
     has_applied_writes: bool = False,
     structured_failure: dict[str, Any] | None = None,
     write_failures: list[dict[str, Any]] | None = None,
+    has_environment_setup_blocker: bool = False,
 ) -> str:
     """Map the boolean severity classification to a WorkerOutcomeStatus."""
     from aura.conversation.dispatch import WorkerOutcomeStatus as S
@@ -780,6 +801,8 @@ def _compute_outcome_status(
     if has_internal_failure or any(fc in {"internal_error", "worker_internal_error", "harness_error"} for fc in failure_classes):
         return S.harness_error.value
     if has_source_inspection_blocker or "source_inspection_command_blocked" in failure_classes:
+        return S.needs_followup.value
+    if has_environment_setup_blocker or "project_environment_missing_dependency" in failure_classes:
         return S.needs_followup.value
     if has_hard_failure:
         if structured_status == "phased":

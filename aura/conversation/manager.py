@@ -62,6 +62,7 @@ from aura.conversation.tools._types import (
     ApprovalRequest,
 )
 from aura.conversation.tools.registry import ToolRegistry
+from aura.python_env import detect_project_python_env, quote_command_arg
 
 EventCallback = Callable[[Event], None]
 
@@ -924,7 +925,8 @@ class ConversationManager:
         if not paths:
             return True, ""
         workspace_root = self._tools.workspace_root
-        compiler = sys.executable
+        env = detect_project_python_env(Path(workspace_root))
+        compiler = str(env.python_for_compile)
         outputs: list[str] = []
         all_ok = True
         for path in sorted(paths):
@@ -955,15 +957,15 @@ class ConversationManager:
                 outputs.append(f"{normalized}: timed out after 30s")
             except FileNotFoundError:
                 all_ok = False
-                outputs.append(f"{normalized}: sys.executable not found")
+                outputs.append(f"{normalized}: project Python interpreter not found")
             except OSError as exc:
                 all_ok = False
                 outputs.append(f"{normalized}: OSError: {exc}")
         combined = "\n".join(outputs)
         return all_ok, combined
 
-    @staticmethod
     def _emit_auto_py_compile_result(
+        self,
         *,
         paths: list[str],
         ok: bool,
@@ -977,7 +979,9 @@ class ConversationManager:
         ]
         if not product_paths:
             return
-        command = "python -m py_compile " + " ".join(product_paths)
+        env = detect_project_python_env(Path(self._tools.workspace_root))
+        compiler = quote_command_arg(env.python_for_compile)
+        command = compiler + " -m py_compile " + " ".join(product_paths)
         payload = {
             "ok": ok,
             "command": command,

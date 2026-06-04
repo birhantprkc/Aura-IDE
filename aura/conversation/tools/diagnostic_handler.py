@@ -1,6 +1,9 @@
+import os
 import shlex
 import subprocess
 from pathlib import Path
+
+from aura.python_env import build_project_tool_command
 
 ALLOWED_EXECUTABLES = {
     "python",
@@ -50,7 +53,7 @@ def parse_and_validate(command: str) -> list[str]:
         raise ValueError("Command cannot be empty")
 
     try:
-        tokens = shlex.split(command)
+        tokens = shlex.split(command, posix=(os.name != "nt"))
     except Exception:
         import sys
 
@@ -60,10 +63,13 @@ def parse_and_validate(command: str) -> list[str]:
     if not tokens:
         raise ValueError("Command cannot be empty")
 
-    exe = tokens[0]
+    exe = tokens[0].strip("'\"")
+    exe_name = exe.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if exe_name.endswith(".exe"):
+        exe_name = exe_name[:-4]
     if exe == "grep":
         raise ValueError("Command rejected: use 'rg' or grep_search instead of bare 'grep' for Windows portability.")
-    if exe not in ALLOWED_EXECUTABLES:
+    if exe not in ALLOWED_EXECUTABLES and not _is_project_venv_python(exe):
         raise ValueError(f"Command rejected: executable '{exe}' is not in the allowed list.")
 
     for token in tokens:
@@ -87,7 +93,7 @@ def parse_and_validate(command: str) -> list[str]:
             if token in BLOCKED_GIT_SUBCOMMANDS:
                 raise ValueError(f"Command rejected: 'git {token}' is not allowed (blocked git subcommand: {token})")
 
-    if exe in {"python", "python3", "py"}:
+    if exe in {"python", "python3", "py"} or _is_project_venv_python(exe):
         for i, token in enumerate(tokens):
             if token == "-c" and i + 1 < len(tokens):
                 script = tokens[i + 1].lower()
@@ -100,11 +106,38 @@ def parse_and_validate(command: str) -> list[str]:
     return tokens
 
 
+def _is_project_venv_python(executable: str) -> bool:
+    normalized = executable.strip("'\"").replace("\\", "/").lower()
+    return (
+        normalized.endswith("/.venv/scripts/python.exe")
+        or normalized.endswith("/venv/scripts/python.exe")
+        or normalized.endswith("/.venv/bin/python")
+        or normalized.endswith("/venv/bin/python")
+    )
+
+
 def run_diagnostic_command(command: str, timeout: int = 30, workspace_root: Path | None = None) -> dict:
     if workspace_root is None:
         raise ValueError("workspace_root is required")
     workspace_root = Path(workspace_root).resolve()
 
+    command_plan = build_project_tool_command(workspace_root, command, explicit=True)
+    if command_plan.missing_dependency:
+        return {
+            "ok": False,
+            "stdout": "",
+            "stderr": (
+                f"Project environment is missing dependency '{command_plan.missing_dependency}'. "
+                "Install it into the project .venv before running this command."
+            ),
+            "exit_code": -1,
+            "timed_out": False,
+            "command": command,
+            "failure_class": "project_environment_missing_dependency",
+            "missing_dependency": command_plan.missing_dependency,
+            "environment_setup_needed": True,
+        }
+    command = command_plan.command
     tokens = parse_and_validate(command)
 
     from aura.paths import safe_is_relative_to

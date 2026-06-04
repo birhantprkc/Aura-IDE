@@ -33,6 +33,11 @@ from aura.conversation.tools._types import (
 )
 from aura.conversation.tools.registry import ToolRegistry
 from aura.hooks import hooks
+from aura.python_env import (
+    build_project_python_command,
+    build_project_tool_command,
+    project_env_missing_dependency_payload,
+)
 from aura.sandbox import SandboxExecutor, SandboxResult
 
 DEFAULT_TERMINAL_TIMEOUT_SECONDS = 45
@@ -295,6 +300,10 @@ class ToolRunner:
             return {"_terminal_payload": {"ok": False, "error": "command is required", "command": ""}}
 
         if mode == "worker":
+            explicit = self._matches_explicit_validation(
+                str(command),
+                explicit_validation_commands,
+            )
             decision = worker_terminal_command_allowed(
                 str(command),
                 explicit_validation_commands=explicit_validation_commands,
@@ -317,6 +326,40 @@ class ToolRunner:
                     "reason": decision.failure_class,
                     "_terminal_payload": blocked_payload,
                 }
+
+            command_plan = build_project_tool_command(
+                self._workspace_root,
+                str(command),
+                explicit=explicit,
+            )
+            if command_plan.missing_dependency:
+                blocked_payload = project_env_missing_dependency_payload(
+                    str(command),
+                    command_plan.missing_dependency,
+                    explicit=explicit,
+                )
+                payload = json.dumps(blocked_payload, ensure_ascii=False)
+                self._history.append_tool_result(tool_call_id, payload)
+                on_event(
+                    ToolResult(
+                        tool_call_id=tool_call_id,
+                        name="run_terminal_command",
+                        ok=False,
+                        result=payload,
+                    )
+                )
+                return {
+                    "recoverable": True,
+                    "phase_boundary": False,
+                    "reason": "project_environment_missing_dependency",
+                    "_terminal_payload": blocked_payload,
+                }
+            command = command_plan.command
+        else:
+            command = build_project_python_command(
+                self._workspace_root,
+                str(command),
+            ).command
 
         timeout = self._resolve_terminal_timeout(
             command=command,
@@ -407,6 +450,17 @@ class ToolRunner:
 
         return max(1, min(timeout, MAX_TERMINAL_TIMEOUT_SECONDS))
 
+    @staticmethod
+    def _matches_explicit_validation(
+        command: str,
+        explicit_validation_commands: list[str] | None,
+    ) -> bool:
+        normalized = " ".join(str(command or "").strip().lower().split())
+        return any(
+            normalized == " ".join(str(explicit or "").strip().lower().split())
+            for explicit in explicit_validation_commands or []
+        )
+
     def _is_py_compile_command(self, command: str) -> bool:
         normalized = " ".join(command.strip().lower().split())
-        return "python -m py_compile" in normalized
+        return " -m py_compile" in normalized or "python -m py_compile" in normalized

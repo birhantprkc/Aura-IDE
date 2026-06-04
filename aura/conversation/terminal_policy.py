@@ -56,6 +56,18 @@ def worker_terminal_command_allowed(
     if _matches_explicit_validation(command, explicit_validation_commands):
         return TerminalPolicyDecision(True, "explicit validation command", "", "", "")
 
+    if _looks_like_project_environment_setup(command):
+        return TerminalPolicyDecision(
+            False,
+            "Project environment setup requires an explicit user-approved command.",
+            "project_environment_setup_needs_approval",
+            "typed_blocker",
+            (
+                "Ask for explicit approval before creating .venv or installing dependencies. "
+                "Never install dependencies into global/system Python by default."
+            ),
+        )
+
     classification = classify_worker_terminal_command(command)
     if classification == "validation":
         return TerminalPolicyDecision(True, "validation command", "", "", "")
@@ -104,7 +116,7 @@ def _looks_like_validation(normalized: str) -> bool:
 def _segment_looks_like_validation(segment: str) -> bool:
     validation_patterns = (
         r"^(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+py_compile\b",
-        r"^(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+(?:pytest|unittest)\b",
+        r"^(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+(?:pytest|unittest|ruff|mypy)\b",
         r"^pytest\b",
         r"^unittest\b",
         r"^ruff\s+(?:check|format\s+--check)\b",
@@ -114,6 +126,21 @@ def _segment_looks_like_validation(segment: str) -> bool:
         r"^go\s+test\b",
     )
     return any(re.search(pattern, segment) for pattern in validation_patterns)
+
+
+def _looks_like_project_environment_setup(command: str) -> bool:
+    normalized = _normalize_command(command).replace("\\", "/")
+    return bool(
+        re.match(r"^(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+venv\s+\.venv$", normalized)
+        or re.match(
+            r"^(?:\.venv|venv)/(?:scripts/python\.exe|bin/python)\s+-m\s+pip\s+install\s+-r\s+requirements\.txt$",
+            normalized,
+        )
+        or re.match(
+            r"^(?:\.venv|venv)/(?:scripts/python\.exe|bin/python)\s+-m\s+pip\s+install\s+-e\s+\.\[?[a-z0-9_,.-]*\]?$",
+            normalized,
+        )
+    )
 
 
 def _looks_like_source_inspection(normalized: str) -> bool:

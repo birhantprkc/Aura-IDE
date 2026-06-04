@@ -133,12 +133,15 @@ def test_close_worker_tabs_stops_streamers(qapp) -> None:
     pane.stream_content("tool-1", "print('hello')\n")
 
     state = pane._typing_state["tool-1"]
+    editor = pane._editors["tool-1"]
     assert state["streamer"].is_active()
+    assert editor in pane._editor_highlighters
 
     pane.close_worker_tabs()
 
     assert pane._typing_state == {}
     assert pane._editors == {}
+    assert pane._editor_highlighters == {}
     assert pane._tabs.count() == 0
 
 
@@ -160,3 +163,18 @@ def test_repeated_writes_to_same_path_keep_aliases(qapp) -> None:
         state["streamer"]._tick(1000)
 
     assert pane._tabs.tabText(0) == "demo.py ✓"
+
+
+def test_open_file_retains_highlighter_until_tab_close(qapp, tmp_path) -> None:
+    target = tmp_path / "demo.py"
+    target.write_text("print('hello')\n", encoding="utf-8")
+    pane = CodeEditorPane()
+
+    pane.open_file(target)
+
+    editor = pane._file_tabs[target.resolve()]
+    assert editor in pane._editor_highlighters
+
+    pane._on_tab_close_requested(0)
+
+    assert editor not in pane._editor_highlighters

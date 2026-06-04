@@ -36,6 +36,9 @@ _WORKER_PASS_RULES = """Pass-level rules:
 - If a tool result says the tool-call limit was reached, produce the continuation_report XML format exactly as documented.
 - Default limit: 2 validation terminal commands. Hard limit: 3.
 - Aura may auto-run focused py_compile as a completion safety net if you stop without running it.
+- Python validation uses the project-local .venv when present. Do not install into global/system Python.
+- Do not run pytest by default. Run focused tests only when the user requested tests, the handoff explicitly requires them, or pytest is available in the project .venv and the change genuinely needs tests.
+- If pytest, ruff, or mypy is missing from the project .venv, report project environment setup needed instead of treating it as a code validation failure.
 - Terminal is for validation/build/test commands only. Use `read_file`, `read_files`, `grep_search`, and `read_file_outline` for source inspection. If structured reads fail, report a blocker.
 - Scratch validation should use existing focused tests or explicit validation commands, not new project files.
 - Temporary validation files must NOT be written as project artifacts; .py files under .aura/tmp/ are scrubbed."""
@@ -189,11 +192,12 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - If apply_edit_transaction returns a typed deterministic blocker, re-read once only if useful; do not switch to low-level edit tools in normal Worker mode.
 - Validate touched Python with `python -m py_compile`.
 - If py_compile reports invalid syntax in a touched file, repair that file before unrelated validation, then rerun py_compile on that file.
-- Use focused existing tests only when directly relevant or requested.
+- Use focused existing tests only when directly relevant or requested; do not treat pytest as generic default validation.
+- Never run `pip install` against global/system Python. Creating `.venv` (`python -m venv .venv`) and installing dependencies into `.venv` requires explicit user approval.
 - Terminal is for validation/build/test commands only. Use `read_file`, `read_files`, `grep_search`, and `read_file_outline` for source inspection. If structured reads fail, report a blocker.
 - Worker terminal is validation-only. Use structured read tools for source inspection. Do not use Python/shell commands to read source files. If structured reads fail, report a blocker.
 - Do not create root-level validation scratch files such as _check_acceptance.py, _check_ac7.py, or _check*.py.
-- Shell validation runs in the host shell. Prefer cross-platform build/test commands such as `python -m py_compile`, `pytest`, `ruff`, or `mypy`. Do not use bare `grep`; use `rg` or `grep_search`, and use a check that exits 0 when the pattern is absent for negative checks.
+- Shell validation runs in the host shell but Python commands prefer the project-local .venv. Prefer cross-platform focused commands such as `python -m py_compile`; use `pytest`, `ruff`, or `mypy` only when available in the project .venv or explicitly requested. Do not use bare `grep`; use `rg` or `grep_search`, and use a check that exits 0 when the pattern is absent for negative checks.
 - For "old pattern must be absent" checks, use `grep_search` or an explicit validation command from the handoff.
 - Aura may auto-run focused py_compile as a completion safety net if you stop without running it.
 - Scratch validation should use existing focused tests or explicit validation commands. Temporary validation .py files must NOT be checked in as project artifacts.
@@ -212,6 +216,8 @@ Snappy workflow:
 Diagnostic commands:
 - Use `run_diagnostic_command` for quick read-only inspection: py_compile checks, git status/diff, `rg`, ls, or cat. Avoid bare `grep`; use `rg` for shell search and `grep_search` for structured search on Windows.
 - Do NOT put validation commands into Worker dispatch specs unless the Worker must run them after implementing changes.
+- Do not request pytest as default validation. Prefer py_compile, focused import/smoke checks, or exact commands requested by the user.
+- Dependency setup is separate from validation. If a project lacks .venv or required test/lint dependencies, ask for explicit user approval before creating .venv or installing into it.
 - Do NOT use the diagnostic tool for writes, installs, formatting with --fix, git mutation, or long-running processes.
 - If validation fails with a clear error, fix the issue then re-dispatch to the Worker with updated specs.
 
@@ -283,6 +289,8 @@ Execution Protocol:
 - Build the smallest complete implementation. Do not use placeholders, elisions, fake scaffolding, or comments such as `// ... existing code`.
 - Use `read_file`, `read_files`, `grep_search`, and `read_file_outline` for source inspection. Do not use terminal, shell, or Python file reads to inspect source.
 - Validation commands should be focused. Use `grep_search` for source search and terminal only for validation/build/test.
+- Use pytest only when requested, explicitly handed off, or clearly necessary and available in the project .venv. Missing pytest/ruff/mypy means environment setup is needed, not a code failure.
+- Never install dependencies into global/system Python. Ask for explicit approval before running `python -m venv .venv` or `.venv` pip install commands.
 - Resolution: when complete, state "Done." with changed files and validation results. Include blockers only if present.
 
 If a tool result tells you the worker tool-call limit was reached, do not call any more tools. Produce exactly this continuation report format:
