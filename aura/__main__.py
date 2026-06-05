@@ -73,7 +73,7 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     app = QApplication(qt_argv)
     logger.info("QApplication creation end")
 
-    from aura.config import APP_NAME, PROVIDERS, has_api_key, has_usable_provider_credentials, get_provider_kind, icon_path, load_settings
+    from aura.config import APP_NAME, PROVIDERS, has_usable_provider_configuration, get_provider_kind, icon_path, load_settings
     from aura.gui.theme import apply_theme
 
     app.setWindowIcon(QIcon(str(icon_path())))
@@ -92,7 +92,7 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
 
     if args.startup_smoke:
         logger.info("startup smoke mode: skipping provider warnings")
-    elif not has_usable_provider_credentials():
+    elif not has_usable_provider_configuration():
         # No provider at all is configured/available — show setup dialog.
         logger.info("no providers configured — showing setup dialog")
         from aura.gui.setup_dialog import SetupDialog
@@ -106,12 +106,12 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
         else:
             logger.info("user chose Exit")
             return 0
-    elif not has_api_key(selected_provider):
-        # Selected provider doesn't have a key or CLI available, but another one does.
+    elif not has_usable_provider_configuration(selected_provider):
+        # Selected provider is not configured/available, but another one is.
         cfg = PROVIDERS[selected_provider]
         kind = get_provider_kind(selected_provider)
         if kind == "external_cli":
-            logger.info("selected provider is external CLI — no key needed, skipping warning")
+            logger.info("selected provider external CLI unavailable — skipping warning")
             # External CLI providers don't need a key — the user is all set.
         else:
             logger.info("provider key warning start")

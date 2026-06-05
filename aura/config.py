@@ -122,23 +122,45 @@ def resolve_api_key(provider_id: str) -> str:
 def has_api_key(provider_id: str | None = None) -> bool:
     """If provider_id is None, checks the default provider (deepseek).
 
-    For external_cli and local providers, returns True — they don't need keys.
+    Returns whether the provider has a stored or environment API key.
+    For external_cli and local providers, always returns False — they don't use API keys.
     """
     pid = provider_id if provider_id is not None else DEFAULT_PROVIDER
     if not provider_needs_api_key(pid):
-        return True
+        return False
     return get_api_key(pid) is not None
 
 
-def has_usable_provider_credentials() -> bool:
-    """Return True if at least one provider has a usable API key (env var or stored)
-    or an external CLI provider is available on PATH."""
+def has_usable_provider_configuration(provider_id: str | None = None) -> bool:
+    """Return True if a given provider (or any provider) is configured and usable.
+
+    If provider_id is given:
+      - api_key providers: usable if an API key is available
+      - external_cli providers: usable if the CLI executable is on PATH
+      - local providers: not yet supported, returns False
+
+    If provider_id is None: returns True if at least one registered provider is usable.
+    """
+    if provider_id is not None:
+        kind = get_provider_kind(provider_id)
+        if kind == "api_key":
+            return get_api_key(provider_id) is not None
+        if kind == "external_cli":
+            return is_external_cli_available(provider_id)
+        # local providers not yet supported
+        return False
+
     for pid in provider_registry.ids():
-        if has_api_key(pid):
-            return True
-        if is_external_cli_available(pid):
+        if has_usable_provider_configuration(pid):
             return True
     return False
+
+
+def has_usable_provider_credentials() -> bool:
+    """Deprecated: prefer has_usable_provider_configuration().
+
+    Return True if at least one provider is configured and usable."""
+    return has_usable_provider_configuration()
 
 
 def require_api_key() -> str:

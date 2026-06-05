@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 
-from aura.config import APP_NAME, has_usable_provider_credentials, icon_path
+from aura.config import APP_NAME, has_usable_provider_configuration, icon_path
 from aura.gui.theme import ACCENT, BG_RAISED, BORDER, FG, FG_DIM, SUCCESS, WARN
 
 
@@ -391,7 +391,7 @@ class OnboardingDialog(QDialog):
         status_layout = QHBoxLayout(status_frame)
         status_layout.setContentsMargins(16, 14, 16, 14)
 
-        has_creds = has_usable_provider_credentials()
+        has_creds = has_usable_provider_configuration()
         if has_creds:
             indicator_color = SUCCESS
             status_text = "✓  Provider configured"
