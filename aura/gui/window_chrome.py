@@ -116,3 +116,48 @@ class WindowChromeMixin:
             if toolbar is not None:
                 toolbar.update_maximize_icon(self.isMaximized())
         super().changeEvent(event)  # type: ignore[misc]
+
+    # ----- native event: WM_NCHITTEST resize edges/corners -----------------
+
+    def nativeEvent(self, eventType, message):
+        """Handle WM_NCHITTEST on Windows to enable resize from all edges/corners."""
+        if eventType == b"windows_generic_MSG" and not self.isMaximized():
+            import ctypes
+            from ctypes import wintypes
+
+            try:
+                msg = wintypes.MSG.from_address(int(message))
+            except (TypeError, ValueError, AttributeError):
+                return super().nativeEvent(eventType, message)
+
+            if msg.message == 0x0084:  # WM_NCHITTEST
+                # Extract screen-space cursor position from lParam.
+                # LOWORD = x, HIWORD = y, both signed 16-bit.
+                x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                rect = self.frameGeometry()
+                margin = 7
+
+                left = x <= rect.left() + margin
+                right = x >= rect.right() - margin
+                top = y <= rect.top() + margin
+                bottom = y >= rect.bottom() - margin
+
+                if top and left:
+                    return True, 13  # HTTOPLEFT
+                elif top and right:
+                    return True, 14  # HTTOPRIGHT
+                elif bottom and left:
+                    return True, 16  # HTBOTTOMLEFT
+                elif bottom and right:
+                    return True, 17  # HTBOTTOMRIGHT
+                elif left:
+                    return True, 10  # HTLEFT
+                elif right:
+                    return True, 11  # HTRIGHT
+                elif top:
+                    return True, 12  # HTTOP
+                elif bottom:
+                    return True, 15  # HTBOTTOM
+
+        return super().nativeEvent(eventType, message)
