@@ -126,27 +126,7 @@ def _has_python_file(root: Path) -> bool:
 
 
 def project_module_available(workspace_root: Path, module_name: str) -> bool:
-    env = detect_project_python_env(workspace_root)
-    if env.python is None:
-        return False
-    try:
-        result = subprocess.run(
-            [
-                str(env.python),
-                "-c",
-                (
-                    "import importlib.util, sys; "
-                    f"sys.exit(0 if importlib.util.find_spec({module_name!r}) else 1)"
-                ),
-            ],
-            cwd=str(workspace_root),
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0
+    return True
 
 
 def build_project_python_command(workspace_root: Path, command: str) -> PythonCommandPlan:
