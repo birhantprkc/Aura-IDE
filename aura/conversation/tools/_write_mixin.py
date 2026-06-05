@@ -478,6 +478,25 @@ def _mark_not_applied(payload: dict, failure_class: str | None = None) -> dict:
     return payload
 
 
+def _mark_delete_not_applied(payload: dict, failure_class: str | None = None) -> dict:
+    payload = _mark_not_applied(payload, failure_class)
+    payload.setdefault("deleted", False)
+    return payload
+
+
+def _is_delete_protected_path(rel_path: str) -> bool:
+    normalized = _normalize_worker_path(rel_path).lstrip("/")
+    name = normalized.rsplit("/", 1)[-1]
+    return (
+        normalized == ".git"
+        or normalized.startswith(".git/")
+        or normalized == ".aura"
+        or normalized.startswith(".aura/")
+        or name == ".env"
+        or name.startswith(".env.")
+    )
+
+
 def _python_syntax_error_payload(proposal: dict) -> dict | None:
     path = str(proposal.get("rel_path") or proposal.get("path") or "")
     if not path.endswith(".py"):
@@ -595,6 +614,24 @@ class WriteHandlersMixin:
             )
         return self._handle_write("write_file", args, approval_cb, reject_all)
 
+    def _handle_delete_file(self, args, approval_cb, reject_all) -> ToolExecResult:
+        if self._read_only:
+            return ToolExecResult(ok=False, payload=_mark_delete_not_applied({"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"}))
+        if self._mode == "planner":
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied({
+                    "ok": False,
+                    "error": (
+                        "Planner cannot write directly. "
+                        "You must use the 'dispatch_to_worker' tool to specify code changes. "
+                        "Include your intended deletion in the 'spec' field of the dispatch."
+                    ),
+                    "failure_class": "internal_error",
+                }),
+            )
+        return self._handle_delete(args, approval_cb, reject_all)
+
     def _handle_apply_edit_transaction(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
             return ToolExecResult(ok=False, payload=_mark_not_applied({"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"}))
@@ -684,6 +721,196 @@ class WriteHandlersMixin:
                 }),
             )
         return self._handle_write("patch_file", args, approval_cb, reject_all)
+
+    def _handle_delete(
+        self,
+        args: dict,
+        approval_cb,
+        reject_all: bool,
+    ) -> ToolExecResult:
+        reason = args.get("reason", "")
+        if reason is None:
+            reason = ""
+        if not isinstance(reason, str):
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied({
+                    "ok": False,
+                    "error": "reason must be a string",
+                    "failure_class": "delete_file_invalid_path",
+                    "reason": "",
+                }, "delete_file_invalid_path"),
+            )
+        if reject_all:
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied(
+                    {"ok": False, "error": "User rejected all writes in this turn.", "failure_class": "approval_rejected", "reason": reason},
+                    "approval_rejected",
+                ),
+                extras={"rejected_all": True},
+            )
+
+        path_arg = args.get("path", "")
+        if not isinstance(path_arg, str) or not path_arg.strip():
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied({
+                    "ok": False,
+                    "path": path_arg if isinstance(path_arg, str) else "",
+                    "error": "path must be a non-empty string",
+                    "failure_class": "delete_file_invalid_path",
+                    "reason": reason,
+                }, "delete_file_invalid_path"),
+            )
+        if any(char in path_arg for char in "*?[]"):
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied({
+                    "ok": False,
+                    "path": path_arg,
+                    "error": "delete_file does not accept globs or wildcard paths",
+                    "failure_class": "delete_file_invalid_path",
+                    "reason": reason,
+                }, "delete_file_invalid_path"),
+            )
+        try:
+            target = self._resolve_in_root(path_arg)
+        except ValueError as exc:
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied({
+                    "ok": False,
+                    "path": path_arg,
+                    "error": str(exc),
+                    "failure_class": "delete_file_workspace_escape",
+                    "reason": reason,
+                }, "delete_file_workspace_escape"),
+            )
+
+        rel_path = safe_relative_to(target, self._root).as_posix()
+        if _is_delete_protected_path(rel_path):
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied({
+                    "ok": False,
+                    "path": rel_path,
+                    "rel_path": rel_path,
+                    "error": "delete_file cannot delete protected workspace metadata or environment files",
+                    "failure_class": "delete_file_protected_path",
+                    "reason": reason,
+                }, "delete_file_protected_path"),
+            )
+        if not target.exists():
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied({
+                    "ok": False,
+                    "path": rel_path,
+                    "rel_path": rel_path,
+                    "error": "delete_file target does not exist",
+                    "failure_class": "delete_file_missing",
+                    "reason": reason,
+                }, "delete_file_missing"),
+            )
+        if target.is_dir():
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied({
+                    "ok": False,
+                    "path": rel_path,
+                    "rel_path": rel_path,
+                    "error": "delete_file cannot delete directories",
+                    "failure_class": "delete_file_is_directory",
+                    "reason": reason,
+                }, "delete_file_is_directory"),
+            )
+        if not target.is_file():
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied({
+                    "ok": False,
+                    "path": rel_path,
+                    "rel_path": rel_path,
+                    "error": "delete_file target must be a regular file",
+                    "failure_class": "delete_file_invalid_path",
+                    "reason": reason,
+                }, "delete_file_invalid_path"),
+            )
+
+        old_content = target.read_text(encoding="utf-8", errors="replace")
+        req = ApprovalRequest(
+            tool_name="delete_file",
+            rel_path=rel_path,
+            old_content=old_content,
+            new_content="",
+            is_new_file=False,
+        )
+        decision = approval_cb(req)
+
+        if decision.action == "reject":
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied(
+                    {"ok": False, "error": "User rejected this deletion.", "path": rel_path, "rel_path": rel_path, "failure_class": "approval_rejected", "reason": reason},
+                    "approval_rejected",
+                ),
+                extras={
+                    "approval": "reject",
+                    "rel_path": rel_path,
+                    "approval_metadata": decision.metadata,
+                },
+            )
+        if decision.action == "reject_all":
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_delete_not_applied(
+                    {
+                        "ok": False,
+                        "error": "User rejected this deletion and all further writes in this turn.",
+                        "path": rel_path,
+                        "rel_path": rel_path,
+                        "failure_class": "approval_rejected",
+                        "reason": reason,
+                    },
+                    "approval_rejected",
+                ),
+                extras={
+                    "approval": "reject_all",
+                    "rel_path": rel_path,
+                    "approval_metadata": decision.metadata,
+                },
+            )
+
+        backup_path = _reg.backup_existing(self._root, target)
+        target.unlink()
+
+        if compiler_service is not None:
+            compiler_service.invalidate_workspace_index(self._root)
+        rel_backup = (
+            safe_relative_to(backup_path, self._root).as_posix() if backup_path is not None else None
+        )
+        return ToolExecResult(
+            ok=True,
+            payload={
+                "ok": True,
+                "applied": True,
+                "path": rel_path,
+                "rel_path": rel_path,
+                "deleted": True,
+                "write_outcome": "deleted",
+                "applied_tool": "delete_file",
+                "is_new_file": False,
+                "backup": rel_backup,
+                "backup_path": rel_backup,
+                "reason": reason,
+            },
+            extras={
+                "approval": "approve",
+                "rel_path": rel_path,
+                "approval_metadata": decision.metadata,
+            },
+        )
 
     def _handle_write(
         self,

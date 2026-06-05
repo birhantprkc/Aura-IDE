@@ -222,6 +222,7 @@ TOOL_HANDLERS["git_stash_show"] = ToolRegistry._handle_git_stash_show
 TOOL_HANDLERS["web_search"] = ToolRegistry._handle_web_search
 TOOL_HANDLERS["web_fetch"] = ToolRegistry._handle_web_fetch
 TOOL_HANDLERS["write_file"] = ToolRegistry._handle_write_file
+TOOL_HANDLERS["delete_file"] = ToolRegistry._handle_delete_file
 TOOL_HANDLERS["apply_edit_transaction"] = ToolRegistry._handle_apply_edit_transaction
 TOOL_HANDLERS["edit_file"] = ToolRegistry._handle_edit_file
 TOOL_HANDLERS["edit_symbol"] = ToolRegistry._handle_edit_symbol

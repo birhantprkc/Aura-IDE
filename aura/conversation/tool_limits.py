@@ -14,6 +14,7 @@ RegistryMode = Literal["single", "planner", "worker", "researcher"]
 
 WRITE_TOOLS = {
     "write_file",
+    "delete_file",
     "apply_edit_transaction",
     "edit_file",
     "edit_symbol",

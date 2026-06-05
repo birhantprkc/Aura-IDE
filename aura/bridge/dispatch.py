@@ -960,10 +960,12 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
         "- Use update_todo_list for broad or risky work; small localized tasks may proceed directly after reading.",
         "- Use patch_file for existing-file edits after reading the file.",
         "- Use write_file only for new files or intentional full-file replacement.",
+        "- Use delete_file for intentional file removals; do not use terminal rm/del as the primary deletion path.",
         "- If patch_file fails, re-read the file and retry patch_file once; do not switch between edit tools.",
         "- Build the smallest complete implementation.",
         "- Own exact edits, validation, and code-quality decisions.",
         "- Use grep_search for searching.",
+        "- For absent-pattern validation, make intended no-match exit 0.",
         "- Code must work and be easy to work on.",
         "- Avoid public-library, tutorial, or demo ceremony unless requested.",
         "- Avoid module summary docstrings and Args/Returns/Raises in normal app/tool code.",
@@ -1348,11 +1350,19 @@ def _build_worker_summary(
     displayed_writes = _dedupe_summary_writes(writes)
 
     # === Files changed count ===
-    edited_count = sum(1 for w in displayed_writes if not w.get("is_new_file"))
+    deleted_count = sum(1 for w in displayed_writes if w.get("deleted"))
+    edited_count = sum(1 for w in displayed_writes if not w.get("is_new_file") and not w.get("deleted"))
     new_count = sum(1 for w in displayed_writes if w.get("is_new_file"))
     total_count = len(displayed_writes)
     if total_count > 0:
-        files_changed_str = f"{total_count} ({edited_count} edited, {new_count} new)"
+        parts = []
+        if edited_count:
+            parts.append(f"{edited_count} edited")
+        if new_count:
+            parts.append(f"{new_count} new")
+        if deleted_count:
+            parts.append(f"{deleted_count} deleted")
+        files_changed_str = f"{total_count} ({', '.join(parts)})"
     else:
         files_changed_str = "0"
 
@@ -1389,7 +1399,7 @@ def _build_worker_summary(
         lines.append("")
         lines.append(" Modified files:")
         for w in displayed_writes:
-            tag = "(new)" if w.get("is_new_file") else "(edit)"
+            tag = "(deleted)" if w.get("deleted") else ("(new)" if w.get("is_new_file") else "(edit)")
             path = str(w.get("path") or "").strip()
             lines.append(f"  \u2022 {path}   {tag}")
     else:
@@ -1492,6 +1502,8 @@ def _dedupe_summary_writes(writes: list[dict[str, Any]]) -> list[dict[str, Any]]
             continue
         if write.get("is_new_file"):
             existing["is_new_file"] = True
+        if write.get("deleted"):
+            existing["deleted"] = True
     return deduped
 
 

@@ -15,7 +15,8 @@ import pytest
 from aura.conversation.tools._types import (
     ApprovalDecision,
 )
-from aura.conversation.tools._schemas import DIAGNOSTIC_TOOL_DEF, READ_TOOL_DEFS
+from aura.conversation.tool_limits import WRITE_TOOLS
+from aura.conversation.tools._schemas import DIAGNOSTIC_TOOL_DEF, READ_TOOL_DEFS, WRITE_TOOL_DEFS
 from aura.conversation.tools.registry import (
     TOOL_HANDLERS,
     ToolRegistry,
@@ -711,6 +712,124 @@ class TestWriteFile:
         assert mock_pw.call_args[0][2] == ""
 
 
+class TestDeleteFile:
+    """Tests for safe delete_file."""
+
+    def test_schema_exists(self):
+        schemas = {
+            tool_def["function"]["name"]: tool_def
+            for tool_def in WRITE_TOOL_DEFS
+        }
+
+        assert "delete_file" in schemas
+        params = schemas["delete_file"]["function"]["parameters"]
+        assert set(params["properties"]) == {"path", "reason"}
+        assert params["required"] == ["path"]
+
+    def test_included_in_write_tools(self):
+        assert "delete_file" in WRITE_TOOLS
+
+    def test_deletes_existing_file_after_approval_and_records_backup(self, registry: ToolRegistry, approve_cb: MagicMock):
+        target = registry.workspace_root / "obsolete.txt"
+        target.write_text("remove me\n", encoding="utf-8")
+
+        result = _handler("delete_file")(
+            registry,
+            {"path": "obsolete.txt", "reason": "cleanup"},
+            approve_cb,
+            False,
+        )
+
+        assert result.ok is True
+        assert result.payload["ok"] is True
+        assert result.payload["applied"] is True
+        assert result.payload["deleted"] is True
+        assert result.payload["write_outcome"] == "deleted"
+        assert result.payload["path"] == "obsolete.txt"
+        assert result.payload["rel_path"] == "obsolete.txt"
+        assert result.payload["reason"] == "cleanup"
+        assert result.payload["backup"]
+        assert (registry.workspace_root / result.payload["backup"]).read_text(encoding="utf-8") == "remove me\n"
+        assert not target.exists()
+        approve_cb.assert_called_once()
+        request = approve_cb.call_args[0][0]
+        assert request.tool_name == "delete_file"
+        assert request.old_content == "remove me\n"
+        assert request.new_content == ""
+
+    def test_rejected_by_user_does_not_remove_file(self, registry: ToolRegistry, reject_cb: MagicMock):
+        target = registry.workspace_root / "keep.txt"
+        target.write_text("keep\n", encoding="utf-8")
+
+        result = _handler("delete_file")(
+            registry,
+            {"path": "keep.txt"},
+            reject_cb,
+            False,
+        )
+
+        assert result.ok is False
+        assert result.payload["applied"] is False
+        assert result.payload["deleted"] is False
+        assert result.payload["failure_class"] == "approval_rejected"
+        assert target.read_text(encoding="utf-8") == "keep\n"
+
+    @pytest.mark.parametrize(
+        ("path", "failure_class"),
+        [
+            ("missing.txt", "delete_file_missing"),
+            ("*.py", "delete_file_invalid_path"),
+            ("../escape.txt", "delete_file_workspace_escape"),
+        ],
+    )
+    def test_rejects_invalid_targets(self, registry: ToolRegistry, approve_cb: MagicMock, path: str, failure_class: str):
+        result = _handler("delete_file")(
+            registry,
+            {"path": path},
+            approve_cb,
+            False,
+        )
+
+        assert result.ok is False
+        assert result.payload["applied"] is False
+        assert result.payload["deleted"] is False
+        assert result.payload["failure_class"] == failure_class
+        approve_cb.assert_not_called()
+
+    def test_rejects_directory(self, registry: ToolRegistry, approve_cb: MagicMock):
+        (registry.workspace_root / "dir").mkdir()
+
+        result = _handler("delete_file")(
+            registry,
+            {"path": "dir"},
+            approve_cb,
+            False,
+        )
+
+        assert result.ok is False
+        assert result.payload["failure_class"] == "delete_file_is_directory"
+        assert (registry.workspace_root / "dir").is_dir()
+        approve_cb.assert_not_called()
+
+    @pytest.mark.parametrize("path", [".git/config", ".aura/state.json", ".env", "config/.env.local"])
+    def test_rejects_protected_paths(self, registry: ToolRegistry, approve_cb: MagicMock, path: str):
+        target = registry.workspace_root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("secret\n", encoding="utf-8")
+
+        result = _handler("delete_file")(
+            registry,
+            {"path": path},
+            approve_cb,
+            False,
+        )
+
+        assert result.ok is False
+        assert result.payload["failure_class"] == "delete_file_protected_path"
+        assert target.exists()
+        approve_cb.assert_not_called()
+
+
 # write_file — humanizer integration
 
 
@@ -1363,6 +1482,7 @@ class TestHandlerRegistration:
         "web_search",
         "web_fetch",
         "write_file",
+        "delete_file",
         "apply_edit_transaction",
         "edit_file",
         "edit_symbol",
@@ -1466,6 +1586,7 @@ class TestModeToolSurfaces:
         }
 
         assert "write_file" in tool_names
+        assert "delete_file" in tool_names
         assert "patch_file" in tool_names
         assert "apply_edit_transaction" not in tool_names
         assert "edit_file" not in tool_names
@@ -1486,6 +1607,7 @@ class TestModeToolSurfaces:
         }
 
         assert "write_file" in tool_names
+        assert "delete_file" in tool_names
         assert "apply_edit_transaction" in tool_names
         assert "edit_file" in tool_names
         assert "edit_line_range" in tool_names

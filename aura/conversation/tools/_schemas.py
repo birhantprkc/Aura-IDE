@@ -603,6 +603,34 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "delete_file",
+            "description": (
+                "Delete one existing workspace file after user approval. "
+                "Use this for cleanup files or files intentionally removed during refactors. "
+                "Directories, globs, wildcards, workspace metadata paths, and paths outside "
+                "the workspace are rejected. Existing files are backed up before deletion."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path of the single file to delete.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Optional short reason for deleting this file.",
+                        "default": "",
+                    },
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "edit_file",
             "description": (
                 "Surgically replace one occurrence of old_str with new_str inside a workspace file. "

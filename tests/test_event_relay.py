@@ -88,6 +88,44 @@ def test_patch_file_quality_bounce_is_not_failed_or_touched() -> None:
     assert relay.touched_files == set()
 
 
+def test_delete_file_success_is_tracked_as_applied_write() -> None:
+    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
+    payload = {
+        "ok": True,
+        "applied": True,
+        "deleted": True,
+        "path": "old.py",
+        "rel_path": "old.py",
+        "write_outcome": "deleted",
+        "backup": ".aura/backups/ts/old.py",
+    }
+
+    relay.relay(
+        "dispatch-1",
+        ToolResult(
+            tool_call_id="worker-tool-1",
+            name="delete_file",
+            ok=True,
+            result=json.dumps(payload),
+        ),
+    )
+
+    assert relay.write_results == [
+        {
+            "tool": "delete_file",
+            "path": "old.py",
+            "is_new_file": False,
+            "deleted": True,
+            "applied": True,
+            "applied_tool": "delete_file",
+            "write_outcome": "deleted",
+            "backup": ".aura/backups/ts/old.py",
+        }
+    ]
+    assert relay.touched_files == {"old.py"}
+    assert relay.edited_existing_files == ["old.py"]
+
+
 def test_terminal_results_include_capped_output_and_preview() -> None:
     relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
     output = "x" * 5000

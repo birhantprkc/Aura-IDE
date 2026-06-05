@@ -778,12 +778,13 @@ def test_worker_result_ok_true_when_writes_and_passing_validation():
 def test_modified_files_are_derived_from_applied_write_receipts_only():
     writes = [
         {"path": "changed.py", "applied": True, "write_outcome": "applied"},
+        {"path": "removed.py", "applied": True, "deleted": True, "write_outcome": "deleted"},
         {"path": "changed.py", "applied": True, "write_outcome": "applied"},
         {"path": "claimed.py", "applied": False, "write_outcome": "not_applied_craft_rejected"},
         {"path": ".aura/tmp/_check_acceptance.py", "applied": True, "write_outcome": "applied"},
     ]
 
-    assert _applied_modified_files(writes) == ["changed.py"]
+    assert _applied_modified_files(writes) == ["changed.py", "removed.py"]
 
 
 def test_worker_summary_dedupes_duplicate_modified_file_rows_and_count():
@@ -794,6 +795,7 @@ def test_worker_summary_dedupes_duplicate_modified_file_rows_and_count():
             {"tool": "apply_edit_transaction", "path": "a.py", "applied": True, "is_new_file": False},
             {"tool": "apply_edit_transaction", "path": "a.py", "applied": True, "is_new_file": False},
             {"tool": "write_file", "path": "b.py", "applied": True, "is_new_file": True},
+            {"tool": "delete_file", "path": "old.py", "applied": True, "deleted": True},
         ],
         [],
         {},
@@ -801,9 +803,10 @@ def test_worker_summary_dedupes_duplicate_modified_file_rows_and_count():
         validation_results=[{"command": "python -m py_compile a.py b.py", "ok": True, "exit_code": 0}],
     )
 
-    assert "Files changed   : 2 (1 edited, 1 new)" in summary
+    assert "Files changed   : 3 (1 edited, 1 new, 1 deleted)" in summary
     assert summary.count("a.py   (edit)") == 1
     assert summary.count("b.py   (new)") == 1
+    assert summary.count("old.py   (deleted)") == 1
 
 
 def test_worker_summary_dedupes_duplicate_failed_writes():
