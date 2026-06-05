@@ -52,8 +52,17 @@ class WindowChromeMixin:
     def mousePressEvent(self, event) -> None:
         """Start a window drag when the left button is pressed on the toolbar,
         unless the click landed on an interactive widget (QToolButton, GlassSwitch).
+        Edge/corner resize zones win over toolbar drag.
         """
         if event.button() == Qt.MouseButton.LeftButton:
+            # Edge/corner resize — wins over toolbar drag.
+            if not self.isMaximized():
+                edges = self._resolve_resize_edges(event.position().toPoint())
+                if edges is not None:
+                    self._start_system_resize(edges)
+                    event.accept()
+                    return
+
             toolbar = getattr(self, "_toolbar", None)
             if toolbar is not None:
                 tb_geo = toolbar.geometry()
@@ -121,22 +130,36 @@ class WindowChromeMixin:
 
     def nativeEvent(self, eventType, message):
         """Handle WM_NCHITTEST on Windows to enable resize from all edges/corners."""
-        if eventType == b"windows_generic_MSG" and not self.isMaximized():
+        # Normalize eventType — PySide6 may pass QByteArray or bytes.
+        try:
+            raw_type = bytes(eventType)
+        except (TypeError, ValueError):
+            raw_type = None
+
+        if raw_type in (b"windows_generic_MSG", b"windows_dispatcher_MSG") and not self.isMaximized():
             import ctypes
             from ctypes import wintypes
 
+            # Extract MSG pointer — prefer __int__() over int() for ctypes pointers.
             try:
-                msg = wintypes.MSG.from_address(int(message))
-            except (TypeError, ValueError, AttributeError):
+                addr = message.__int__()
+            except (TypeError, AttributeError):
+                try:
+                    addr = int(message)
+                except (TypeError, ValueError):
+                    return super().nativeEvent(eventType, message)
+
+            try:
+                msg = wintypes.MSG.from_address(addr)
+            except Exception:
                 return super().nativeEvent(eventType, message)
 
             if msg.message == 0x0084:  # WM_NCHITTEST
-                # Extract screen-space cursor position from lParam.
-                # LOWORD = x, HIWORD = y, both signed 16-bit.
+                # Screen coordinates from lParam (signed 16-bit).
                 x = ctypes.c_short(msg.lParam & 0xFFFF).value
                 y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
                 rect = self.frameGeometry()
-                margin = 7
+                margin = 8
 
                 left = x <= rect.left() + margin
                 right = x >= rect.right() - margin
@@ -161,3 +184,24 @@ class WindowChromeMixin:
                     return True, 15  # HTBOTTOM
 
         return super().nativeEvent(eventType, message)
+
+    def _resolve_resize_edges(self, pos):
+        """Return Qt.Edges flags for the resize zone at *pos* (client coords), or None."""
+        rect = self.rect()
+        margin = 8
+        edges = Qt.Edges()
+        if pos.x() <= margin:
+            edges |= Qt.Edge.LeftEdge
+        if pos.x() >= rect.width() - margin:
+            edges |= Qt.Edge.RightEdge
+        if pos.y() <= margin:
+            edges |= Qt.Edge.TopEdge
+        if pos.y() >= rect.height() - margin:
+            edges |= Qt.Edge.BottomEdge
+        return edges if edges else None
+
+    def _start_system_resize(self, edges):
+        """Initiate an OS resize operation for the given edges."""
+        window = self.windowHandle()
+        if window is not None:
+            window.startSystemResize(edges)
