@@ -1,9 +1,8 @@
 ; Aura Installer for Windows
 ; Requires Inno Setup 6+ (https://jrsoftware.org/isdl.php)
-; Compile: iscc.exe /DMyAppVersion=1.4.5 /DSourceDir=..\..\build\Aura.dist Aura.iss
+; Compile: iscc.exe /DMyAppVersion=1.4.8 /DSourceDir=..\..\build\Aura.dist Aura.iss
 
 #define MyAppName "Aura"
-#define MyAppVersion "1.0.0"
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif
