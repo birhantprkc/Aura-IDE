@@ -14,9 +14,9 @@ from aura.config import APP_NAME
 
 
 class SetupDialog(QDialog):
-    """First-run setup dialog shown when no provider API keys are available.
+    """First-run setup dialog shown when no providers are configured.
 
-    Offers three choices: open API settings, continue in read-only mode, or exit.
+    Offers three choices: open provider settings, continue in read-only mode, or exit.
     """
 
     def __init__(self, parent=None) -> None:
