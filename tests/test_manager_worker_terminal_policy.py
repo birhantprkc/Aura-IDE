@@ -312,7 +312,7 @@ def test_worker_explicit_validation_command_executes(
     sandbox.run_terminal_command.assert_called_once()
 
 
-def test_worker_structured_read_and_apply_edit_transaction_are_unaffected(
+def test_worker_structured_read_and_patch_file_are_unaffected(
     worker_manager: tuple[ConversationManager, MagicMock],
     worker_backend: MagicMock,
 ) -> None:
@@ -324,7 +324,7 @@ def test_worker_structured_read_and_apply_edit_transaction_are_unaffected(
     ]
     worker_backend.side_effect = [
         iter([_done_with_tool("read1", "read_file", {"path": "docs/notes.md"})]),
-        iter([_done_with_tool("edit1", "apply_edit_transaction", {"path": "docs/notes.md", "operations": []})]),
+        iter([_done_with_tool("edit1", "patch_file", {"path": "docs/notes.md", "edits": []})]),
         iter([Done(finish_reason="stop", full_message={"role": "assistant", "content": "Done.", "reasoning_content": None})]),
     ]
 
@@ -341,7 +341,7 @@ def test_worker_structured_read_and_apply_edit_transaction_are_unaffected(
         call.args[0] if call.args else call.kwargs["name"]
         for call in tools.execute.call_args_list
     ]
-    assert executed_names == ["read_file", "apply_edit_transaction"]
+    assert executed_names == ["read_file", "patch_file"]
 
 
 def test_normal_worker_low_level_edit_tools_stay_hidden(tmp_workspace: Path) -> None:
@@ -350,9 +350,9 @@ def test_normal_worker_low_level_edit_tools_stay_hidden(tmp_workspace: Path) -> 
         for tool in ToolRegistry(tmp_workspace, mode="worker").tool_defs()
     }
 
-    assert "apply_edit_transaction" in names
+    assert "patch_file" in names
     assert "write_file" in names
+    assert "apply_edit_transaction" not in names
     assert "edit_file" not in names
     assert "edit_symbol" not in names
     assert "edit_line_range" not in names
-    assert "patch_file" not in names

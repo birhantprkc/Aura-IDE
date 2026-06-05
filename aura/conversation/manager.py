@@ -111,8 +111,9 @@ TASK_COMPLETION_TOOL_NAMES = {
 ACTION_COMPLETION_TOOL_NAMES = TASK_COMPLETION_TOOL_NAMES | WRITE_TOOLS
 
 WORKER_EDIT_RECOVERY_INSTRUCTION = (
-    "Previous edit failed recoverably. Re-read the file, then use apply_edit_transaction "
-    "for existing-file code changes or write_file only for a full replacement. "
+    "Previous edit failed recoverably. Re-read the file, then use patch_file "
+    "for existing-file code changes or write_file only for a new file or intentional full replacement. "
+    "Do not switch between edit tools trying random tactics. "
     "Finish only after the edit is applied and touched Python files pass py_compile."
 )
 
@@ -413,8 +414,8 @@ class ConversationManager:
                                 if edit_recovery_pending
                                 else (
                                     "Previous py_compile failed. Re-read the touched "
-                                    "Python file, repair it with apply_edit_transaction or "
-                                    "write_file, then run python -m py_compile again. "
+                                    "Python file, repair it with patch_file or write_file only "
+                                    "for a new file or intentional full replacement, then run python -m py_compile again. "
                                     "Finish only after py_compile passes."
                                 )
                             )
@@ -1158,17 +1159,17 @@ class ConversationManager:
                     if repair_failed
                     else (
                         "Craft/compiler rejected the proposed code. Re-read the file, "
-                        "repair the checker issue once, and retry with a different "
-                        "write tactic."
+                        "repair the checker issue once, and retry with patch_file "
+                        "for existing files or write_file for new files."
                     )
                 ),
                 suggested_next_tool=str(
                     state.get("suggested_next_tool")
-                    or self._alternate_write_tactic(str(state.get("tool") or name))
+                    or self._repair_write_tactic(str(state.get("tool") or name), state)
                 ),
                 suggested_next_action=(
                     "Repair the proposed code once using the precise checker error; "
-                    "do not narrate. Retry with a different write tactic."
+                    "do not narrate. Retry with patch_file for existing files or write_file for new files."
                 ),
                 recoverable=not repair_failed,
             )
@@ -1192,10 +1193,10 @@ class ConversationManager:
                         else "Repair that file and pass py_compile before any unrelated tool call."
                     )
                 ),
-                suggested_next_tool="apply_edit_transaction",
+                suggested_next_tool="patch_file",
                 suggested_next_action=(
                     "Repair the touched file, then run python -m py_compile on it before continuing validation. "
-                    "Use apply_edit_transaction when possible or write_file for a full-file repair."
+                    "Use patch_file for existing files or write_file only for a new file or intentional full-file repair."
                 ),
                 recoverable=not repair_failed,
             )
@@ -1212,12 +1213,11 @@ class ConversationManager:
                 failure_class="edit_mechanics_multi_edit_spin",
                 error=(
                     "Multiple failed or unapplied write attempts targeted the same file. "
-                    "Use apply_edit_transaction for this existing-file edit."
+                    "Use patch_file for this existing-file edit."
                 ),
-                suggested_next_tool="apply_edit_transaction",
+                suggested_next_tool="patch_file",
                 suggested_next_action=(
-                    "Re-read the file, then submit one apply_edit_transaction "
-                    "containing all intended structured operations."
+                    "Re-read the file, then submit one patch_file containing all intended hunks."
                 ),
             )
             self._record_recovery_block(payload, f"multi-edit-spin:{path}:{name}", recovery_block_counts)
@@ -1234,10 +1234,9 @@ class ConversationManager:
                             "Repeated ambiguous replace_text_once transaction. "
                             "Do not retry the same exact text shape."
                         ),
-                        suggested_next_tool="apply_edit_transaction",
+                        suggested_next_tool="patch_file",
                         suggested_next_action=(
-                            "Use a structured symbol operation, or retry "
-                            "replace_text_once with occurrence or allow_multiple."
+                            "Re-read the file, then retry patch_file with occurrence or allow_multiple."
                         ),
                         recoverable=False,
                     )
@@ -1246,7 +1245,7 @@ class ConversationManager:
                 payload = self._recovery_payload(
                     path=path,
                     failure_class="edit_mechanics_blocked",
-                    error="Repeated apply_edit_transaction failure. Re-read the file and return a concise blocker instead of switching to low-level edit tools.",
+                    error="Repeated apply_edit_transaction failure. Re-read the file and return a concise blocker instead of switching between edit tools.",
                     suggested_next_tool="read_file",
                     suggested_next_action="Re-read the file, then report the typed transaction blocker if the structured operation still cannot be applied safely.",
                     recoverable=False,
@@ -1271,9 +1270,9 @@ class ConversationManager:
             payload = self._recovery_payload(
                 path=path,
                 failure_class=str(prior.get("failure_class") or self._default_edit_failure_class(name)),
-                error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use apply_edit_transaction for existing-file code changes.",
-                suggested_next_tool="apply_edit_transaction",
-                suggested_next_action="Use read_file/read_file_outline, then submit one apply_edit_transaction with structured operations.",
+                error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use patch_file for existing-file code changes.",
+                suggested_next_tool="patch_file",
+                suggested_next_action="Use read_file/read_file_outline, then submit one patch_file with exact hunks.",
             )
             payload["previous_error"] = prior.get("error", "")
             self._record_recovery_block(payload, block_key, recovery_block_counts)
@@ -1285,9 +1284,9 @@ class ConversationManager:
                 payload = self._recovery_payload(
                     path=path,
                     failure_class=self._default_edit_failure_class(name),
-                    error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use apply_edit_transaction for existing-file code changes.",
-                    suggested_next_tool="apply_edit_transaction",
-                    suggested_next_action="Use read_file/read_file_outline, then submit one apply_edit_transaction with structured operations.",
+                    error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use patch_file for existing-file code changes.",
+                    suggested_next_tool="patch_file",
+                    suggested_next_action="Use read_file/read_file_outline, then submit one patch_file with exact hunks.",
                 )
                 self._record_recovery_block(payload, shape, recovery_block_counts)
                 return self._blocked_tool_result(tool_call_id, name, payload)
@@ -1596,6 +1595,7 @@ class ConversationManager:
                     "repair_instructions": parsed.get("repair_instructions", ""),
                     "craft_issues": parsed.get("craft_issues", []),
                     "suggested_next_action": parsed.get("suggested_next_action", ""),
+                    "is_new_file": bool(parsed.get("is_new_file")),
                 }
             return json.dumps(parsed, ensure_ascii=False)
 
@@ -1638,8 +1638,8 @@ class ConversationManager:
             ):
                 edit_failed_shapes.add(f"ambiguous-replace-text:{shape}")
                 parsed["suggested_next_action"] = (
-                    "Use a structured symbol operation, or provide occurrence "
-                    "or allow_multiple for replace_text_once."
+                    "Re-read the file, then retry patch_file with occurrence "
+                    "or allow_multiple."
                 )
             else:
                 parsed["suggested_next_action"] = (
@@ -1653,8 +1653,8 @@ class ConversationManager:
             parsed.setdefault("tool", name)
             edit_fallback_required[path] = parsed
             parsed["recoverable"] = True
-            parsed["suggested_next_tool"] = "apply_edit_transaction"
-            parsed["suggested_next_action"] = "Do not retry this low-level edit shape. Re-read the file and submit one apply_edit_transaction for existing-file code changes."
+            parsed["suggested_next_tool"] = "patch_file"
+            parsed["suggested_next_action"] = "Do not retry this low-level edit shape. Re-read the file and submit one patch_file for existing-file code changes."
             content = json.dumps(parsed, ensure_ascii=False)
         elif path and failure_class == "edit_mechanics_stale_line_range":
             parsed.setdefault("applied", False)
@@ -1671,10 +1671,10 @@ class ConversationManager:
             parsed.setdefault("tool", name)
             edit_fallback_required[path] = parsed
             parsed["recoverable"] = True
-            parsed["suggested_next_tool"] = "apply_edit_transaction"
+            parsed["suggested_next_tool"] = "patch_file"
             parsed["suggested_next_action"] = str(
                 parsed.get("suggested_next_action")
-                or "Re-read the file and submit one apply_edit_transaction."
+                or "Re-read the file and submit one patch_file."
             )
             content = json.dumps(parsed, ensure_ascii=False)
         elif path and failure_class == "syntax_invalid":
@@ -1684,10 +1684,10 @@ class ConversationManager:
             state["awaiting_validation"] = False
             if name in WRITE_TOOLS:
                 state["failed_repairs"] = int(state.get("failed_repairs", 0)) + 1
-            parsed["suggested_next_tool"] = "apply_edit_transaction"
+            parsed["suggested_next_tool"] = "patch_file"
             parsed["suggested_next_action"] = (
                 "Repair the touched file, then run python -m py_compile on it before continuing validation. "
-                "Use apply_edit_transaction when possible or write_file for a full-file repair."
+                "Use patch_file for existing files or write_file only for a new file or intentional full-file repair."
             )
             if int(state.get("failed_repairs", 0)) > 1:
                 parsed["recoverable"] = False
@@ -1697,7 +1697,7 @@ class ConversationManager:
             path
             and failure_class == "compiler_rejected"
             and parsed.get("bounce")
-            and name in {"write_file", "edit_file", "edit_line_range"}
+            and name in {"write_file", "patch_file", "edit_file", "edit_line_range"}
             and self._has_precise_checker_error(parsed)
         ):
             prior = compiler_repair_required.get(path)
@@ -1713,15 +1713,15 @@ class ConversationManager:
                 compiler_repair_required[path] = {
                     "tool": name,
                     "error": parsed.get("error", ""),
-                    "suggested_next_tool": self._alternate_write_tactic(name),
+                    "suggested_next_tool": self._repair_write_tactic(name, parsed),
                     "craft_issues": parsed.get("craft_issues", []),
                     "is_new_file": bool(parsed.get("is_new_file")),
                 }
                 parsed["recoverable"] = True
-                parsed["suggested_next_tool"] = self._alternate_write_tactic(name)
+                parsed["suggested_next_tool"] = self._repair_write_tactic(name, parsed)
                 parsed["suggested_next_action"] = (
                     "Repair the proposed code once using the precise checker error, "
-                    "then retry with a different write tactic. Do not narrate."
+                    "then retry with patch_file for existing files or write_file for new files. Do not narrate."
                 )
             parsed["internal_recovery_steer"] = True
             content = json.dumps(parsed, ensure_ascii=False)
@@ -1878,10 +1878,16 @@ class ConversationManager:
         return "\n".join(lines)
 
     @staticmethod
+    def _repair_write_tactic(name: str, state: dict[str, Any] | None = None) -> str:
+        if state and bool(state.get("is_new_file")):
+            return "write_file"
+        if name == "write_file" and state and bool(state.get("full_replacement")):
+            return "write_file"
+        return "patch_file"
+
+    @staticmethod
     def _alternate_write_tactic(name: str) -> str:
-        if name == "write_file":
-            return "apply_edit_transaction"
-        return "write_file"
+        return ConversationManager._repair_write_tactic(name)
 
     @staticmethod
     def _has_precise_checker_error(parsed: dict[str, Any]) -> bool:

@@ -44,6 +44,14 @@ def test_worker_adherence_protocol():
     assert "Acceptance Verification" in WORKER_SYSTEM_PROMPT
 
 
+def test_worker_prompt_is_patch_first():
+    assert "Use `patch_file` for existing-file code changes." in WORKER_SYSTEM_PROMPT
+    assert "Use `write_file` only for new files or intentional full-file replacement." in WORKER_SYSTEM_PROMPT
+    assert "re-read the affected file before retrying once" in WORKER_SYSTEM_PROMPT
+    assert "Do not switch between edit tools trying random tactics." in WORKER_SYSTEM_PROMPT
+    assert "Use `apply_edit_transaction` for existing-file code changes." not in WORKER_SYSTEM_PROMPT
+
+
 def test_tool_schema_uses_builder_note_style():
     """Ensure the dispatch_to_worker spec uses Builder Note style, not formal sections."""
     spec_desc = DISPATCH_TOOL_DEF["function"]["parameters"]["properties"]["spec"]["description"]

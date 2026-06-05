@@ -578,8 +578,9 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
         "function": {
             "name": "write_file",
             "description": (
-                "Write the given content to a workspace file, replacing it entirely if it exists. "
-                "Use this for new files or when an edit would replace most of the file. "
+                "Write the given content to a workspace file. "
+                "Use this for new files, or for an intentional full-file replacement only. "
+                "For normal existing-file edits, read the file first and use patch_file instead. "
                 "The user MUST approve every write through a diff dialog before it is applied. "
                 "Existing files are backed up before being overwritten."
             ),
@@ -719,7 +720,9 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "name": "apply_edit_transaction",
             "description": (
                 "Apply a structured, atomic edit transaction to one existing workspace file. "
-                "Use this for normal existing-file code changes. The tool reads the file once, "
+                "Legacy escape-hatch edit tool; hidden from default Worker mode. "
+                "Default Worker mode should use patch_file for existing-file code changes. "
+                "The tool reads the file once, "
                 "checks expected_file_hash when supplied, applies every operation to an in-memory "
                 "copy, validates final Python syntax for .py files, and shows one approval diff. "
                 "If any operation cannot be applied safely, nothing is written."
@@ -882,10 +885,11 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "name": "patch_file",
             "description": (
                 "Apply multiple exact-text replacement hunks to one existing workspace file as a single "
-                "atomic, approval-gated transaction. Use this after reading a file when a change touches "
-                "multiple locations in that same file. Every hunk is applied to an in-memory copy first; "
+                "atomic, approval-gated transaction. Use this for normal existing-file edits after "
+                "reading the file. Every hunk is applied to an in-memory copy first; "
                 "if any hunk is missing or ambiguous, nothing is written. Craft reviews the full proposed "
-                "file once and the user sees one approval diff."
+                "file once and the user sees one approval diff. If a patch fails, re-read the file before "
+                "retrying; do not switch between edit tools trying random tactics."
             ),
             "parameters": {
                 "type": "object",

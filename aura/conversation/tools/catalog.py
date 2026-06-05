@@ -35,7 +35,7 @@ PLANNER_TOOL_NAMES = {
     "git_log_file",
 }
 
-NORMAL_WORKER_WRITE_TOOL_NAMES = {"write_file", "apply_edit_transaction"}
+NORMAL_WORKER_WRITE_TOOL_NAMES = {"write_file", "patch_file"}
 
 
 def _tool_name(tool_def: dict[str, Any]) -> str:

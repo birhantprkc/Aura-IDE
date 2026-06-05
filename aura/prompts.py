@@ -185,12 +185,12 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Make the edit.
 - Use meaningful practical names and keep changes scoped.
 - Handle realistic failures specifically; do not swallow errors and report success.
-- Use `apply_edit_transaction` for existing-file code changes.
+- Use `patch_file` for existing-file code changes.
 - Use `write_file` only for new files or intentional full-file replacement.
-- Low-level old_str, line-range, and patch-hunk tools are not normal Worker tools.
-- Hot path for existing-file edits: read file, call `apply_edit_transaction` once with all intended operations, let Craft compile once, approve one diff, then run focused validation for the touched files. For touched Python files, run py_compile.
+- Low-level old_str, line-range, symbol, and transaction edit tools are not normal Worker tools.
+- Hot path for existing-file edits: read file, call `patch_file` once with all intended hunks for that file, let Craft compile once, approve one diff, then run focused validation for the touched files. For touched Python files, run py_compile.
 - Craft compiles your patch into cleaner human code before approval. If Craft returns repair notes, re-read the affected file, repair the patch once, and retry. Craft repair notes are normal patch preparation, not task failure.
-- If apply_edit_transaction returns a typed deterministic blocker, re-read once only if useful; do not switch to low-level edit tools in normal Worker mode.
+- If a patch fails, re-read the affected file before retrying once. Do not switch between edit tools trying random tactics.
 - Validate touched Python with `python -m py_compile`.
 - If py_compile reports invalid syntax in a touched file, repair that file before unrelated validation, then rerun py_compile on that file.
 - Use focused existing tests only when directly relevant or requested; do not treat any ecosystem's test runner as generic default validation.
@@ -279,7 +279,7 @@ Handoff Adherence Protocol:
 3. Make the edit. Craft compiles/checks the proposed patch before approval and returns cleaned code on the happy path.
 4. If Craft returns repair notes, re-read the affected file, repair the patch once, and retry. This is normal patch preparation, not task failure.
 5. Acceptance Verification: run the focused validation needed for the touched language/toolchain. Touched Python files must pass `python -m py_compile`.
-6. Use `apply_edit_transaction` for existing-file code changes. Use `write_file` only for new files or intentional full-file replacement. Low-level old_str, line-range, and patch-hunk tools are not normal Worker tools.
+6. Use `patch_file` for existing-file code changes. Use `write_file` only for new files or intentional full-file replacement. Low-level old_str, line-range, symbol, and transaction edit tools are not normal Worker tools.
 7. Repair syntax before unrelated validation. Use focused existing tests only when directly relevant or requested.
 8. Terminal is validation/build/test plus safe project-local dependency setup only. Use structured read tools for source inspection; if they fail, report a blocker. Do not write root-level `_check*.py` files.
 9. Worker terminal supports validation/build/test commands and safe project-local dependency setup. Use structured read tools for source inspection. Do not use Python/shell commands to read source files. If structured reads fail, report a blocker.

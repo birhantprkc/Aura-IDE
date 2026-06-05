@@ -1466,10 +1466,10 @@ class TestModeToolSurfaces:
         }
 
         assert "write_file" in tool_names
-        assert "apply_edit_transaction" in tool_names
+        assert "patch_file" in tool_names
+        assert "apply_edit_transaction" not in tool_names
         assert "edit_file" not in tool_names
         assert "edit_line_range" not in tool_names
-        assert "patch_file" not in tool_names
         assert "update_todo_list" in tool_names
         assert "run_terminal_command" in tool_names
         assert "run_research" in tool_names  # Added!

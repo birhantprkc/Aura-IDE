@@ -7,7 +7,7 @@ from aura.conversation.manager import ConversationManager
 from aura.conversation.tools.registry import ToolRegistry
 
 
-def test_failed_transaction_returns_typed_blocker_without_patch_steering(tmp_workspace):
+def test_failed_transaction_returns_typed_blocker_without_recovery_roulette(tmp_workspace):
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
     content = json.dumps(
         {
@@ -29,14 +29,14 @@ def test_failed_transaction_returns_typed_blocker_without_patch_steering(tmp_wor
         syntax_repair_required={},
         syntax_validation_required=set(),
         compiler_repair_required={},
+        dependency_setup_required={},
         write_attempts_by_path={},
     )
 
     payload = json.loads(updated)
     assert payload["failure_class"] == "edit_transaction_symbol_not_found"
     assert payload["recoverable"] is False
-    assert payload.get("suggested_next_tool") != "patch_file"
-    assert "patch_file" not in payload.get("suggested_next_action", "")
+    assert "edit_line_range" not in payload.get("suggested_next_action", "")
 
 
 def test_ambiguous_replace_text_once_is_nonrecoverable_with_specific_guidance(tmp_workspace):
@@ -67,12 +67,13 @@ def test_ambiguous_replace_text_once_is_nonrecoverable_with_specific_guidance(tm
         syntax_repair_required={},
         syntax_validation_required=set(),
         compiler_repair_required={},
+        dependency_setup_required={},
         write_attempts_by_path={},
     )
 
     payload = json.loads(updated)
     assert payload["recoverable"] is False
-    assert "structured symbol operation" in payload["suggested_next_action"]
+    assert "patch_file" in payload["suggested_next_action"]
     assert "occurrence" in payload["suggested_next_action"]
     assert "allow_multiple" in payload["suggested_next_action"]
     assert "edit_line_range" not in payload["suggested_next_action"]
@@ -99,6 +100,7 @@ def test_repeated_ambiguous_replace_text_once_shape_is_blocked(tmp_workspace):
         syntax_repair_required={},
         syntax_validation_required=set(),
         compiler_repair_required={},
+        dependency_setup_required={},
         write_attempts_by_path={},
     )
 
@@ -106,13 +108,13 @@ def test_repeated_ambiguous_replace_text_once_shape_is_blocked(tmp_workspace):
     payload = json.loads(blocked["result_payload"])
     assert payload["failure_class"] == "edit_transaction_ambiguous_symbol"
     assert payload["recoverable"] is False
-    assert payload["suggested_next_tool"] == "apply_edit_transaction"
+    assert payload["suggested_next_tool"] == "patch_file"
     assert "occurrence" in payload["suggested_next_action"]
     assert "allow_multiple" in payload["suggested_next_action"]
     assert "edit_line_range" not in payload["suggested_next_action"]
 
 
-def test_syntax_repair_recovery_steers_to_transaction_not_line_range(tmp_workspace):
+def test_syntax_repair_recovery_steers_to_patch_not_line_range(tmp_workspace):
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
 
     blocked = manager._worker_recovery_block(
@@ -126,13 +128,14 @@ def test_syntax_repair_recovery_steers_to_transaction_not_line_range(tmp_workspa
         syntax_repair_required={"broken.py": {"error": "SyntaxError"}},
         syntax_validation_required=set(),
         compiler_repair_required={},
+        dependency_setup_required={},
         write_attempts_by_path={},
     )
 
     assert blocked is not None
     payload = json.loads(blocked["result_payload"])
     assert payload["failure_class"] == "syntax_invalid"
-    assert payload["suggested_next_tool"] == "apply_edit_transaction"
+    assert payload["suggested_next_tool"] == "patch_file"
     assert payload["suggested_next_tool"] != "edit_line_range"
     assert "edit_line_range" not in payload["suggested_next_action"]
-    assert "patch_file" not in payload["suggested_next_action"]
+    assert "patch_file" in payload["suggested_next_action"]
