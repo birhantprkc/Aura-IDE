@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterator, Protocol, runtime_checkable
+from typing import Any, Iterator, Literal, Protocol, runtime_checkable
 
 ProviderId = str  # Any registered provider key, e.g. "deepseek"
 ThinkingMode = str  # "off" | "high" | "max"
 ModelId = str  # Any model string from any provider
+ProviderKind = Literal["api_key", "external_cli", "local"]
 
 
 @dataclass(frozen=True)
@@ -28,11 +29,11 @@ class ProviderSpec:
     default_thinking: ThinkingMode
     models: dict[str, ModelInfo]
     pricing: dict[str, dict[str, float]]
+    kind: ProviderKind = "api_key"
 
 
 class Event:
     """Minimal forward reference — real definition is in aura.client.events."""
-    pass
 
 
 @runtime_checkable

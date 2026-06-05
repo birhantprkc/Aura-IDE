@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import shutil
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -52,6 +54,29 @@ def get_provider(provider_id: str) -> ProviderConfig:
     return provider_registry.get(provider_id)
 
 
+def get_provider_kind(provider_id: str) -> str:
+    """Return the kind of a provider: 'api_key', 'external_cli', or 'local'."""
+    return provider_registry.get(provider_id).kind
+
+
+def provider_needs_api_key(provider_id: str) -> bool:
+    """Return True if this provider requires an API key to function."""
+    return get_provider_kind(provider_id) == "api_key"
+
+
+def is_external_cli_available(provider_id: str) -> bool:
+    """Check whether an external_cli provider's executable is on PATH."""
+    if get_provider_kind(provider_id) != "external_cli":
+        return False
+    if provider_id == "claude_code":
+        exe = "claude.exe" if os.name == "nt" else "claude"
+    elif provider_id == "codex":
+        exe = "codex.exe" if os.name == "nt" else "codex"
+    else:
+        return False
+    return shutil.which(exe) is not None
+
+
 def get_api_key(provider_id: str) -> str | None:
     """Check env var first, then hardware-encrypted stored key."""
     cfg = provider_registry.get(provider_id)
@@ -73,7 +98,16 @@ def get_api_key(provider_id: str) -> str | None:
 
 
 def resolve_api_key(provider_id: str) -> str:
-    """Like require_api_key but provider-aware. Raises RuntimeError if not found."""
+    """Like require_api_key but provider-aware. Raises RuntimeError if not found.
+
+    For external_cli and local providers, returns an empty string without error.
+    """
+    if not provider_needs_api_key(provider_id):
+        logging.getLogger(__name__).warning(
+            "resolve_api_key called for non-api_key provider '%s' — returning empty string.",
+            provider_id,
+        )
+        return ""
     key = get_api_key(provider_id)
     if not key:
         cfg = provider_registry.get(provider_id)
@@ -86,15 +120,23 @@ def resolve_api_key(provider_id: str) -> str:
 
 
 def has_api_key(provider_id: str | None = None) -> bool:
-    """If provider_id is None, checks the default provider (deepseek)."""
+    """If provider_id is None, checks the default provider (deepseek).
+
+    For external_cli and local providers, returns True — they don't need keys.
+    """
     pid = provider_id if provider_id is not None else DEFAULT_PROVIDER
+    if not provider_needs_api_key(pid):
+        return True
     return get_api_key(pid) is not None
 
 
 def has_usable_provider_credentials() -> bool:
-    """Return True if at least one provider has a usable API key (env var or stored)."""
+    """Return True if at least one provider has a usable API key (env var or stored)
+    or an external CLI provider is available on PATH."""
     for pid in provider_registry.ids():
-        if get_api_key(pid) is not None:
+        if has_api_key(pid):
+            return True
+        if is_external_cli_available(pid):
             return True
     return False
 
@@ -110,10 +152,10 @@ def set_api_key(provider_id: str, api_key: str) -> None:
 
 
 def list_stored_providers() -> list[str]:
-    """Return list of provider IDs that have a stored key (encrypted or legacy)."""
+    """Return list of api_key provider IDs that have a stored key (encrypted or legacy)."""
     result: list[str] = []
     for pid in provider_registry.ids():
-        if _stored_has_key(pid):
+        if provider_needs_api_key(pid) and _stored_has_key(pid):
             result.append(pid)
     return result
 

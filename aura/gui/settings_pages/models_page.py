@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from aura.config import (
     AppSettings,
     fetch_provider_models,
+    get_provider_kind,
     resolve_role_default_model,
     save_dynamic_catalog,
 )
@@ -79,7 +80,9 @@ class ModelsPage(QWidget):
         self._planner_provider_combo = QComboBox()
         for pid in provider_registry.ids():
             spec = provider_registry.get(pid)
-            self._planner_provider_combo.addItem(spec.label, pid)
+            kind = get_provider_kind(pid)
+            kind_label = {"api_key": "API Key", "external_cli": "External CLI", "local": "Local"}.get(kind, kind)
+            self._planner_provider_combo.addItem(f"{spec.label} ({kind_label})", pid)
 
         self._planner_model_combo = QComboBox()
 
@@ -91,7 +94,9 @@ class ModelsPage(QWidget):
         self._worker_provider_combo = QComboBox()
         for pid in provider_registry.ids():
             spec = provider_registry.get(pid)
-            self._worker_provider_combo.addItem(spec.label, pid)
+            kind = get_provider_kind(pid)
+            kind_label = {"api_key": "API Key", "external_cli": "External CLI", "local": "Local"}.get(kind, kind)
+            self._worker_provider_combo.addItem(f"{spec.label} ({kind_label})", pid)
 
         self._worker_model_combo = QComboBox()
 

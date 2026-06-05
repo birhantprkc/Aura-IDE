@@ -10,9 +10,7 @@ from __future__ import annotations
 
 from aura.providers.base import ModelInfo, ThinkingMode
 
-# ---------------------------------------------------------------------------
 # Mutable model / pricing caches — shared references
-# ---------------------------------------------------------------------------
 
 DEEPSEEK_MODELS: dict[str, ModelInfo] = {
     "deepseek-v4-flash": ModelInfo(
@@ -162,9 +160,7 @@ OPENROUTER_PRICING: dict[str, dict[str, float]] = {
     "openrouter/owl-alpha": {"in_miss": 2.00, "in_hit": 1.00, "out": 8.00},
 }
 
-# ---------------------------------------------------------------------------
 # Google Cloud / Vertex AI
-# ---------------------------------------------------------------------------
 
 GOOGLE_CLOUD_MODELS: dict[str, ModelInfo] = {
     "gemini-2.5-pro": ModelInfo(
@@ -211,9 +207,7 @@ GOOGLE_CLOUD_PRICING: dict[str, dict[str, float]] = {
     "gemini-1.5-flash": {"in_miss": 0.075, "in_hit": 0.01875, "out": 0.30},
 }
 
-# ---------------------------------------------------------------------------
 # Provider catalogue — raw dict form consumed by ProviderRegistry
-# ---------------------------------------------------------------------------
 
 PROVIDER_CATALOG: dict[str, dict] = {
     "deepseek": {
@@ -224,6 +218,7 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "default_thinking": "high",
         "models": DEEPSEEK_MODELS,
         "pricing": DEEPSEEK_PRICING,
+        "kind": "api_key",
     },
     "openai": {
         "label": "OpenAI",
@@ -233,6 +228,7 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "default_thinking": "off",
         "models": OPENAI_MODELS,
         "pricing": OPENAI_PRICING,
+        "kind": "api_key",
     },
     "openrouter": {
         "label": "OpenRouter",
@@ -242,6 +238,7 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "default_thinking": "off",
         "models": OPENROUTER_MODELS,
         "pricing": OPENROUTER_PRICING,
+        "kind": "api_key",
     },
     "anthropic": {
         "label": "Anthropic",
@@ -251,6 +248,7 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "default_thinking": "high",
         "models": ANTHROPIC_MODELS,
         "pricing": ANTHROPIC_PRICING,
+        "kind": "api_key",
     },
     "google_cloud": {
         "label": "Google Gemini",
@@ -260,6 +258,7 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "default_thinking": "off",
         "models": GOOGLE_CLOUD_MODELS,
         "pricing": GOOGLE_CLOUD_PRICING,
+        "kind": "api_key",
     },
     "claude_code": {
         "label": "Claude Code",
@@ -277,6 +276,7 @@ PROVIDER_CATALOG: dict[str, dict] = {
             )
         },
         "pricing": {},
+        "kind": "external_cli",
     },
     "codex": {
         "label": "Codex",
@@ -294,12 +294,11 @@ PROVIDER_CATALOG: dict[str, dict] = {
             )
         },
         "pricing": {},
+        "kind": "external_cli",
     },
 }
 
-# ---------------------------------------------------------------------------
 # Default model / thinking constants
-# ---------------------------------------------------------------------------
 
 DEFAULT_MODEL: str = "deepseek-v4-flash"
 DEFAULT_THINKING: ThinkingMode = "high"

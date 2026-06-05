@@ -32,6 +32,7 @@ class ProviderRegistry:
                 default_thinking=raw["default_thinking"],
                 models=raw["models"],
                 pricing=raw["pricing"],
+                kind=raw.get("kind", "api_key"),
             )
 
     def ids(self) -> list[str]:

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 
-from aura.config import APP_NAME, has_api_key, icon_path
+from aura.config import APP_NAME, has_usable_provider_credentials, icon_path
 from aura.gui.theme import ACCENT, BG_RAISED, BORDER, FG, FG_DIM, SUCCESS, WARN
 
 
@@ -391,13 +391,13 @@ class OnboardingDialog(QDialog):
         status_layout = QHBoxLayout(status_frame)
         status_layout.setContentsMargins(16, 14, 16, 14)
 
-        has_key = has_api_key()
-        if has_key:
+        has_creds = has_usable_provider_credentials()
+        if has_creds:
             indicator_color = SUCCESS
-            status_text = "✓  API key configured"
+            status_text = "✓  Provider configured"
         else:
             indicator_color = WARN
-            status_text = "No API key found — you can add one in Settings"
+            status_text = "No provider configured — set up in Settings"
 
         indicator = QLabel("●")
         indicator.setStyleSheet(f"color: {indicator_color}; font-size: 18px; background: transparent;")
