@@ -931,7 +931,7 @@ class ConversationManager:
         dependency_setup_required: dict[str, dict[str, Any]],
     ) -> str:
         if not dependency_setup_required:
-            return "Dependency setup is required before retrying the rejected write."
+            return "Dependency setup is required before validation continues."
         path = sorted(dependency_setup_required)[0]
         state = dependency_setup_required[path]
         packages = ConversationManager._dependency_setup_packages(state)
@@ -940,7 +940,7 @@ class ConversationManager:
         setup_command = str(state.get("setup_command") or "")
         declared = bool(state.get("declared"))
         lines = [
-            f"Dependency setup is required before retrying {path}.",
+            f"Dependency setup is required before validating {path}.",
             "Do not create placeholder modules to bypass unresolved imports.",
         ]
         if declared:
@@ -949,7 +949,7 @@ class ConversationManager:
             lines.append(f"Add {package_label} to {dep_file}, then run the project-local setup command.")
         if setup_command:
             lines.append(f"Setup command: {setup_command}")
-        lines.append("After setup succeeds, retry the original write once.")
+        lines.append("After setup succeeds, continue validation.")
         return "\n".join(lines)
 
     @staticmethod
@@ -1382,7 +1382,7 @@ class ConversationManager:
         payload = self._recovery_payload(
             path=target,
             failure_class="project_environment_setup_needed",
-            error="Dependency setup is required before retrying the rejected write.",
+            error="Dependency setup is required before validation continues.",
             suggested_next_tool=next_tool,
             suggested_next_action=action,
             recoverable=True,
@@ -1576,6 +1576,7 @@ class ConversationManager:
             and path
             and name in WRITE_TOOLS
         ):
+            applied_write = parsed.get("applied") is True
             self._record_dependency_setup_required(
                 path=path,
                 tool=name,
@@ -1584,6 +1585,17 @@ class ConversationManager:
             )
             parsed["internal_recovery_steer"] = True
             content = json.dumps(parsed, ensure_ascii=False)
+            if applied_write:
+                edit_fallback_required.pop(path, None)
+                line_range_reread_required.pop(path, None)
+                compiler_repair_required.pop(path, None)
+                if self._is_python_path(path) and not _is_validation_scratch_path(path):
+                    syntax_validation_required.add(path)
+                if path in syntax_repair_required:
+                    syntax_repair_required[path]["repair_attempted"] = True
+                    syntax_repair_required[path]["awaiting_validation"] = True
+                    if not _is_validation_scratch_path(path):
+                        syntax_validation_required.add(path)
             return content
 
         if (

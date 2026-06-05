@@ -278,7 +278,7 @@ def test_dependency_setup_merges_multiple_missing_packages_for_same_pending_path
     assert state["setup_failed"] is False
 
 
-def test_declared_fastapi_dependency_setup_runs_then_original_write_retries(tmp_path):
+def test_declared_fastapi_dependency_setup_runs_after_applied_write_before_validation(tmp_path):
     history = History()
     tools = MagicMock(spec=ToolRegistry)
     tools.tool_defs.return_value = []
@@ -294,6 +294,8 @@ def test_declared_fastapi_dependency_setup_runs_then_original_write_retries(tmp_
             payload={
                 "ok": True,
                 "path": "app.py",
+                "applied": True,
+                "is_new_file": True,
                 "dependency_setup_needed": True,
                 "missing_module": "fastapi",
                 "missing_dependency": "fastapi",
@@ -301,10 +303,6 @@ def test_declared_fastapi_dependency_setup_runs_then_original_write_retries(tmp_
                 "dependency_file": "pyproject.toml",
                 "setup_command": setup_command,
             },
-        ),
-        ToolExecResult(
-            ok=True,
-            payload={"ok": True, "path": "app.py", "applied": True, "is_new_file": True},
         ),
     ]
     manager = ConversationManager(history, tools)
@@ -323,17 +321,6 @@ def test_declared_fastapi_dependency_setup_runs_then_original_write_retries(tmp_
                 )
             ]),
             iter([_done(tool_calls=[_tool_call("setup1", "run_terminal_command", {"command": setup_command})])]),
-            iter([
-                _done(
-                    tool_calls=[
-                        _tool_call(
-                            "w2",
-                            "write_file",
-                            {"path": "app.py", "content": "from fastapi import FastAPI\napp = FastAPI()\n"},
-                        )
-                    ]
-                )
-            ]),
             iter([_done("Done. py_compile passed.")]),
         ]
     )
@@ -350,7 +337,7 @@ def test_declared_fastapi_dependency_setup_runs_then_original_write_retries(tmp_
         with (
             patch("aura.conversation.tool_runner.load_settings") as load_settings,
             patch("aura.conversation.tool_runner.SandboxExecutor", return_value=sandbox),
-            patch.object(ConversationManager, "_run_focused_py_compile", return_value=(True, "app.py: ok")),
+            patch.object(ConversationManager, "_run_focused_py_compile", return_value=(True, "app.py: ok")) as py_compile,
         ):
             load_settings.return_value = MagicMock(sandbox_mode="host")
             manager.send(
@@ -365,9 +352,10 @@ def test_declared_fastapi_dependency_setup_runs_then_original_write_retries(tmp_
         hooks.unregister("generate_worker_code")
 
     executed_names = [call.kwargs["name"] for call in tools.execute.call_args_list]
-    assert executed_names == ["write_file", "write_file"]
+    assert executed_names == ["write_file"]
     sandbox.run_terminal_command.assert_called_once()
     assert "-m pip install -e ." in sandbox.run_terminal_command.call_args.kwargs["command"]
+    py_compile.assert_called_once_with(["app.py"])
     assert not any(
         isinstance(ev, ToolResult)
         and ev.name == "write_file"
@@ -376,7 +364,7 @@ def test_declared_fastapi_dependency_setup_runs_then_original_write_retries(tmp_
     )
 
 
-def test_undeclared_fastapi_dependency_file_update_setup_then_original_write_retries(tmp_path):
+def test_undeclared_fastapi_dependency_file_update_setup_then_validation(tmp_path):
     history = History()
     tools = MagicMock(spec=ToolRegistry)
     tools.tool_defs.return_value = []
@@ -392,6 +380,8 @@ def test_undeclared_fastapi_dependency_file_update_setup_then_original_write_ret
             payload={
                 "ok": True,
                 "path": "app.py",
+                "applied": True,
+                "is_new_file": True,
                 "dependency_setup_needed": True,
                 "missing_module": "fastapi",
                 "missing_dependency": "fastapi",
@@ -403,10 +393,6 @@ def test_undeclared_fastapi_dependency_file_update_setup_then_original_write_ret
         ToolExecResult(
             ok=True,
             payload={"ok": True, "path": "pyproject.toml", "applied": True, "is_new_file": False},
-        ),
-        ToolExecResult(
-            ok=True,
-            payload={"ok": True, "path": "app.py", "applied": True, "is_new_file": True},
         ),
     ]
     manager = ConversationManager(history, tools)
@@ -439,17 +425,6 @@ def test_undeclared_fastapi_dependency_file_update_setup_then_original_write_ret
                 )
             ]),
             iter([_done(tool_calls=[_tool_call("setup1", "run_terminal_command", {"command": setup_command})])]),
-            iter([
-                _done(
-                    tool_calls=[
-                        _tool_call(
-                            "w2",
-                            "write_file",
-                            {"path": "app.py", "content": "from fastapi import FastAPI\napp = FastAPI()\n"},
-                        )
-                    ]
-                )
-            ]),
             iter([_done("Done. py_compile passed.")]),
         ]
     )
@@ -466,7 +441,7 @@ def test_undeclared_fastapi_dependency_file_update_setup_then_original_write_ret
         with (
             patch("aura.conversation.tool_runner.load_settings") as load_settings,
             patch("aura.conversation.tool_runner.SandboxExecutor", return_value=sandbox),
-            patch.object(ConversationManager, "_run_focused_py_compile", return_value=(True, "app.py: ok")),
+            patch.object(ConversationManager, "_run_focused_py_compile", return_value=(True, "app.py: ok")) as py_compile,
         ):
             load_settings.return_value = MagicMock(sandbox_mode="host")
             manager.send(
@@ -487,10 +462,10 @@ def test_undeclared_fastapi_dependency_file_update_setup_then_original_write_ret
     assert executed == [
         ("write_file", "app.py"),
         ("write_file", "pyproject.toml"),
-        ("write_file", "app.py"),
     ]
     sandbox.run_terminal_command.assert_called_once()
     assert "-m pip install -e ." in sandbox.run_terminal_command.call_args.kwargs["command"]
+    py_compile.assert_called_once_with(["app.py"])
 
 
 def test_repeated_identical_edit_attempt_is_blocked_and_redirected(tmp_path):

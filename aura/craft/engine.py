@@ -47,6 +47,18 @@ def _strip_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
     return body
 
 
+def _is_default_return_value(val: ast.expr | None) -> bool:
+    if val is None:
+        return True
+    if isinstance(val, ast.Constant):
+        return True
+    if isinstance(val, (ast.List, ast.Dict, ast.Set)) and not val.elts:
+        return True
+    if isinstance(val, ast.Tuple) and not val.elts:
+        return True
+    return False
+
+
 def _generic_name_count(tree: ast.AST, generic_set: set[str]) -> int:
     """Count distinct uses of generic names as assignment targets or function params."""
     seen: set[tuple[str, int]] = set()
@@ -157,8 +169,15 @@ class CraftEngine:
                         is_stub = True
                     elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and stmt.value.value is Ellipsis:
                         is_stub = True
-                    elif isinstance(stmt, ast.Raise) and isinstance(stmt.exc, ast.Name) and stmt.exc.id == "NotImplementedError":
-                        is_stub = True
+                    elif isinstance(stmt, ast.Raise):
+                        if isinstance(stmt.exc, ast.Name) and stmt.exc.id == "NotImplementedError":
+                            is_stub = True
+                        elif (
+                            isinstance(stmt.exc, ast.Call)
+                            and isinstance(stmt.exc.func, ast.Name)
+                            and stmt.exc.func.id == "NotImplementedError"
+                        ):
+                            is_stub = True
                         
                     if is_stub:
                         issues.append(CraftIssue(
@@ -211,12 +230,9 @@ class CraftEngine:
                                 is_swallowed = True
                                 swallow_code = "swallow-except-pass"
                             elif isinstance(node.body[0], ast.Return):
-                                if isinstance(node.body[0].value, ast.Constant) and node.body[0].value.value is None:
+                                if _is_default_return_value(node.body[0].value):
                                     is_swallowed = True
-                                    swallow_code = "swallow-except-return-none"
-                                elif node.body[0].value is None: # bare return
-                                    is_swallowed = True
-                                    swallow_code = "swallow-except-return-none"
+                                    swallow_code = "swallow-except-return-default"
                                     
                 if is_swallowed:
                     issues.append(CraftIssue(

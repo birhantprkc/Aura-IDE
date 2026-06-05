@@ -173,40 +173,22 @@ class CompilerService:
                     set(decision.metadata.get("checks_warned", [])) | {"reference_checker"}
                 )
             if filtered_ref_issues:
-                hard_ref_issues = [issue for issue in filtered_ref_issues if issue.severity == CraftIssueSeverity.HARD]
-                soft_ref_issues = [issue for issue in filtered_ref_issues if issue.severity == CraftIssueSeverity.SOFT]
-                if soft_ref_issues:
-                    _record_warnings(decision.metadata, soft_ref_issues, "reference_checker")
-                if hard_ref_issues:
-                    decision.metadata["introduced_environment_issues"] = [
-                        _issue_payload(issue) for issue in hard_ref_issues
-                    ]
-                    decision.metadata["failure_class"] = "introduced_environment_issue"
-                    decision.metadata["write_outcome"] = "not_applied_craft_rejected"
-
-            # Merge filtered reference issues into the decision
-            if filtered_ref_issues:
-                hard_ref_issues = [issue for issue in filtered_ref_issues if issue.severity == CraftIssueSeverity.HARD]
-                if decision.approved:
-                    if hard_ref_issues:
-                        decision = CraftDecision(
-                            approved=False,
-                            issues=hard_ref_issues,
-                            cleaned_code=capsule.proposed_code,
-                            metadata=dict(decision.metadata),
-                        )
-                elif hard_ref_issues:
-                    existing_issues_set = {(issue.code, issue.line) for issue in decision.issues}
-                    for new_issue in hard_ref_issues:
-                        if (new_issue.code, new_issue.line) not in existing_issues_set:
-                            decision.issues.append(new_issue)
-                            existing_issues_set.add((new_issue.code, new_issue.line))
-                decision = self._downgrade_soft_decision(decision)
+                # ReferenceChecker is diagnostic metadata at the pre-write Craft
+                # boundary. Missing imports, unresolved local references, and
+                # environment-dependent checks must not prevent Aura from writing
+                # source; setup and validation run after the write exists.
+                _record_warnings(decision.metadata, filtered_ref_issues, "reference_checker")
+                decision.metadata["introduced_environment_issues"] = [
+                    _issue_payload(issue) for issue in filtered_ref_issues
+                ]
                         
         # Final Stage: CodeFormatter
         if decision.approved:
             decision.cleaned_code = self._formatter.format_code(decision.cleaned_code, workspace_root=workspace_root)
-            if decision.metadata.get("pre_existing_environment_issues"):
+            if (
+                decision.metadata.get("pre_existing_environment_issues")
+                or decision.metadata.get("introduced_environment_issues")
+            ):
                 decision.metadata["write_outcome"] = "applied_with_environment_caveat"
             else:
                 decision.metadata["write_outcome"] = "applied"

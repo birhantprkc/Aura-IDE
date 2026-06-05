@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from aura.conversation.tools._types import ToolExecResult
+from aura.conversation.tools._types import ApprovalDecision, ToolExecResult
 from aura.conversation.tools._write_mixin import WriteHandlersMixin, _run_compiler_pipeline
 from aura.conversation.tools.registry import ToolRegistry
 from aura.craft.types import CompilerBounce, CraftIssue, CraftIssueSeverity
@@ -31,6 +31,20 @@ def _handler(name):
         elif name == "edit_symbol":
             return registry._handle_edit_symbol(args, cb, reject_all)
     return _run
+
+
+def _force_missing_modules(monkeypatch, *module_names: str) -> None:
+    import aura.craft.reference_checker as reference_checker
+
+    missing = set(module_names)
+    original_find_spec = reference_checker.importlib.util.find_spec
+
+    def fake_find_spec(name, *args, **kwargs):
+        if str(name).split(".", 1)[0] in missing:
+            return None
+        return original_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(reference_checker.importlib.util, "find_spec", fake_find_spec)
 
 
 @pytest.fixture
@@ -83,101 +97,66 @@ class TestWriteMixinCompiler:
         assert "pre_existing_environment_issues" not in result.payload
 
     @pytest.mark.usefixtures("enable_craft")
-    def test_broken_import_for_declared_dependency_requests_setup_not_quality_bounce(self, tmp_workspace):
+    def test_declared_fastapi_dependency_missing_from_env_applies_write_then_requests_setup(self, tmp_workspace, monkeypatch):
+        _force_missing_modules(monkeypatch, "fastapi")
         (tmp_workspace / "pyproject.toml").write_text(
             "[project]\nname = 'demo'\ndependencies = ['fastapi']\n",
             encoding="utf-8",
         )
-        proposal = {
-            "ok": True,
-            "rel_path": "app.py",
-            "old_content": "",
-            "new_content": "from fastapi import FastAPI\napp = FastAPI()\n",
-            "is_new_file": True,
-        }
-        issue = CraftIssue(
-            line=1,
-            column=0,
-            code="broken-import",
-            message="Import source 'fastapi' could not be resolved in workspace or stdlib.",
-            suggestion="Install the missing package or correct the import path.",
-            severity=CraftIssueSeverity.HARD,
+        reg = DummyWriteRegistry(tmp_workspace)
+        approve_cb = MagicMock(return_value=ApprovalDecision("approve"))
+
+        result = _handler("write_file")(
+            reg,
+            {"path": "app.py", "content": "from fastapi import FastAPI\n\napp = FastAPI()\n"},
+            approve_cb,
+            False,
         )
 
-        with patch("aura.conversation.tools._write_mixin.compiler_service.process_proposal") as process:
-            process.side_effect = lambda capsule, workspace_root=None: CompilerBounce(
-                capsule=capsule,
-                issues=[issue],
-                repair_instructions="Install the missing package.",
-                attempt_number=1,
-                max_attempts=2,
-            )
-
-            result = _run_compiler_pipeline(proposal, "write_file", workspace_root=tmp_workspace)
-
-        assert result is not None
         assert result.ok is True
-        assert result.payload["applied"] is False
-        assert result.payload["failure_class"] == "project_environment_setup_needed"
+        assert (tmp_workspace / "app.py").exists()
+        assert result.payload["applied"] is True
+        assert result.payload["write_outcome"] == "applied_dependency_setup_pending"
+        assert not str(result.payload["write_outcome"]).startswith("not_applied")
         assert result.payload["dependency_setup_needed"] is True
         assert result.payload["dependency_declared"] is True
         assert result.payload["missing_dependency"] == "fastapi"
         assert result.payload["dependency_file"] == "pyproject.toml"
         assert result.payload["setup_command"] == "python -m venv .venv"
+        assert result.payload["introduced_environment_issues"][0]["code"] == "broken-import"
+        assert result.payload["craft_metadata"]["introduced_environment_issues"][0]["code"] == "broken-import"
         assert "quality_bounce" not in result.payload
 
     @pytest.mark.usefixtures("enable_craft")
-    def test_multiple_broken_imports_are_reported_in_one_dependency_setup_payload(self, tmp_workspace):
+    def test_undeclared_third_party_dependency_applies_write_then_requests_dependency_file_flow(self, tmp_workspace, monkeypatch):
+        _force_missing_modules(monkeypatch, "missingvendoralpha", "missingvendorbeta")
         (tmp_workspace / "pyproject.toml").write_text(
             "[project]\nname = 'demo'\ndependencies = []\n",
             encoding="utf-8",
         )
-        proposal = {
-            "ok": True,
-            "rel_path": "app.py",
-            "old_content": "",
-            "new_content": "from fastapi import FastAPI\nimport httpx\n",
-            "is_new_file": True,
-        }
-        issues = [
-            CraftIssue(
-                line=1,
-                column=0,
-                code="broken-import",
-                message="Import source 'fastapi' could not be resolved in workspace or stdlib.",
-                suggestion="Install the missing package or correct the import path.",
-                severity=CraftIssueSeverity.HARD,
-            ),
-            CraftIssue(
-                line=2,
-                column=0,
-                code="broken-import",
-                message="Import source 'httpx' could not be resolved in workspace or stdlib.",
-                suggestion="Install the missing package or correct the import path.",
-                severity=CraftIssueSeverity.HARD,
-            ),
-        ]
+        reg = DummyWriteRegistry(tmp_workspace)
+        approve_cb = MagicMock(return_value=ApprovalDecision("approve"))
 
-        with patch("aura.conversation.tools._write_mixin.compiler_service.process_proposal") as process:
-            process.side_effect = lambda capsule, workspace_root=None: CompilerBounce(
-                capsule=capsule,
-                issues=issues,
-                repair_instructions="Install the missing packages.",
-                attempt_number=1,
-                max_attempts=2,
-            )
+        result = _handler("write_file")(
+            reg,
+            {
+                "path": "app.py",
+                "content": "import missingvendoralpha\nimport missingvendorbeta\n\nvalue = 1\n",
+            },
+            approve_cb,
+            False,
+        )
 
-            result = _run_compiler_pipeline(proposal, "write_file", workspace_root=tmp_workspace)
-
-        assert result is not None
         assert result.ok is True
+        assert result.payload["applied"] is True
         assert result.payload["dependency_setup_needed"] is True
         assert result.payload["dependency_declared"] is False
-        assert result.payload["missing_modules"] == ["fastapi", "httpx"]
-        assert result.payload["missing_dependencies"] == ["fastapi", "httpx"]
-        assert result.payload["undeclared_dependencies"] == ["fastapi", "httpx"]
-        assert "fastapi" in result.payload["suggested_next_action"]
-        assert "httpx" in result.payload["suggested_next_action"]
+        assert result.payload["missing_modules"] == ["missingvendoralpha", "missingvendorbeta"]
+        assert result.payload["missing_dependencies"] == ["missingvendoralpha", "missingvendorbeta"]
+        assert result.payload["undeclared_dependencies"] == ["missingvendoralpha", "missingvendorbeta"]
+        assert "missingvendoralpha" in result.payload["suggested_next_action"]
+        assert "missingvendorbeta" in result.payload["suggested_next_action"]
+        assert not str(result.payload["write_outcome"]).startswith("not_applied")
 
     @pytest.mark.usefixtures("enable_craft")
     def test_new_python_write_enters_craft(self, tmp_workspace):
@@ -352,7 +331,8 @@ class TestWriteMixinCompiler:
             mock_inval.assert_not_called()
 
     @pytest.mark.usefixtures("enable_craft")
-    def test_compiler_bounces_do_not_invalidate(self, tmp_workspace):
+    def test_missing_import_warning_applies_and_invalidates_index(self, tmp_workspace, monkeypatch):
+        _force_missing_modules(monkeypatch, "does_not_exist")
         reg = DummyWriteRegistry(tmp_workspace)
         
         class MockApprove:
@@ -366,8 +346,8 @@ class TestWriteMixinCompiler:
             )
             assert res.ok
             assert res.payload.get("dependency_setup_needed") is True
-            assert res.payload.get("applied") is False
-            mock_inval.assert_not_called()
+            assert res.payload.get("applied") is True
+            mock_inval.assert_called_once()
 
     @pytest.mark.usefixtures("enable_craft")
     def test_reject_all_does_not_invalidate(self, tmp_workspace):
