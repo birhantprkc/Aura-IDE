@@ -522,6 +522,11 @@ def _is_validation_scratch_path(path: str) -> bool:
     return False
 
 
+def _is_aura_tmp_scratch_path(path: str) -> bool:
+    normalized = _normalize_worker_path(path)
+    return normalized.startswith(".aura/tmp/") and _is_validation_scratch_path(normalized)
+
+
 def _is_scratch_python_name(name: str) -> bool:
     return name.startswith(
         (
@@ -691,7 +696,7 @@ class WriteHandlersMixin:
         target = self._resolve_in_root(path_arg)
         if name == "write_file":
             rel_path = safe_relative_to(target, self._root).as_posix()
-            if _is_validation_scratch_path(rel_path):
+            if _is_validation_scratch_path(rel_path) and not _is_aura_tmp_scratch_path(rel_path):
                 return ToolExecResult(
                     ok=False,
                     payload=_mark_not_applied({
@@ -733,6 +738,22 @@ class WriteHandlersMixin:
             if not isinstance(content, str):
                 return ToolExecResult(
                     ok=False, payload=_mark_not_applied({"ok": False, "error": "content must be a string", "failure_class": "internal_error"})
+                )
+            if _is_aura_tmp_scratch_path(rel_path):
+                is_new_file = not target.exists()
+                target.parent.mkdir(parents=True, exist_ok=True)
+                _atomic_write_bytes(target, content.encode("utf-8"))
+                return ToolExecResult(
+                    ok=True,
+                    payload={
+                        "ok": True,
+                        "path": rel_path,
+                        "applied": True,
+                        "applied_tool": "write_file",
+                        "write_outcome": "diagnostic_scratch_applied",
+                        "is_new_file": is_new_file,
+                        "diagnostic_scratch": True,
+                    },
                 )
             proposal = _reg.propose_write(self._root, target, content)
             if not proposal.get("ok", False):

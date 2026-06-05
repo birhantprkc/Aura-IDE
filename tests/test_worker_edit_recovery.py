@@ -606,6 +606,27 @@ def test_root_check_scratch_file_write_is_rejected_before_approval(tmp_workspace
     assert not (tmp_workspace / "_check_acceptance.py").exists()
 
 
+def test_aura_tmp_diagnostic_write_skips_craft_and_approval(tmp_workspace):
+    registry = ToolRegistry(tmp_workspace, mode="worker")
+    approve_cb = MagicMock(return_value=ApprovalDecision("approve"))
+
+    result = registry.execute(
+        "write_file",
+        {
+            "path": ".aura/tmp/_tmp_inspect_wear.py",
+            "content": "import numpy\nprint('diagnostic')\n",
+        },
+        approve_cb,
+        False,
+    )
+
+    assert result.ok is True
+    assert result.payload["diagnostic_scratch"] is True
+    assert result.payload["write_outcome"] == "diagnostic_scratch_applied"
+    assert approve_cb.call_count == 0
+    assert (tmp_workspace / ".aura" / "tmp" / "_tmp_inspect_wear.py").exists()
+
+
 def test_write_file_invalid_python_blocks_before_approval_when_craft_disabled(tmp_workspace, monkeypatch):
     registry = ToolRegistry(tmp_workspace, mode="worker")
     approve_cb = MagicMock(return_value=ApprovalDecision("approve"))

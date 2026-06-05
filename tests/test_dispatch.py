@@ -805,6 +805,23 @@ def test_worker_summary_dedupes_duplicate_modified_file_rows_and_count():
     assert summary.count("b.py   (new)") == 1
 
 
+def test_worker_summary_dedupes_duplicate_failed_writes():
+    summary = _build_worker_summary(
+        WorkerDispatchRequest(goal="Fix", files=["a.py"], spec="spec", acceptance=""),
+        History(),
+        [],
+        [],
+        {},
+        [],
+        not_applied_writes=[
+            {"path": "_tmp_inspect_wear.py", "failure_class": "introduced_environment_issue"},
+            {"path": "_tmp_inspect_wear.py", "failure_class": "introduced_environment_issue"},
+        ],
+    )
+
+    assert summary.count("_tmp_inspect_wear.py") == 1
+
+
 def test_scratch_diagnostic_missing_import_is_caveat_not_project_patch():
     relay = SimpleNamespace(
         write_results=[
