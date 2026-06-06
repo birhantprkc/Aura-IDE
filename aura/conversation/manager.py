@@ -1079,7 +1079,8 @@ class ConversationManager:
         compiler_repair_required: dict[str, dict[str, Any]],
         write_attempts_by_path: dict[str, int],
     ) -> dict[str, Any] | None:
-        path = self._tool_path(name, args)
+        raw_path = self._tool_path(name, args)
+        path = _normalize_worker_path(raw_path) if raw_path else ""
         if self._has_compiler_repair_failure(compiler_repair_required):
             target = sorted(
                 path for path, state in compiler_repair_required.items()
@@ -1327,8 +1328,8 @@ class ConversationManager:
 
         if ok:
             if name in WRITE_TOOLS and path:
-                edit_fallback_required.pop(path, None)
-                line_range_reread_required.pop(path, None)
+                self._pop_normalized_recovery_key(edit_fallback_required, path)
+                self._pop_normalized_recovery_key(line_range_reread_required, path)
                 compiler_repair_required.pop(path, None)
                 if self._is_python_path(path) and not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
@@ -1500,14 +1501,25 @@ class ConversationManager:
         if name == "read_file":
             path = str(args.get("path") or (parsed.get("path") if isinstance(parsed, dict) else ""))
             if path:
-                line_range_reread_required.pop(path, None)
-                edit_fallback_required.pop(path, None)
+                ConversationManager._pop_normalized_recovery_key(line_range_reread_required, path)
+                ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
         elif name == "read_files":
             paths = args.get("paths")
             if isinstance(paths, list):
                 for item in paths:
-                    line_range_reread_required.pop(str(item), None)
-                    edit_fallback_required.pop(str(item), None)
+                    ConversationManager._pop_normalized_recovery_key(line_range_reread_required, str(item))
+                    ConversationManager._pop_normalized_recovery_key(edit_fallback_required, str(item))
+
+    @staticmethod
+    def _pop_normalized_recovery_key(
+        state: dict[str, dict[str, Any]],
+        path: str,
+    ) -> None:
+        normalized = _normalize_worker_path(path)
+        state.pop(normalized, None)
+        for existing_path in list(state):
+            if _normalize_worker_path(existing_path) == normalized:
+                state.pop(existing_path, None)
 
     @staticmethod
     def _syntax_repair_tool_allowed(
@@ -1528,7 +1540,8 @@ class ConversationManager:
             command = str(args.get("command", ""))
             if not re.search(
                 r"(?i)(?:^|[;&|]\s*)"
-                r"(?:(?:[A-Za-z]:)?[A-Za-z0-9_./\\\-]*python(?:\.exe)?|py)"
+                r"(?:(?:\"[^\"]*python3?(?:\.exe)?\")|(?:'[^']*python3?(?:\.exe)?')|"
+                r"(?:[A-Za-z]:)?[A-Za-z0-9_./\\\-]*python3?(?:\.exe)?|py)"
                 r"\s+-m\s+py_compile\b",
                 command,
             ):

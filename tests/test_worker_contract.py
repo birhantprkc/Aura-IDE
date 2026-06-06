@@ -108,6 +108,17 @@ def test_edited_after_read_is_ok() -> None:
     assert edited == []
 
 
+def test_edited_after_equivalent_normalized_read_is_ok() -> None:
+    edited = _check_read_before_edit(
+        read_files={r".\aura\bridge\dispatch.py"},
+        read_outline_files=set(),
+        edited_existing_files=["aura/bridge/dispatch.py"],
+        file_exists=lambda p: True,
+    )
+
+    assert edited == []
+
+
 def test_read_outline_counts_as_read_for_enforcement() -> None:
     """read_file_outline is treated as a valid read."""
     edited = _check_read_before_edit(

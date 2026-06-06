@@ -395,7 +395,7 @@ def _is_validation_terminal_record(record: dict[str, Any]) -> bool:
     if not command:
         return False
     normalized = " ".join(command.lower().split())
-    python_exe = r"(?:(?:\"[^\"]*python(?:\.exe)?\")|(?:'[^']*python(?:\.exe)?')|\S*python(?:\.exe)?|py)"
+    python_exe = r"(?:(?:\"[^\"]*python3?(?:\.exe)?\")|(?:'[^']*python3?(?:\.exe)?')|\S*python3?(?:\.exe)?|py)"
 
     known_patterns = (
         rf"(^|[;&|]\s*){python_exe}\s+-m\s+py_compile\b",
@@ -418,7 +418,7 @@ def _is_validation_terminal_record(record: dict[str, Any]) -> bool:
 
 
 def _is_python_assertion_command(normalized_command: str) -> bool:
-    python_exe = r"(?:(?:\"[^\"]*python(?:\.exe)?\")|(?:'[^']*python(?:\.exe)?')|\S*python(?:\.exe)?|py)"
+    python_exe = r"(?:(?:\"[^\"]*python3?(?:\.exe)?\")|(?:'[^']*python3?(?:\.exe)?')|\S*python3?(?:\.exe)?|py)"
     if not re.search(rf"(^|[;&|]\s*){python_exe}\s+-c\s+", normalized_command):
         return False
     return any(token in normalized_command for token in ("assert ", "raise systemexit", "sys.exit("))

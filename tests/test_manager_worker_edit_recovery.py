@@ -147,6 +147,16 @@ def test_syntax_repair_allows_targeted_py_compile(tmp_workspace):
     )
 
 
+def test_syntax_repair_allows_python3_py_compile(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+
+    assert manager._syntax_repair_tool_allowed(
+        "run_terminal_command",
+        {"command": "python3 -m py_compile ./pkg/database.py"},
+        {"pkg/database.py"},
+    )
+
+
 def test_syntax_repair_blocks_unrelated_terminal_commands(tmp_workspace):
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
 
@@ -273,3 +283,37 @@ def test_patch_file_failure_requires_reread_before_retry(tmp_workspace):
         write_attempts_by_path={},
     )
     assert unblocked is None
+
+
+def test_patch_file_failure_reread_clears_normalized_path(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    fallback_required = {
+        "pkg/sample.py": {
+            "failure_class": "patch_hunk_not_found",
+            "error": "patch_file hunk old block was not found.",
+        }
+    }
+    line_range_required = {
+        "pkg/lines.py": {
+            "failure_class": "edit_mechanics_stale_line_range",
+            "error": "stale range",
+        }
+    }
+
+    manager._record_reads_for_recovery(
+        "read_file",
+        {"path": r".\pkg\sample.py"},
+        {"path": r".\pkg\sample.py"},
+        line_range_required,
+        fallback_required,
+    )
+    manager._record_reads_for_recovery(
+        "read_file",
+        {"path": "./pkg/lines.py"},
+        {"path": "./pkg/lines.py"},
+        line_range_required,
+        fallback_required,
+    )
+
+    assert fallback_required == {}
+    assert line_range_required == {}

@@ -502,9 +502,19 @@ class _DispatchProxy(QObject):
                 result_errors.append(f"Validation command failed (exit code {v['exit_code']}): {cmd}")
 
         # Read-before-edit enforcement
-        edited_without_read = _check_read_before_edit(
-            relay.read_files, relay.read_outline_files, relay.edited_existing_files,
-        )
+        if self._workspace_root is None:
+            edited_without_read = _check_read_before_edit(
+                relay.read_files,
+                relay.read_outline_files,
+                relay.edited_existing_files,
+            )
+        else:
+            edited_without_read = _check_read_before_edit(
+                relay.read_files,
+                relay.read_outline_files,
+                relay.edited_existing_files,
+                file_exists=_workspace_file_exists(self._workspace_root),
+            )
         if edited_without_read:
             result_errors.append(
                 "Worker edited existing file(s) without reading them first: "
@@ -1594,11 +1604,32 @@ def _check_read_before_edit(
     """
     if file_exists is None:
         file_exists = lambda p: Path(p).exists()  # noqa: E731
-    all_read = read_files | set(read_outline_files)
+    all_read = {
+        _normalize_worker_path(path)
+        for path in (set(read_files) | set(read_outline_files))
+    }
     return [
         p for p in edited_existing_files
-        if p not in all_read and file_exists(p)
+        if _normalize_worker_path(p) not in all_read
+        and file_exists(_normalize_worker_path(p))
     ]
+
+
+def _workspace_file_exists(workspace_root: Path):
+    root = Path(workspace_root).resolve()
+
+    def exists(path: str) -> bool:
+        try:
+            candidate = Path(_normalize_worker_path(path))
+            if not candidate.is_absolute():
+                candidate = root / candidate
+            resolved = candidate.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError):
+            return False
+        return resolved.exists()
+
+    return exists
 
 
 

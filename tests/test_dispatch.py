@@ -25,7 +25,9 @@ from aura.bridge.dispatch import (
     _unrecovered_validation_failures,
     _validation_results_for_task,
     _worker_result_allows_auto_commit,
+    _workspace_file_exists,
 )
+from aura.bridge.event_relay import _is_validation_terminal_record
 from aura.conversation.history import History
 
 
@@ -341,6 +343,31 @@ def test_py_compile_exit_1_validation_remains_unrecovered_failure():
     ]
 
     assert _unrecovered_validation_failures(results) == results
+
+
+def test_python3_py_compile_terminal_record_counts_as_validation():
+    assert _is_validation_terminal_record(
+        {
+            "command": "python3 -m py_compile app/tray.py",
+            "ok": True,
+            "exit_code": 0,
+        }
+    )
+
+
+def test_workspace_file_exists_resolves_under_root_and_blocks_escape(tmp_path):
+    root = tmp_path / "workspace"
+    target = root / "aura" / "bridge" / "dispatch.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("pass\n", encoding="utf-8")
+    outside = tmp_path / "outside.py"
+    outside.write_text("pass\n", encoding="utf-8")
+
+    exists = _workspace_file_exists(root)
+
+    assert exists("./aura/bridge/dispatch.py")
+    assert exists(r".\aura\bridge\dispatch.py")
+    assert not exists("../outside.py")
 
 
 def test_rg_real_error_validation_remains_unrecovered_failure():
