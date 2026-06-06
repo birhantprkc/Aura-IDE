@@ -11,6 +11,7 @@ from aura.conversation.dispatch import (
     infer_outcome_status,
     normalize_outcome_status,
 )
+from aura.conversation.task_shape import TaskShape, infer_task_shape
 from aura.bridge.dispatch import (
     _applied_modified_files,
     _build_worker_summary,
@@ -280,6 +281,95 @@ def test_dispatch_request_expected_dataclass_fields_none():
     assert req.expected_dataclass_fields == {}
 
 
+def test_task_shape_infers_new_tool_or_app():
+    shape = infer_task_shape(
+        goal="Build a release tracker app",
+        spec="Create a workflow that stores releases and shows useful results.",
+        files=["aura/release_tracker.py"],
+    )
+
+    assert shape.task_kind == "new_tool_or_app"
+    assert "build the smallest shippable slice, not a demo" in shape.quality_pressure
+    assert "fake integrations" in shape.forbidden_moves
+    assert "release_tracker" in shape.likely_entities
+
+
+def test_task_shape_infers_bugfix():
+    shape = infer_task_shape(goal="Fix failing dispatch validation regression")
+
+    assert shape.task_kind == "bugfix"
+    assert "make the fix surgical" in shape.quality_pressure
+
+
+def test_task_shape_infers_gui_polish():
+    shape = infer_task_shape(goal="Polish the dialog button copy and layout")
+
+    assert shape.task_kind == "gui_polish"
+    assert "clarify user states, copy, and layout" in shape.quality_pressure
+
+
+def test_task_shape_infers_cleanup_and_refactor():
+    cleanup = infer_task_shape(goal="Cleanup dead code in the old parser")
+    refactor = infer_task_shape(goal="Refactor auth helpers to extract token parsing")
+
+    assert cleanup.task_kind == "cleanup"
+    assert refactor.task_kind == "refactor"
+
+
+def test_task_shape_unknown_fallback():
+    shape = infer_task_shape(goal="Adjust the thing")
+
+    assert shape.task_kind == "unknown"
+    assert shape.proof_targets
+
+
+def test_dispatch_request_task_shape_roundtrip():
+    original = WorkerDispatchRequest(
+        goal="Build a dashboard",
+        files=["dashboard.py"],
+        spec="Create the dashboard.",
+        acceptance="py_compile passes.",
+        task_shape=infer_task_shape(goal="Build a dashboard app", files=["dashboard.py"]),
+    )
+
+    data = original.to_dict()
+    restored = WorkerDispatchRequest.from_dict(data)
+
+    assert "task_shape" in data
+    assert restored.task_shape is not None
+    assert restored.task_shape.task_kind == "new_tool_or_app"
+    assert "smallest shippable slice" in " ".join(restored.task_shape.quality_pressure)
+
+
+def test_dispatch_request_old_payload_without_task_shape_loads():
+    req = WorkerDispatchRequest.from_dict(
+        {
+            "goal": "Fix a bug",
+            "files": ["a.py"],
+            "spec": "Fix it.",
+            "acceptance": "py_compile passes.",
+        }
+    )
+
+    assert req.task_shape is None
+    assert "task_shape" not in req.to_dict()
+
+
+def test_dispatch_request_malformed_task_shape_falls_back_safely():
+    req = WorkerDispatchRequest.from_dict(
+        {
+            "goal": "Build a tracker app",
+            "files": ["tracker.py"],
+            "spec": "Build it.",
+            "acceptance": "py_compile passes.",
+            "task_shape": ["not", "a", "dict"],
+        }
+    )
+
+    assert req.task_shape is not None
+    assert req.task_shape.task_kind == "unknown"
+
+
 def test_rg_no_match_validation_is_not_unrecovered_failure():
     results = [
         {
@@ -412,6 +502,37 @@ def test_worker_prompt_guides_search_validation_semantics():
     assert "Use grep_search for searching" in prompt
     assert "make intended no-match exit 0" in prompt
     assert "pytest" not in prompt
+
+
+def test_worker_task_formatting_includes_task_shape_standard():
+    req = WorkerDispatchRequest(
+        goal="Fix failing import behavior",
+        files=["x.py"],
+        spec="Repair the broken import path.",
+        acceptance="Run `python -m py_compile x.py`.",
+        task_shape=TaskShape(task_kind="bugfix"),
+    )
+
+    prompt = _format_spec_as_user_message(req)
+
+    assert "Task shape\nbugfix" in prompt
+    assert "Implementation standard" in prompt
+    assert "Make the fix surgical and preserve compatibility." in prompt
+
+
+def test_worker_task_formatting_new_tool_or_app_uses_shippable_standard():
+    req = WorkerDispatchRequest(
+        goal="Build a scout dashboard app",
+        files=["scout_dashboard.py"],
+        spec="Create the dashboard with saved state and result review.",
+        acceptance="Run `python -m py_compile scout_dashboard.py`.",
+    )
+
+    prompt = _format_spec_as_user_message(req)
+
+    assert "Task shape\nnew_tool_or_app" in prompt
+    assert "smallest shippable slice" in prompt
+    assert "Avoid fake integrations, placeholder bodies, demo/mock production scaffolding" in prompt
 
 
 def test_lone_rg_terminal_result_does_not_count_as_task_validation():

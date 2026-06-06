@@ -39,6 +39,7 @@ from aura.conversation import (
     normalize_worker_task,
 )
 from aura.conversation.project_profile import detect_project_profile
+from aura.conversation.task_shape import implementation_standard_lines
 from aura.conversation.tool_limits import WRITE_TOOLS
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.prompts import (
@@ -880,6 +881,16 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
             parts.append(line)
         parts.append("\u2500" * 60)
         parts.append("")
+
+    if task.task_shape is not None:
+        parts.extend([
+            "Task shape",
+            task.task_shape.task_kind,
+            "",
+            "Implementation standard",
+            *[f"- {line}" for line in implementation_standard_lines(task.task_shape)],
+            "",
+        ])
 
     parts.extend([
         "Goal",

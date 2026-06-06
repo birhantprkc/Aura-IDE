@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from aura.craft.types import ExplicitSpecContract
 from aura.conversation.project_profile import ProjectProfile
+from aura.conversation.task_shape import TaskShape, infer_task_shape
 
 
 class WorkerOutcomeStatus(str, enum.Enum):
@@ -84,9 +85,10 @@ class WorkerDispatchRequest:
     forbidden_public_methods: list[str] = field(default_factory=list)
     forbidden_calls: list[str] = field(default_factory=list)
     contract: ExplicitSpecContract | None = None
+    task_shape: TaskShape | None = None
     
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "goal": self.goal,
             "files": list(self.files),
             "spec": self.spec,
@@ -104,12 +106,20 @@ class WorkerDispatchRequest:
             "forbidden_calls": list(self.forbidden_calls),
             "contract": self.contract.to_dict() if self.contract else None,
         }
+        if self.task_shape is not None:
+            payload["task_shape"] = self.task_shape.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WorkerDispatchRequest":
+        if not isinstance(data, dict):
+            data = {}
         files = data.get("files") or []
         if not isinstance(files, list):
             files = []
+        task_shape = None
+        if "task_shape" in data:
+            task_shape = TaskShape.from_dict(data.get("task_shape"))
         return cls(
             goal=str(data.get("goal", "")),
             files=[str(f) for f in files],
@@ -127,6 +137,7 @@ class WorkerDispatchRequest:
             forbidden_public_methods=_string_list(data.get("forbidden_public_methods")),
             forbidden_calls=_string_list(data.get("forbidden_calls")),
             contract=ExplicitSpecContract.from_dict(data["contract"]) if data.get("contract") else None,
+            task_shape=task_shape,
         )
 
 
@@ -266,6 +277,7 @@ class WorkerTaskSpec:
     non_goals: list[str] = field(default_factory=list)
     contract: ExplicitSpecContract | None = None
     project_profile: ProjectProfile | None = None
+    task_shape: TaskShape | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -281,6 +293,8 @@ class WorkerTaskSpec:
             "risk_notes": list(self.risk_notes),
             "non_goals": list(self.non_goals),
         }
+        if self.task_shape is not None:
+            result["task_shape"] = self.task_shape.to_dict()
         if self.project_profile is not None:
             result["project_profile"] = {
                 "workspace_root": self.project_profile.workspace_root,
@@ -340,6 +354,7 @@ class WorkerTaskSpec:
             non_goals=_str_list("non_goals"),
             contract=ExplicitSpecContract.from_dict(data["contract"]) if data.get("contract") else None,
             project_profile=project_profile,
+            task_shape=TaskShape.from_dict(data.get("task_shape")) if "task_shape" in data else None,
         )
 
 
@@ -450,6 +465,13 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
         non_goals=non_goals,
     )
 
+    task_shape = req.task_shape or infer_task_shape(
+        goal=req.goal,
+        spec=req.spec,
+        files=req.files,
+        user_text=req.summary,
+    )
+
     return WorkerTaskSpec(
         goal=req.goal,
         files=list(req.files),
@@ -464,6 +486,7 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
         risk_notes=list(req.risk_notes),
         contract=contract,
         project_profile=None,
+        task_shape=task_shape,
     )
 
 
@@ -492,6 +515,7 @@ __all__ = [
     "WorkerDispatchResult",
     "WorkerOutcomeStatus",
     "WorkerTaskSpec",
+    "TaskShape",
     "DispatchCallback",
     "infer_outcome_status",
     "normalize_outcome_status",
