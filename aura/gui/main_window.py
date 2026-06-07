@@ -801,23 +801,34 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if self._pending_handoff and not tool_calls:
             self._pending_handoff = False
             handoff_text = extract_handoff_text(full_message)
-            if handoff_text.strip() and self._workspace_root is not None:
-                try:
-                    save_handoff(self._workspace_root, handoff_text)
-                except Exception as exc:
-                    self._chat.add_error(
-                        "Handoff",
-                        f"Could not save handoff: {exc}",
-                    )
-                    return
-                # Start a fresh conversation
-                self._persistence.new_conversation()
-                self._send_handler.clear_queue()
-                self._input.set_queued_messages(0)
-                self._reset_session_usage()
-                # Send the handoff as the first user message in the new conversation
-                handoff_payload = SendPayload(text=handoff_text, attachments=[])
-                self._send_handler.handle_send(handoff_payload, self.current_model(), self.current_thinking())
+            if not handoff_text.strip():
+                self._chat.add_error(
+                    "Handoff",
+                    "Handoff response was empty. Please try again.",
+                )
+                return
+            if self._workspace_root is None:
+                self._chat.add_error(
+                    "Handoff",
+                    "No workspace root set. Cannot save handoff.",
+                )
+                return
+            try:
+                save_handoff(self._workspace_root, handoff_text)
+            except Exception as exc:
+                self._chat.add_error(
+                    "Handoff",
+                    f"Could not save handoff: {exc}",
+                )
+                return
+            # Start a fresh conversation
+            self._persistence.new_conversation()
+            self._send_handler.clear_queue()
+            self._input.set_queued_messages(0)
+            self._reset_session_usage()
+            # Send the handoff as the first user message in the new conversation
+            handoff_payload = SendPayload(text=handoff_text, attachments=[])
+            self._send_handler.handle_send(handoff_payload, self.current_model(), self.current_thinking())
 
     def _on_tool_result(self, tool_id: str, name: str, ok: bool, result: str, extras: dict) -> None:
         self._chat.set_tool_result(tool_id, ok, result)

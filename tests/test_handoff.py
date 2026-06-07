@@ -72,3 +72,7 @@ class TestExtractHandoffText:
     def test_returns_empty_string_for_missing_content(self) -> None:
         msg = {"role": "assistant"}
         assert extract_handoff_text(msg) == ""
+
+    def test_returns_empty_string_for_whitespace_only(self) -> None:
+        msg = {"content": "   \n  ", "role": "assistant"}
+        assert extract_handoff_text(msg) == "   \n  "
