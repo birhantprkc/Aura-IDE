@@ -1,6 +1,7 @@
 import ast
 import logging
 import re
+import time
 from .types import CraftDecision, CraftIssue, CraftIssueSeverity, ProposalCapsule, node_in_ranges, line_in_ranges, OwnershipContext
 from aura.quality.features import _GENERIC_NAMES
 
@@ -214,6 +215,7 @@ class CraftEngine:
     def process_proposal(self, capsule: ProposalCapsule) -> CraftDecision:
         if capsule.language != "python" or not str(capsule.path).endswith(".py"):
             return CraftDecision(approved=True, cleaned_code=capsule.proposed_code)
+        metadata: dict[str, object] = {}
             
         # Phase A: Cleanup
         cleaned_code = capsule.proposed_code
@@ -272,9 +274,24 @@ class CraftEngine:
         soft_issues: list[CraftIssue] = []
 
         if _is_new_tool_task(capsule):
-            hard, soft = self._run_new_tool_task_checks(tree, capsule, source_lines, is_test_file)
-            issues.extend(hard)
-            soft_issues.extend(soft)
+            task_shape_started = time.perf_counter()
+            try:
+                hard, soft = self._run_new_tool_task_checks(tree, capsule, source_lines, is_test_file)
+                issues.extend(hard)
+                soft_issues.extend(soft)
+            except Exception as exc:
+                _log.warning("CraftEngine task-shape checks failed: %s", exc)
+                metadata.setdefault("checks_warned", ["task_shape"])
+                soft_issues.append(CraftIssue(
+                    line=1,
+                    column=0,
+                    code="task-shape-check-failed-open",
+                    message="Task-shape checks failed internally and were skipped.",
+                    suggestion="Continue; syntax and objective safety checks still ran.",
+                    severity=CraftIssueSeverity.SOFT,
+                ))
+            finally:
+                metadata["craft_task_shape_ms"] = round((time.perf_counter() - task_shape_started) * 1000, 3)
 
         for node in ast.walk(tree):
             if not capsule.is_new_file and capsule.changed_line_ranges:
@@ -313,24 +330,26 @@ class CraftEngine:
                 if not is_test_file:
                     name_lower = node.name.lower()
                     if any(kw in name_lower for kw in ["demo", "placeholder", "dummy", "mockwindow", "mockwidget"]):
-                        issues.append(CraftIssue(
+                        soft_issues.append(CraftIssue(
                             line=node.lineno,
                             column=node.col_offset,
                             code="demo-scaffolding",
                             message=f"Function '{node.name}' appears to be demo or mock scaffolding.",
-                            suggestion="Do not include demo or placeholder functions in production code."
+                            suggestion="Prefer domain-shaped production naming when behavior is real.",
+                            severity=CraftIssueSeverity.SOFT,
                         ))
 
             elif isinstance(node, ast.ClassDef):
                 if not is_test_file:
                     name_lower = node.name.lower()
                     if any(kw in name_lower for kw in ["demo", "placeholder", "dummy", "mockwindow", "mockwidget"]):
-                        issues.append(CraftIssue(
+                        soft_issues.append(CraftIssue(
                             line=node.lineno,
                             column=node.col_offset,
                             code="demo-scaffolding",
                             message=f"Class '{node.name}' appears to be demo or mock scaffolding.",
-                            suggestion="Do not include demo or placeholder classes in production code."
+                            suggestion="Prefer domain-shaped production naming when behavior is real.",
+                            severity=CraftIssueSeverity.SOFT,
                         ))
 
             elif isinstance(node, ast.ExceptHandler):
@@ -365,23 +384,36 @@ class CraftEngine:
                     ))
 
         if issues:
-            return CraftDecision(approved=False, cleaned_code=cleaned_code, issues=issues)
+            return CraftDecision(approved=False, cleaned_code=cleaned_code, issues=issues, metadata=metadata)
 
         # Phase C: Authorship soft checks for new Aura-owned Python files or explicitly foreign context
-        if capsule.is_new_file and (str(capsule.path).startswith("aura/") or capsule.ownership_context == OwnershipContext.FOREIGN):
+        capsule_path = str(capsule.path).replace("\\", "/")
+        if capsule.is_new_file and (capsule_path.startswith("aura/") or capsule.ownership_context == OwnershipContext.FOREIGN):
             authorship_issues = self._run_authorship_checks(capsule, capsule.ownership_context)
             if authorship_issues:
-                return CraftDecision(approved=False, cleaned_code=cleaned_code, issues=authorship_issues)
+                authorship_hard = [issue for issue in authorship_issues if issue.severity == CraftIssueSeverity.HARD]
+                authorship_soft = [issue for issue in authorship_issues if issue.severity != CraftIssueSeverity.HARD]
+                if authorship_hard:
+                    return CraftDecision(
+                        approved=False,
+                        cleaned_code=cleaned_code,
+                        issues=authorship_hard,
+                        metadata=metadata,
+                    )
+                soft_issues.extend(authorship_soft)
 
         if soft_issues:
+            checks_warned = set(metadata.get("checks_warned", []) if isinstance(metadata.get("checks_warned"), list) else [])
+            checks_warned.add("task_shape")
+            metadata["checks_warned"] = sorted(checks_warned)
             return CraftDecision(
                 approved=True,
                 cleaned_code=cleaned_code,
                 issues=soft_issues,
-                metadata={"checks_warned": ["task_shape"]},
+                metadata=metadata,
             )
             
-        return CraftDecision(approved=True, cleaned_code=cleaned_code)
+        return CraftDecision(approved=True, cleaned_code=cleaned_code, metadata=metadata)
 
     def _run_new_tool_task_checks(
         self,
@@ -409,12 +441,13 @@ class CraftEngine:
                         suggestion="Implement the production behavior or remove the placeholder.",
                     ))
                 if not is_test_file and self._has_placeholder_name(node.name):
-                    hard.append(CraftIssue(
+                    soft.append(CraftIssue(
                         line=node.lineno,
                         column=node.col_offset,
                         code="task-shape-placeholder-name",
                         message=f"Function '{node.name}' uses fake/demo/mock placeholder naming in production code.",
                         suggestion="Replace it with domain-shaped production code.",
+                        severity=CraftIssueSeverity.SOFT,
                     ))
                 if not is_test_file and self._is_fake_integration_stub(node):
                     hard.append(CraftIssue(
@@ -427,12 +460,13 @@ class CraftEngine:
 
             elif isinstance(node, ast.ClassDef):
                 if not is_test_file and self._has_placeholder_name(node.name):
-                    hard.append(CraftIssue(
+                    soft.append(CraftIssue(
                         line=node.lineno,
                         column=node.col_offset,
                         code="task-shape-placeholder-name",
                         message=f"Class '{node.name}' uses fake/demo/mock placeholder naming in production code.",
                         suggestion="Replace it with domain-shaped production code.",
+                        severity=CraftIssueSeverity.SOFT,
                     ))
                 if not is_test_file and self._is_empty_class(node):
                     hard.append(CraftIssue(
@@ -459,13 +493,10 @@ class CraftEngine:
                         suggestion="Use a domain-shaped name that describes the real responsibility.",
                         severity=CraftIssueSeverity.SOFT,
                     )
-                    if self._class_has_real_responsibility(node):
-                        soft.append(issue)
-                    else:
-                        issue.severity = CraftIssueSeverity.HARD
+                    if not self._class_has_real_responsibility(node):
                         issue.code = "task-shape-ceremonial-generic-class"
-                        issue.message = f"Class '{node.name}' is generic scaffold ceremony without real responsibility."
-                        hard.append(issue)
+                        issue.message = f"Class '{node.name}' is generic scaffold ceremony without clear responsibility."
+                    soft.append(issue)
 
             elif isinstance(node, ast.ExceptHandler):
                 if self._is_silent_success_or_default_handler(node):

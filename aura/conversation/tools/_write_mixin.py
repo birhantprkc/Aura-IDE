@@ -17,6 +17,7 @@ import logging
 import os
 import stat
 import tempfile
+import time
 from pathlib import Path
 
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
@@ -346,6 +347,13 @@ def _run_craft_gate(
     workspace_root=None,
     task_shape=None,
 ) -> ToolExecResult | None:
+    gate_started = time.perf_counter()
+
+    def _finish_metadata(metadata: dict | None = None) -> dict:
+        result = dict(metadata or {})
+        result["craft_gate_ms"] = round((time.perf_counter() - gate_started) * 1000, 3)
+        return result
+
     if CraftEngine is None or ProposalCapsule is None:
         return None
         
@@ -390,7 +398,7 @@ def _run_craft_gate(
                 _log.info("[craft:observe] %s blocked", rel_path)
             return None
             
-        metadata = dict(getattr(decision, "metadata", {}) or {})
+        metadata = _finish_metadata(getattr(decision, "metadata", {}) or {})
         if task_shape_summary:
             metadata.setdefault("task_shape", task_shape_summary)
         if decision.approved:
@@ -436,6 +444,8 @@ def _run_craft_gate(
         )
     except Exception:
         _log.exception("CraftEngine failed for %s", rel_path)
+        proposal["craft_metadata"] = _finish_metadata({"checks_warned": ["craft_engine"]})
+        proposal["checks_warned"] = ["craft_engine"]
         return None
 
 

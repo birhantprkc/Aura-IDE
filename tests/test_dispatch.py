@@ -10,6 +10,7 @@ from aura.conversation.dispatch import (
     WorkerOutcomeStatus,
     infer_outcome_status,
     normalize_outcome_status,
+    normalize_worker_task,
 )
 from aura.conversation.task_shape import TaskShape, infer_task_shape
 from aura.bridge.dispatch import (
@@ -386,6 +387,26 @@ def test_dispatch_request_malformed_task_shape_falls_back_safely():
 
     assert req.task_shape is not None
     assert req.task_shape.task_kind == "unknown"
+
+
+def test_normalize_worker_task_task_shape_inference_fails_open(monkeypatch):
+    req = WorkerDispatchRequest(
+        goal="Build a tracker app",
+        files=["tracker.py"],
+        spec="Create it.",
+        acceptance="py_compile passes.",
+    )
+
+    def broken_infer(**kwargs):
+        raise RuntimeError("shape inference failed")
+
+    monkeypatch.setattr("aura.conversation.dispatch.infer_task_shape", broken_infer)
+
+    task = normalize_worker_task(req)
+
+    assert task.task_shape is not None
+    assert task.task_shape.task_kind == "unknown"
+    assert isinstance(getattr(task.task_shape, "_task_shape_ms", None), float)
 
 
 def test_rg_no_match_validation_is_not_unrecovered_failure():

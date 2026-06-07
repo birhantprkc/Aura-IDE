@@ -89,6 +89,7 @@ class TestWriteMixinCraftGate:
         assert result is None
         assert captured["task_shape"] is shape
         assert proposal["craft_metadata"]["task_shape"]["task_kind"] == "new_tool_or_app"
+        assert isinstance(proposal["craft_metadata"]["craft_gate_ms"], float)
 
     def test_write_handler_passes_registry_task_shape_to_craft(self, tmp_workspace):
         reg = DummyWriteRegistry(tmp_workspace)
@@ -158,19 +159,16 @@ class TestWriteMixinCraftGate:
         assert "task-shape-placeholder-body" in codes
 
     @pytest.mark.usefixtures("enable_craft")
-    def test_new_tool_blocks_placeholder_production_names(self, tmp_workspace):
+    def test_new_tool_blocks_fake_integration_stubs(self, tmp_workspace):
         proposal = {
             "ok": True,
             "rel_path": "service.py",
             "old_content": "",
             "new_content": (
-                "class FakeAdapter:\n"
-                "    def connect(self):\n"
-                "        return True\n\n"
                 "class SourceAdapter:\n"
                 "    def fetch(self):\n"
                 "        return []\n\n"
-                "def demo_loader():\n"
+                "def provider_client():\n"
                 "    return []\n"
             ),
             "is_new_file": True,
@@ -185,8 +183,39 @@ class TestWriteMixinCraftGate:
 
         assert result is not None
         codes = {issue["code"] for issue in result.payload["craft_issues"]}
-        assert "task-shape-placeholder-name" in codes
         assert "task-shape-fake-integration-stub" in codes
+
+    @pytest.mark.usefixtures("enable_craft")
+    def test_new_tool_placeholder_names_with_real_behavior_are_warnings(self, tmp_workspace):
+        proposal = {
+            "ok": True,
+            "rel_path": "service.py",
+            "old_content": "",
+            "new_content": (
+                "class FakeCatalog:\n"
+                "    def __init__(self):\n"
+                "        self.records = ['alpha']\n\n"
+                "    def list_records(self):\n"
+                "        return list(self.records)\n\n"
+                "def demo_loader(records):\n"
+                "    return [record.upper() for record in records]\n"
+            ),
+            "is_new_file": True,
+        }
+
+        result = _run_craft_gate(
+            proposal,
+            "write_file",
+            workspace_root=tmp_workspace,
+            task_shape=_new_tool_shape(),
+        )
+
+        assert result is None
+        assert isinstance(proposal["craft_metadata"]["craft_task_shape_ms"], float)
+        warnings = proposal.get("craft_warnings") or []
+        codes = {issue["code"] for issue in warnings}
+        assert "task-shape-placeholder-name" in codes
+        assert "demo-scaffolding" in codes
 
     @pytest.mark.usefixtures("enable_craft")
     def test_new_tool_allows_mock_names_in_test_files(self, tmp_workspace):
@@ -258,7 +287,7 @@ class TestWriteMixinCraftGate:
 
         assert result is not None
         codes = {issue["code"] for issue in result.payload["craft_issues"]}
-        assert "task-shape-ceremonial-generic-class" in codes or "task-shape-empty-class" in codes
+        assert "task-shape-empty-class" in codes
 
     @pytest.mark.usefixtures("enable_craft")
     def test_useful_new_tool_code_passes_craft(self, tmp_workspace):
@@ -311,6 +340,77 @@ class TestWriteMixinCraftGate:
         assert result is None
         assert proposal["new_content"] == "value = 1\n"
         assert proposal["write_outcome"] == "applied"
+        assert isinstance(proposal["craft_metadata"]["craft_gate_ms"], float)
+
+    @pytest.mark.usefixtures("enable_craft")
+    def test_authorship_soft_issue_does_not_block_write(self, tmp_workspace):
+        proposal = {
+            "ok": True,
+            "rel_path": "aura/text_tools.py",
+            "old_content": "",
+            "new_content": (
+                "class TextTools:\n"
+                "    @staticmethod\n"
+                "    def normalize(value):\n"
+                "        return value.strip()\n"
+            ),
+            "is_new_file": True,
+        }
+
+        result = _run_craft_gate(proposal, "write_file", workspace_root=tmp_workspace)
+
+        assert result is None
+        assert any(
+            issue["code"] == "staticmethod_class"
+            for issue in proposal.get("craft_warnings", [])
+        )
+
+    @pytest.mark.usefixtures("enable_craft")
+    def test_task_shape_check_exception_fails_open_and_warns(self, tmp_workspace):
+        proposal = {
+            "ok": True,
+            "rel_path": "app.py",
+            "old_content": "",
+            "new_content": "value = 1\n",
+            "is_new_file": True,
+        }
+
+        with patch("aura.craft.engine.CraftEngine._run_new_tool_task_checks", side_effect=RuntimeError("boom")):
+            result = _run_craft_gate(
+                proposal,
+                "write_file",
+                workspace_root=tmp_workspace,
+                task_shape=_new_tool_shape(),
+            )
+
+        assert result is None
+        assert proposal["checks_warned"] == ["task_shape"]
+        assert any(
+            issue["code"] == "task-shape-check-failed-open"
+            for issue in proposal.get("craft_warnings", [])
+        )
+
+    @pytest.mark.usefixtures("enable_craft")
+    def test_craft_engine_exception_does_not_stall_write(self, tmp_workspace):
+        reg = DummyWriteRegistry(tmp_workspace)
+        approve_cb = _approve()
+
+        class BrokenEngine:
+            def process_proposal(self, capsule):
+                raise RuntimeError("metadata failure")
+
+        with patch("aura.conversation.tools._write_mixin.CraftEngine", new=lambda: BrokenEngine()):
+            result = _handler("write_file")(
+                reg,
+                {"path": "new.py", "content": "value = 1\n"},
+                approve_cb,
+                False,
+            )
+
+        assert result.ok is True
+        assert (tmp_workspace / "new.py").read_text(encoding="utf-8") == "value = 1\n"
+        assert result.payload["checks_warned"] == ["craft_engine"]
+        assert isinstance(result.payload["craft_metadata"]["craft_gate_ms"], float)
 
     @pytest.mark.usefixtures("enable_craft")
     def test_write_file_runs_craft_before_approval_with_cleaned_content(self, tmp_workspace):

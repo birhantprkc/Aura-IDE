@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import enum
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from aura.craft.types import ExplicitSpecContract
 from aura.conversation.project_profile import ProjectProfile
-from aura.conversation.task_shape import TaskShape, infer_task_shape
+from aura.conversation.task_shape import TaskShape, infer_task_shape, unknown_task_shape
 
 
 class WorkerOutcomeStatus(str, enum.Enum):
@@ -465,12 +466,21 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
         non_goals=non_goals,
     )
 
-    task_shape = req.task_shape or infer_task_shape(
-        goal=req.goal,
-        spec=req.spec,
-        files=req.files,
-        user_text=req.summary,
-    )
+    task_shape = req.task_shape
+    if task_shape is None:
+        started = time.perf_counter()
+        try:
+            task_shape = infer_task_shape(
+                goal=req.goal,
+                spec=req.spec,
+                files=req.files,
+                user_text=req.summary,
+            )
+        except Exception:
+            task_shape = unknown_task_shape(req.goal or req.summary or req.spec)
+        setattr(task_shape, "_task_shape_ms", round((time.perf_counter() - started) * 1000, 3))
+    else:
+        setattr(task_shape, "_task_shape_ms", 0.0)
 
     return WorkerTaskSpec(
         goal=req.goal,

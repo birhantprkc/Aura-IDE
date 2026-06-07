@@ -673,6 +673,11 @@ class _DispatchProxy(QObject):
             if task_spec.task_shape is not None
             else {}
         )
+        task_shape_ms = (
+            getattr(task_spec.task_shape, "_task_shape_ms", None)
+            if task_spec.task_shape is not None
+            else None
+        )
         extras = {
             "writes": relay.write_results,
             "not_applied_writes": not_applied_writes,
@@ -701,6 +706,8 @@ class _DispatchProxy(QObject):
                 else {}
             ),
         }
+        if isinstance(task_shape_ms, (int, float)):
+            extras["task_shape_ms"] = task_shape_ms
 
         auto_commit_allowed = _worker_result_allows_auto_commit(
             ok=ok,
