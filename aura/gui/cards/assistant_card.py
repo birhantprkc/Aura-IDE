@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QSize, QTimer, QVariantAnimation
+from PySide6.QtCore import QSize, Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -23,7 +23,7 @@ from aura.gui.cards._stream_label import _StreamLabel
 from aura.gui.cards.code_block_card import CodeBlockCard
 from aura.gui.cards.tool_call_card import ToolCallCard
 from aura.gui.markdown_renderer import _render_markdown_with_code
-from aura.gui.theme import BG_RAISED, FG, FG_DIM, FG_ITALIC, SUCCESS_DIM, WARN
+from aura.gui.theme import BG_RAISED, FG, FG_ITALIC, SUCCESS_DIM, WARN
 
 if TYPE_CHECKING:
     from aura.gui.chat_view import ChatView

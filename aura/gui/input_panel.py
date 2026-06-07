@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPixmap, QTextOption
+from PySide6.QtGui import QColor, QIcon, QImage, QPixmap, QTextOption
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -22,8 +22,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.config import media_path
 from aura.gui.theme import BG_RAISED, BORDER, DANGER, FG, FG_DIM
-
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
@@ -168,6 +168,7 @@ class InputPanel(QFrame):
     sent = Signal(SendPayload)
     stop_requested = Signal()
     retry_requested = Signal()
+    handoff_requested = Signal()
 
     def __init__(self, workspace_root: Path | None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -214,6 +215,13 @@ class InputPanel(QFrame):
         controls = QHBoxLayout()
         controls.setSpacing(10)
 
+        self._handoff_btn = QToolButton()
+        self._handoff_btn.setIcon(QIcon(str(media_path("move_group.svg"))))
+        self._handoff_btn.setToolTip("Generate a handoff and continue in a fresh chat")
+        self._handoff_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._handoff_btn.clicked.connect(self.handoff_requested.emit)
+        controls.addWidget(self._handoff_btn)
+
         controls.addStretch(1)
 
         self._retry_btn = QToolButton()
@@ -253,6 +261,7 @@ class InputPanel(QFrame):
         self._streaming = streaming
         self._send_btn.setVisible(not streaming)
         self._stop_btn.setVisible(streaming)
+        self._handoff_btn.setEnabled(not streaming)
         self._retry_btn.setEnabled(not streaming)
         self._editor.setEnabled(not streaming)
 

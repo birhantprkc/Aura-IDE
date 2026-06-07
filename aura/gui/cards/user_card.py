@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import base64
 
-from PySide6.QtCore import Qt, QBuffer, QByteArray, QSize, QTimer
-from PySide6.QtGui import QIcon, QPixmap, QMovie
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QToolButton, QVBoxLayout
+from PySide6.QtCore import QBuffer, QByteArray, QSize, Qt, QTimer
+from PySide6.QtGui import QIcon, QMovie, QPixmap
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 from aura.config import media_path
 from aura.gui.markdown_renderer import _render_markdown_with_code
-from aura.gui.theme import BG_RAISED, BORDER, DANGER, FG_BODY_USER, FG_DIM
+from aura.gui.theme import BG_RAISED, BORDER, DANGER, FG_BODY_USER
 
 
 class UserCard(QFrame):
