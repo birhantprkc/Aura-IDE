@@ -44,6 +44,7 @@ from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.drones.drone_bay_pane import DroneBayPane
 from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
+from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.drones.drone_summon_card import DroneSummonCard
 from aura.gui.edge_rails import EdgeTabRail
@@ -188,6 +189,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_bay.launchDroneRequested.connect(self._on_launch_drone)
         self._drone_bay.makeToolRequested.connect(self._on_make_drone_tool)
         self._drone_bay.viewRunReceiptRequested.connect(self._on_view_drone_receipt)
+
+        # Floating Drone Reports window. Active run cards live here instead of
+        # consuming space in the Worker/workspace area.
+        self._drone_reports_window = DroneReportsWindow(
+            self,
+            initial_geometry=self._settings.drone_reports_window_geometry,
+        )
+        self._drone_reports_window.geometry_saved.connect(
+            self._on_drone_reports_geometry_saved
+        )
 
         # Connect Save as Drone
         self._playground._info_hub.saveAsDroneRequested.connect(self._on_save_as_drone)
@@ -433,6 +444,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if self._settings.terminal_window_geometry == geometry:
             return
         self._settings.terminal_window_geometry = geometry
+        save_settings(self._settings)
+
+    def _on_drone_reports_geometry_saved(self, geometry: str) -> None:
+        if self._settings.drone_reports_window_geometry == geometry:
+            return
+        self._settings.drone_reports_window_geometry = geometry
         save_settings(self._settings)
 
     def _dim_terminal_tab_after_success(self) -> None:
@@ -845,11 +862,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if not self._can_start_drone(run_drone):
             return
 
-        # Switch to workspace view to show the run.
-        self._playground.switch_to_workspace()
-        self._sync_drone_tab_checked()
-
-        run_card = DroneRunCard(run_drone, parent=self._playground)
+        run_card = DroneRunCard(run_drone, parent=self._drone_reports_window)
         thread = QThread(self)
         runner = DroneRunner(
             workspace_root=self._workspace_root,
@@ -872,7 +885,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_runner = runner
         self._drone_runner_thread = thread
         self._active_run_card = run_card
-        self._playground.add_run_card(run_id, run_card)
+        self._drone_reports_window.add_run_card(run_id, run_card)
 
         # Connect signals.
         runner.statusChanged.connect(run_card.on_status_changed)
@@ -891,7 +904,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Wire approval for write-capable drones.
         if run_drone.write_policy != "read_only":
             runner.approval_requested.connect(
-                lambda request, r=runner: self._on_drone_approval_requested(request, r)
+                lambda request, r=runner, rid=run_id, name=run_drone.name: (
+                    self._on_drone_approval_requested(request, r, rid, name)
+                )
             )
 
         # Wire cancel/close buttons.
@@ -899,9 +914,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         run_card.closeRequested.connect(lambda rid=run_id: self._on_close_drone_card(rid))
 
         self._edge_rail.add_drone_run_pip(run_id, run_drone.name)
-
-        # Track active run in the bay pane.
-        self._drone_bay.set_active_run(runner.run_state, run_card)
+        self._position_edge_tabs()
+        self._drone_reports_window.show_and_focus(run_id)
 
         # Start the thread.
         thread.started.connect(runner.run)
@@ -1030,6 +1044,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_drone_status_changed(self, run_id: str, drone_name: str, status: str) -> None:
         self._edge_rail.set_drone_run_pip_state(run_id, drone_name, status)
 
+    def _remove_drone_run_pip(self, run_id: str) -> None:
+        self._edge_rail.remove_drone_run_pip(run_id)
+        self._position_edge_tabs()
+
     def _on_drone_finished(self, run_id: str) -> None:
         """Clean up after drone run completes."""
         record = self._drone_runs.get(run_id)
@@ -1039,7 +1057,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         thread = record["thread"]
         drone = record["drone"]
         self._edge_rail.set_drone_run_pip_state(run_id, drone.name, runner.run_state.status)
-        QTimer.singleShot(4500, lambda rid=run_id: self._edge_rail.remove_drone_run_pip(rid))
+        QTimer.singleShot(15000, lambda rid=run_id: self._remove_drone_run_pip(rid))
         # Thread cleanup.
         thread.quit()
         thread.wait(1000)
@@ -1083,45 +1101,53 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             output_contract="",
         )
 
-        run_card = DroneRunCard(minimal_drone, parent=self._playground, readonly=True)
+        run_card = DroneRunCard(minimal_drone, parent=self._drone_reports_window, readonly=True)
         run_card.populate_from_receipt(receipt)
 
         self._active_run_card = run_card
         card_id = f"receipt:{run_id}"
-        self._playground.add_run_card(card_id, run_card)
+        self._drone_reports_window.add_run_card(card_id, run_card)
 
         # Wire close
         run_card.closeRequested.connect(lambda cid=card_id: self._on_close_drone_card(cid))
 
-        # Switch to workspace view
-        self._playground.switch_to_workspace()
-        self._sync_drone_tab_checked()
+        self._drone_reports_window.show_and_focus(card_id)
 
     def _on_focus_drone_run(self, run_id: str = "") -> None:
-        """Focus the active run card."""
+        """Open Drone Reports and focus the requested run card."""
         if run_id:
-            self._playground.focus_run_card(run_id)
-            self._sync_drone_tab_checked()
+            self._drone_reports_window.show_and_focus(run_id)
             return
         if self._drone_runs:
-            self._playground.switch_to_workspace()
-            self._sync_drone_tab_checked()
+            self._drone_reports_window.show_and_raise()
 
     def _on_close_drone_card(self, run_id: str = "") -> None:
         """Close/dismiss the completed run card."""
         if run_id:
-            self._playground.remove_run_card(run_id)
-            self._edge_rail.remove_drone_run_pip(run_id)
+            self._drone_reports_window.remove_run_card(run_id)
+            self._remove_drone_run_pip(run_id)
         else:
-            self._playground.clear_active_run_card()
+            self._drone_reports_window.clear()
         self._active_run_card = None
-        self._drone_bay.set_active_run(None, None)
 
-    def _on_drone_approval_requested(self, request: ApprovalRequest, runner: DroneRunner | None = None) -> None:
+    def _on_drone_approval_requested(
+        self,
+        request: ApprovalRequest,
+        runner: DroneRunner | None = None,
+        run_id: str = "",
+        drone_name: str = "",
+    ) -> None:
         """Show approval dialog for a write operation requested by a Drone."""
         runner = runner or self._drone_runner
         if runner is None:
             return
+        record = self._drone_runs.get(run_id) if run_id else None
+        run_card = record.get("card") if record else None
+        if isinstance(run_card, DroneRunCard):
+            run_card.on_status_changed("waiting for approval")
+        if run_id and drone_name:
+            self._edge_rail.set_drone_run_pip_state(run_id, drone_name, "waiting for approval")
+            self._drone_reports_window.show_and_focus(run_id)
         approval_id = request.approval_id or None
 
         # Build the diff text.
@@ -1170,6 +1196,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         ))
 
         dialog.exec()
+        if (
+            run_id
+            and drone_name
+            and runner.run_state.is_active
+            and not runner.run_state.cancel_event.is_set()
+        ):
+            if isinstance(run_card, DroneRunCard):
+                run_card.on_status_changed("running")
+            self._edge_rail.set_drone_run_pip_state(run_id, drone_name, "running")
 
     def _on_drone_approval_button_clicked(
         self, dialog: QDialog, runner, btn, approval_id,

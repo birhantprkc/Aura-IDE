@@ -1,13 +1,14 @@
 """Real-time Drone run progress card — one per active run."""
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -45,10 +46,9 @@ class DroneRunCard(QFrame):
 
     def _build_ui(self) -> None:
         self.setObjectName("droneRunCard")
-        self.setStyleSheet(
-            f"QFrame#droneRunCard {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
-            f"border-radius: 8px; padding: 0px; }}"
-        )
+        self.setMinimumHeight(300 if not self._is_readonly_view else 360)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._apply_card_style()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -76,6 +76,7 @@ class DroneRunCard(QFrame):
         # Scrollable log area
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(210)
         scroll.setStyleSheet(
             f"QScrollArea {{ background: {BG}; border: 1px solid {BORDER}; border-radius: 4px; }}"
             f"QScrollBar:vertical {{ background: {BG}; width: 8px; }}"
@@ -127,20 +128,36 @@ class DroneRunCard(QFrame):
     # --- Event handlers called from MainWindow ---
 
     def on_status_changed(self, status: str) -> None:
-        self._status_badge.setText(status)
-        if status == "running":
+        normalized = status.strip().lower().replace(" ", "_").replace("-", "_")
+        if normalized in {"waiting", "approval", "waiting_approval"}:
+            normalized = "waiting_for_approval"
+        self._status_badge.setText(normalized.replace("_", " "))
+        if normalized in {"summoning", "waiting_for_approval"}:
+            color = WARN if normalized == "waiting_for_approval" else ACCENT
+            self._status_badge.setStyleSheet(
+                f"color: {color}; font-size: 11px; font-weight: 600; "
+                f"padding: 2px 8px; border-radius: 4px; background: #1a1a24; border: 1px solid {color};"
+            )
+        elif normalized == "running":
             self._status_badge.setStyleSheet(
                 f"color: {SUCCESS}; font-size: 11px; font-weight: 600; "
                 f"padding: 2px 8px; border-radius: 4px; background: #0a1a10; border: 1px solid {SUCCESS};"
             )
-        elif status == "completed":
+        elif normalized == "completed":
             self._status_badge.setStyleSheet(
                 f"color: {SUCCESS}; font-size: 11px; font-weight: 600; "
                 f"padding: 2px 8px; border-radius: 4px; background: #0a1a10; border: 1px solid {SUCCESS};"
             )
             self._cancel_btn.hide()
             self._close_btn.show()
-        elif status in ("failed", "cancelled", "timed_out"):
+        elif normalized == "cancelled":
+            self._status_badge.setStyleSheet(
+                f"color: {FG_MUTED}; font-size: 11px; font-weight: 600; "
+                f"padding: 2px 8px; border-radius: 4px; background: #18191f; border: 1px solid {FG_MUTED};"
+            )
+            self._cancel_btn.hide()
+            self._close_btn.show()
+        elif normalized in ("failed", "timed_out"):
             self._status_badge.setStyleSheet(
                 f"color: {DANGER}; font-size: 11px; font-weight: 600; "
                 f"padding: 2px 8px; border-radius: 4px; background: #1a0a0a; border: 1px solid {DANGER};"
@@ -164,7 +181,7 @@ class DroneRunCard(QFrame):
         status = "✓" if ok else "✗"
         color = SUCCESS if ok else DANGER
         # Truncate long results
-        result_text = result[:200] if len(result) > 200 else result
+        result_text = result[:3000] + "\n  ... truncated ..." if len(result) > 3000 else result
         self._add_log_entry(f"  {status} {result_text}", color)
 
     def on_api_error(self, status_code: int, message: str) -> None:
@@ -178,6 +195,8 @@ class DroneRunCard(QFrame):
             f"  Tool calls: {receipt.tool_calls_made}\n"
             f"  Errors: {receipt.tool_errors}\n"
         )
+        if receipt.summary:
+            summary += f"\n  Summary:\n{receipt.summary}\n"
         self._add_log_entry(summary, FG_MUTED)
 
     def _add_log_entry(self, text: str, color: str, bold: bool = False) -> None:
@@ -224,7 +243,8 @@ class DroneRunCard(QFrame):
                 import json
                 self._add_log_entry(f"  Args: {json.dumps(args, indent=2)}", FG_DIM)
             if result:
-                self._add_log_entry(f"  Result: {result[:500]}", FG)
+                result_text = result[:3000] + "\n  ... truncated ..." if len(result) > 3000 else result
+                self._add_log_entry(f"  Result: {result_text}", FG)
             self._add_log_entry("", FG_MUTED)
 
         # Show errors
@@ -241,8 +261,22 @@ class DroneRunCard(QFrame):
             f"  Tool calls: {receipt.tool_calls_made}\n"
             f"  Errors: {receipt.tool_errors}\n"
         )
+        if receipt.summary:
+            summary += f"\n  Summary:\n{receipt.summary}\n"
         self._add_log_entry(summary, FG_MUTED)
 
     @property
     def receipt(self) -> DroneReceipt | None:
         return self._receipt
+
+    def highlight_focus(self) -> None:
+        """Briefly accent the card when a rail pip focuses it."""
+        self._apply_card_style(focused=True)
+        QTimer.singleShot(900, self._apply_card_style)
+
+    def _apply_card_style(self, focused: bool = False) -> None:
+        border = ACCENT if focused else BORDER
+        self.setStyleSheet(
+            f"QFrame#droneRunCard {{ background: {BG_RAISED}; border: 1px solid {border}; "
+            f"border-radius: 8px; padding: 0px; }}"
+        )

@@ -48,12 +48,12 @@ class SettingsDialog(QDialog):
 
         self._tabs = QTabWidget(self)
 
-        from aura.gui.settings_pages.models_page import ModelsPage
         from aura.gui.settings_pages.api_keys_page import ApiKeysPage
         from aura.gui.settings_pages.automation_page import AutomationPage
-        from aura.gui.settings_pages.vision_page import VisionPage
-        from aura.gui.settings_pages.sandbox_page import SandboxPage
+        from aura.gui.settings_pages.models_page import ModelsPage
         from aura.gui.settings_pages.prompts_page import PromptsPage
+        from aura.gui.settings_pages.sandbox_page import SandboxPage
+        from aura.gui.settings_pages.vision_page import VisionPage
 
         self._models_page = ModelsPage(self._settings)
         self._api_keys_page = ApiKeysPage(self._settings)
@@ -117,6 +117,7 @@ class SettingsDialog(QDialog):
             default_thinking=self._settings.default_thinking,
             show_planner_reasoning=self._settings.show_planner_reasoning,
             terminal_window_geometry=self._settings.terminal_window_geometry,
+            drone_reports_window_geometry=self._settings.drone_reports_window_geometry,
             first_launch_done=self._settings.first_launch_done,
             onboarding_checklist=dict(self._settings.onboarding_checklist),
             onboarding_version=self._settings.onboarding_version,

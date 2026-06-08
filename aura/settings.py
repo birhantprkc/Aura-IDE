@@ -84,6 +84,7 @@ class AppSettings:
     max_tool_rounds: int = 50
     tavily_api_key: str = ""
     terminal_window_geometry: str = ""
+    drone_reports_window_geometry: str = ""
     main_window_geometry: str = ""
     main_window_state: str = ""
     main_splitter_sizes: list[int] = field(default_factory=list)
@@ -126,6 +127,8 @@ class AppSettings:
             s.tavily_api_key = data["tavily_api_key"]
         if isinstance(data.get("terminal_window_geometry"), str):
             s.terminal_window_geometry = data["terminal_window_geometry"]
+        if isinstance(data.get("drone_reports_window_geometry"), str):
+            s.drone_reports_window_geometry = data["drone_reports_window_geometry"]
         if isinstance(data.get("main_window_geometry"), str):
             s.main_window_geometry = data["main_window_geometry"]
         if isinstance(data.get("main_window_state"), str):

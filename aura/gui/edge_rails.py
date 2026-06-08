@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from enum import Enum, auto
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QFrame, QToolButton, QVBoxLayout, QWidget
 
@@ -35,6 +35,7 @@ class EdgeTabRail(QFrame):
         self._terminal_container: QWidget | None = None
         self._drone_tab: QToolButton | None = None
         self._drone_run_pips: dict[str, DroneRailPip] = {}
+        self._summon_animations: dict[str, tuple[QToolButton, QPropertyAnimation]] = {}
         self._corner_widget: QWidget | None = None
         self._setup_ui()
 
@@ -142,33 +143,122 @@ class EdgeTabRail(QFrame):
         if run_id in self._drone_run_pips:
             return
         pip = DroneRailPip(self)
-        pip.setToolTip(f"{drone_name}: running")
+        pip.setToolTip(f"{drone_name}: summoning")
         pip.focused.connect(lambda rid=run_id: self.droneRunFocusRequested.emit(rid))
-        pip.set_running()
+        pip.set_summoning()
+        pip.begin_launch_animation()
         self._drone_run_pips[run_id] = pip
         self._rail_layout.addWidget(pip, alignment=Qt.AlignmentFlag.AlignCenter)
         self._drone_run_pip.set_idle()
         self.adjustSize()
+        self.setFixedHeight(self.sizeHint().height())
+        QTimer.singleShot(0, lambda rid=run_id: self._play_summon_animation(rid))
 
     def set_drone_run_pip_state(self, run_id: str, drone_name: str, state: str) -> None:
         pip = self._drone_run_pips.get(run_id)
         if pip is None:
             return
-        pip.setToolTip(f"{drone_name}: {state}")
-        if state == "completed":
+        normalized = self._normalize_drone_state(state)
+        label = normalized.replace("_", " ")
+        pip.setToolTip(f"{drone_name}: {label}")
+        if normalized == "summoning":
+            pip.set_summoning()
+        elif normalized == "completed":
             pip.set_completed()
-        elif state in {"failed", "cancelled", "timed_out"}:
+        elif normalized in {"failed", "timed_out"}:
             pip.set_error()
-        elif state in {"running", "summoning", "waiting"}:
+        elif normalized == "cancelled":
+            pip.set_cancelled()
+        elif normalized == "waiting_for_approval":
+            pip.set_waiting_for_approval()
+        elif normalized == "running":
             pip.set_running()
 
     def remove_drone_run_pip(self, run_id: str) -> None:
+        ghost, animation = self._summon_animations.pop(run_id, (None, None))
+        if animation is not None:
+            animation.stop()
+        if ghost is not None:
+            ghost.deleteLater()
         pip = self._drone_run_pips.pop(run_id, None)
         if pip is None:
             return
         self._rail_layout.removeWidget(pip)
         pip.deleteLater()
         self.adjustSize()
+        self.setFixedHeight(self.sizeHint().height())
+
+    def _play_summon_animation(self, run_id: str) -> None:
+        pip = self._drone_run_pips.get(run_id)
+        if pip is None:
+            return
+        if self._drone_tab is None:
+            pip.finish_launch_animation()
+            return
+
+        ghost = QToolButton(self)
+        ghost.setObjectName("edgeDroneRunSummonGhost")
+        ghost.setIcon(QIcon(str(media_path("drone_bot.svg"))))
+        ghost.setIconSize(QSize(12, 12))
+        ghost.setFixedSize(18, 18)
+        ghost.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        ghost.setStyleSheet(
+            "QToolButton#edgeDroneRunSummonGhost {"
+            "  background: #14303a;"
+            "  border: 1px solid #7dcfff;"
+            "  border-radius: 9px;"
+            "  padding: 0px;"
+            "}"
+        )
+
+        start = self._centered_child_pos(self._drone_tab, ghost.size())
+        end = self._centered_child_pos(pip, ghost.size())
+        ghost.move(start)
+        ghost.show()
+        ghost.raise_()
+
+        animation = QPropertyAnimation(ghost, b"pos", self)
+        animation.setDuration(540)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.setStartValue(start)
+        animation.setEndValue(end)
+        animation.finished.connect(
+            lambda rid=run_id, g=ghost, a=animation: self._finish_summon_animation(rid, g, a)
+        )
+        self._summon_animations[run_id] = (ghost, animation)
+        animation.start()
+
+    def _finish_summon_animation(
+        self,
+        run_id: str,
+        ghost: QToolButton,
+        animation: QPropertyAnimation,
+    ) -> None:
+        self._summon_animations.pop(run_id, None)
+        animation.deleteLater()
+        ghost.deleteLater()
+        pip = self._drone_run_pips.get(run_id)
+        if pip is not None:
+            pip.finish_launch_animation()
+
+    @staticmethod
+    def _centered_child_pos(child: QWidget, target_size: QSize) -> QPoint:
+        rect = child.geometry()
+        return QPoint(
+            rect.center().x() - target_size.width() // 2,
+            rect.center().y() - target_size.height() // 2,
+        )
+
+    @staticmethod
+    def _normalize_drone_state(state: str) -> str:
+        normalized = state.strip().lower().replace(" ", "_").replace("-", "_")
+        if normalized in {"waiting", "approval", "waiting_approval"}:
+            return "waiting_for_approval"
+        if normalized in {"done", "success"}:
+            return "completed"
+        if normalized == "error":
+            return "failed"
+        return normalized
 
     # ------------------------------------------------------------------
     # Stylesheets
