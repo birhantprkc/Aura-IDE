@@ -12,11 +12,25 @@
 
 <img src="media/AurA.ico" alt="Aura icon" width="64" height="64" align="right">
 
-**An LLM coding harness — turns any model into a better engineer through process, tools, context, validation, and recovery.**
+**A native AI workflow IDE built first for coding. Aura turns intent into accountable, reviewable work. Planner writes the spec, Worker executes safely, and Drones turn repeatable tasks into reusable workflow buttons.**
+
+### Aura Drones
+
+Drones are reusable, visible AI workers for repeatable workflows. They are saved per project in `.aura/drones/`. You can create, edit, duplicate, delete, and launch them from Drone Bay, accessible from the edge rail.
+
+Active drone runs appear as rail pips with visual status indicators (launching, running, waiting for approval, error, completed, cancelled). Drone Reports is a floating window showing live run output and saved receipts.
+
+Each drone has a write policy: read-only (can run in parallel), ask-before-writes, or normal diff approval. Write-capable drones still use Aura's standard diff approval flow. Runs can be cancelled safely mid-execution.
+
+Useful Worker runs can be saved as new Drones. The Planner can suggest or summon saved Drones via the `summon_drone` tool when a user request matches a drone's purpose.
+
+Aura is independent, open source, and moving fast. If Aura saves you time, reduces model spend, or you want to support visible AI workflow tooling, donations help keep development going.
+
+[![Support Aura](https://img.shields.io/badge/Buy%20me%20a%20coffee-support%20Aura-yellow?logo=buymeacoffee)](https://buymeacoffee.com/snowballkori)
 
 ## Why Aura?
 
-Aura is an LLM coding harness. It takes your codebase, your prompt, and a capable model — then runs it through a real engineering loop:
+Aura is an AI workflow IDE for coding. It takes your codebase, your prompt, and a capable model — then runs it through a real engineering loop:
 
 **repo awareness → Planner spec → Worker execution → surgical edits → validation → recovery → final receipt.**
 
@@ -41,14 +55,14 @@ Aura has been **heavily dogfooded on its own codebase** — it wrote most of its
 
 If you find Aura useful, consider starring the repo to help others discover it.
 
-[![Support Aura](https://img.shields.io/badge/Buy%20me%20a%20coffee-support%20Aura-yellow?logo=buymeacoffee)](https://buymeacoffee.com/snowballkori)
-
 ---
 
 ## Table of Contents
 
 - [Screenshots](#screenshots)
+- [Aura Drones](#aura-drones)
 - [Features](#features)
+  - [Drones](#drones)
   - [Planner / Worker Architecture](#planner--worker-architecture)
   - [Guided First-Launch Onboarding](#guided-first-launch-onboarding)
   - [Comprehensive Tools Suite](#comprehensive-tools-suite)
@@ -103,6 +117,20 @@ If you find Aura useful, consider starring the repo to help others discover it.
 ---
 
 ## Features
+
+### Drones
+
+Aura Drones turn repeatable workflows into reusable, launchable AI workers that you can create, save, and share per project.
+
+- **Drone Bay** - A dedicated pane in the edge rail for managing all your drones. Create, edit, duplicate, delete, and launch drones from a single view.
+- **Drone Editor** - A full dialog for configuring each drone: name, description, instructions, write policy, allowed tools, and budget limits.
+- **Drone Rail Pips** - Active drone runs appear as visual indicators in the edge rail with live status (launching, running, waiting for approval, error, completed, cancelled).
+- **Drone Reports** - A floating window showing live output from running drones alongside saved receipts from completed runs.
+- **Write Policies** - Each drone has one of three write policies: `read_only` (can run in parallel with other read-only drones), `ask_before_writes` (pauses to confirm before any file write), or `normal_diff_approval` (uses Aura's standard diff approval flow).
+- **Save as Drone** - After any Worker run, you can save the instructions as a new reusable Drone.
+- **Planner summon_drone** - The Planner can detect when a user request matches a saved drone's purpose and summon it automatically via the `summon_drone` tool.
+- **Cancellation** - Any running drone can be cancelled safely mid-execution.
+- **Parallel Runs** - Read-only drones can execute in parallel, while write-capable drones queue to avoid file conflicts.
 
 ### Planner / Worker Architecture
 
