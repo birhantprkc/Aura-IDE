@@ -44,7 +44,6 @@ class DroneBayPane(QWidget):
         self._active_run_card: DroneRunCard | None = None
         self._history_section: QWidget | None = None
         self._run_history_widgets: list[QWidget] = []
-        self._scroll_content = self._card_layout
 
         self.setObjectName("droneBayPane")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)

@@ -572,6 +572,44 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
     },
 }
 
+
+SUMMON_DRONE_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "summon_drone",
+        "description": (
+            "Suggest launching a saved Drone to handle a focused sub-task independently. "
+            "Call this when the user's request matches a saved Drone's purpose. "
+            "The Drone runs separately and its receipt appears in the right panel."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "drone_id": {
+                    "type": "string",
+                    "description": (
+                        "The id of the saved Drone to launch (from Available Drones list)."
+                    ),
+                },
+                "goal": {
+                    "type": "string",
+                    "description": (
+                        "What the Drone should accomplish this specific run."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "Why this Drone is being summoned — shown to the user for confirmation."
+                    ),
+                },
+            },
+            "required": ["drone_id", "goal"],
+        },
+    },
+}
+
+
 WRITE_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",

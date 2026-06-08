@@ -7,9 +7,13 @@ user-visible — they are behavioral rules for the model.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from aura.repo_map import generate_repo_map
+
+
+logger = logging.getLogger(__name__)
 
 TIER1_CONTEXT_PLACEHOLDER = "{TIER1_CONTEXT}"
 
@@ -452,4 +456,34 @@ def build_tier1_context(workspace_root: Path, force: bool = False) -> str:
     except Exception:
         pass
 
+    # 4. Available Drones context
+    try:
+        from aura.drones.store import DroneStore
+        drone_ctx = _build_drone_context(workspace_root, DroneStore)
+        if drone_ctx:
+            parts.append(drone_ctx)
+    except Exception:
+        logger.debug("Drone context unavailable", exc_info=True)
+
     return "\n\n".join(parts)
+
+
+def _build_drone_context(workspace_root: Path, store_cls) -> str:
+    """Build context listing available Drones for the planner's system prompt.
+
+    Returns an empty string if no Drones are saved or the store is unavailable.
+    """
+    drones = store_cls.list_drones(workspace_root)
+    if not drones:
+        return ""
+    lines = [
+        "",
+        "## Available Drones",
+        "You have saved Drones that can handle focused sub-tasks independently.",
+        "Call `summon_drone` to launch one when the user's request matches its purpose.",
+    ]
+    for d in drones:
+        instr = (d.instructions or "")[:80].replace("\n", " ").strip()
+        lines.append(f'- "{d.name}" (id: {d.id}): {instr}')
+    lines.append("")
+    return "\n".join(lines)

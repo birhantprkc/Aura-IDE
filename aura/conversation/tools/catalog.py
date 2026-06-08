@@ -17,6 +17,7 @@ from aura.conversation.tools._schemas import (
     WRITE_TOOL_DEFS,
     DIAGNOSTIC_TOOL_DEF,
     WORKSPACE_SNAPSHOT_TOOL_DEF,
+    SUMMON_DRONE_TOOL_DEF,
 )
 
 PLANNER_TOOL_NAMES = {
@@ -86,6 +87,7 @@ class ToolCatalog:
                 planner_read_tools
                 + planner_git_tools
                 + [dict(DISPATCH_TOOL_DEF)]
+                + [dict(SUMMON_DRONE_TOOL_DEF)]
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
