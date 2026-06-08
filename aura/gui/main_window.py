@@ -1037,9 +1037,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._drone_runner.cancel()
 
     def _on_cancel_drone_run(self, run_id: str) -> None:
+        """Cancel a running Drone — idempotent, does not delete any state.
+
+        Only sets the cancel event and updates the card UI.
+        Cleanup happens later when runner emits finished.
+        """
         record = self._drone_runs.get(run_id)
-        if record is not None:
-            record["runner"].cancel()
+        if record is None:
+            return
+        record["runner"].cancel()
+        self._drone_reports_window.mark_cancelling(run_id)
 
     def _on_drone_status_changed(self, run_id: str, drone_name: str, status: str) -> None:
         self._edge_rail.set_drone_run_pip_state(run_id, drone_name, status)

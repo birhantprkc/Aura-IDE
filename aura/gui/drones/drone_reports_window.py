@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QScrollArea,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +40,7 @@ class DroneReportsWindow(QDialog):
         self._geometry_restore_done = False
         self._initial_geometry = initial_geometry.strip()
         self._cards: dict[str, QWidget] = {}
+        self._close_guard: bool = False
         self._geometry_save_timer = QTimer(self)
         self._geometry_save_timer.setSingleShot(True)
         self._geometry_save_timer.setInterval(250)
@@ -75,8 +77,18 @@ class DroneReportsWindow(QDialog):
         title_col.addWidget(subtitle)
 
         header_layout.addLayout(title_col)
-        header_layout.addStretch(1)
 
+        close_btn = QToolButton(header)
+        close_btn.setText("✕")
+        close_btn.setAutoRaise(True)
+        close_btn.setStyleSheet(
+            f"QToolButton {{ color: {FG_DIM}; font-size: 16px; border: none; padding: 2px 6px; }}"
+            f"QToolButton:hover {{ color: {FG}; background: #222230; border-radius: 4px; }}"
+        )
+        close_btn.clicked.connect(self.close)
+        header_layout.addWidget(close_btn)
+
+        header_layout.addStretch(1)
 
         outer.addWidget(header)
 
@@ -176,6 +188,8 @@ class DroneReportsWindow(QDialog):
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
+        if self._close_guard:
+            return
         self._schedule_geometry_save()
         self.visibility_changed.emit(False)
 
@@ -191,6 +205,15 @@ class DroneReportsWindow(QDialog):
         super().resizeEvent(event)
         self._schedule_geometry_save()
 
+    def mark_cancelling(self, run_id: str) -> None:
+        """Update the run card UI to show cancellation is in progress.
+
+        Idempotent. Does not touch runner, thread, or window state.
+        """
+        card = self._cards.get(run_id)
+        if card is not None and hasattr(card, "set_cancelling"):
+            card.set_cancelling()
+
     def closeEvent(self, event: QCloseEvent) -> None:
         """Prevent destruction — Drone Reports is a stable live monitor.
 
@@ -198,6 +221,11 @@ class DroneReportsWindow(QDialog):
         The window stays open for the full lifecycle of active runs.
         """
         event.ignore()
+        if self._close_guard:
+            return
+        self._close_guard = True
+        self.hide()
+        self._close_guard = False
 
     def _refresh_empty_state(self) -> None:
         self._empty_label.setVisible(not self._cards)

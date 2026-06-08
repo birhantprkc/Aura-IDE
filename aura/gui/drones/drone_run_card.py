@@ -125,6 +125,17 @@ class DroneRunCard(QFrame):
             self._cancel_btn.show()
             self._close_btn.hide()
 
+    def set_cancelling(self) -> None:
+        """Disable the Cancel button and show "Cancelling...".
+
+        Called immediately when the user requests cancellation.
+        Idempotent — safe to call multiple times.
+        """
+        if not self._cancel_btn.isEnabled():
+            return
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.setText("Cancelling...")
+
     # --- Event handlers called from MainWindow ---
 
     def on_status_changed(self, status: str) -> None:
