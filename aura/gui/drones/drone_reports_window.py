@@ -131,6 +131,10 @@ class DroneReportsWindow(QDialog):
         self._scroll.setWidget(self._card_host)
         outer.addWidget(self._scroll, 1)
 
+        # Close/hide guard — prevents re-entrancy and ensures active runs survive close.
+        self._close_guard: bool = False
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+
         self.setStyleSheet(f"QDialog {{ background: {BG_ALT}; color: {FG}; }}")
         self._restore_geometry(self._initial_geometry)
         self._geometry_restore_done = True
@@ -189,7 +193,13 @@ class DroneReportsWindow(QDialog):
         return self.isVisible()
 
     def hideEvent(self, event) -> None:
+        """Hide — save geometry via timer, emit visibility change.
+
+        Must not clear cards or touch run state.
+        """
         super().hideEvent(event)
+        if self._close_guard:
+            return
         self._schedule_geometry_save()
         self.visibility_changed.emit(False)
 
@@ -206,9 +216,17 @@ class DroneReportsWindow(QDialog):
         self._schedule_geometry_save()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        """Close → always hide, never close/destroy.
+
+        Closing while active Drone runs exist must only hide the window.
+        It must not reject, delete cards, clear runs, or touch run state.
+        """
         event.ignore()
-        self._save_geometry()
+        if self._close_guard:
+            return
+        self._close_guard = True
         self.hide()
+        self._close_guard = False
 
     def _refresh_empty_state(self) -> None:
         self._empty_label.setVisible(not self._cards)
