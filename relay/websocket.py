@@ -105,13 +105,72 @@ async def handle_websocket(ws: WebSocket, sessions: SessionManager) -> None:
                     }))
                     continue
 
+            if msg_type == "ticket.register":
+                # Desktop generates a ticket for phone to use in pair.connect
+                payload = msg.get("payload", {})
+                ticket = payload.get("ticket", "")
+                code = payload.get("code", "")
+                project_id = payload.get("project_id", "")
+                conversation_id = payload.get("conversation_id", "")
+                desktop_name = payload.get("desktop_name", "")
+
+                if not ticket:
+                    await ws.send_text(json.dumps({
+                        "id": f"evt_{uuid4().hex[:12]}",
+                        "type": "error",
+                        "desktop_id": "",
+                        "project_id": "",
+                        "conversation_id": "",
+                        "in_response_to": msg.get("id", ""),
+                        "payload": {"message": "Missing ticket"},
+                    }))
+                    continue
+
+                sessions.register_ticket(ticket, {
+                    "desktop_id": device_id,
+                    "code": code,
+                    "desktop_name": desktop_name,
+                    "project_id": project_id,
+                    "conversation_id": conversation_id,
+                })
+                await ws.send_text(json.dumps({
+                    "id": f"evt_{uuid4().hex[:12]}",
+                    "type": "ticket.registered",
+                    "desktop_id": device_id,
+                    "project_id": "",
+                    "conversation_id": "",
+                    "in_response_to": msg.get("id", ""),
+                    "payload": {"ticket": ticket},
+                }))
+                continue
+
             if msg_type == "pair.connect":
                 # Phone wants to pair with a desktop
                 payload = msg.get("payload", {})
-                pairing_code = payload.get("code", "")
-                target_desktop_id = msg.get("desktop_id", "")
                 phone_id = msg.get("device_id", "") or device_id
                 phone_name = payload.get("device_name", "Phone")
+
+                ticket = payload.get("ticket", "")
+                if ticket:
+                    # Ticket-based pairing: resolve ticket to find desktop
+                    ticket_data = sessions.resolve_ticket(ticket)
+                    if ticket_data is None:
+                        await ws.send_text(json.dumps({
+                            "id": f"evt_{uuid4().hex[:12]}",
+                            "type": "pair.error",
+                            "desktop_id": "",
+                            "project_id": "",
+                            "conversation_id": "",
+                            "in_response_to": msg.get("id", ""),
+                            "payload": {"message": "Invalid or expired ticket"},
+                        }))
+                        continue
+                    pairing_code = ticket_data.get("code", "")
+                    target_desktop_id = ticket_data.get("desktop_id", "")
+                else:
+                    # Manual code-based pairing (backward compat)
+                    pairing_code = payload.get("code", "")
+                    target_desktop_id = msg.get("desktop_id", "")
 
                 if not pairing_code or not target_desktop_id:
                     await ws.send_text(json.dumps({
@@ -153,6 +212,20 @@ async def handle_websocket(ws: WebSocket, sessions: SessionManager) -> None:
                     }))
                 continue
 
+            if msg_type == "pair.paired_devices":
+                # Desktop queries which phones are paired with it
+                paired = sessions.get_paired_phones(device_id)
+                await ws.send_text(json.dumps({
+                    "id": f"evt_{uuid4().hex[:12]}",
+                    "type": "pair.paired_devices",
+                    "desktop_id": device_id,
+                    "project_id": "",
+                    "conversation_id": "",
+                    "in_response_to": msg.get("id", ""),
+                    "payload": {"phone_ids": paired},
+                }))
+                continue
+
             if msg_type == "desktop.list":
                 online = sessions.list_online()
                 await ws.send_text(json.dumps({
@@ -179,13 +252,36 @@ async def handle_websocket(ws: WebSocket, sessions: SessionManager) -> None:
                         sessions.set_authenticated(phone_id, token_payload)
                         sessions.set_device_name(phone_id, phone_name)
 
-                # Forward to phone
-                await sessions.send_to(phone_id, raw)
+                # Record pairing and add scope info before forwarding to phone
+                sessions.set_paired(phone_id, device_id)
+                confirmed_msg = json.loads(raw)
+                confirmed_msg["payload"]["scoped_to"] = device_id
+
+                await sessions.send_to(phone_id, json.dumps(confirmed_msg))
                 continue
 
             # Route to target desktop
             target = msg.get("desktop_id", "")
             if target and sessions.is_online(target):
+                # Scope check: phones can only route to their paired desktop
+                if sessions.is_authenticated(device_id):
+                    sender_session = sessions._sessions.get(device_id)
+                    if sender_session and sender_session.token_payload:
+                        sender_role = sender_session.token_payload.get("role", "")
+                        if sender_role == "phone":
+                            paired = sessions.get_paired_desktop(device_id)
+                            if paired != target:
+                                await ws.send_text(json.dumps({
+                                    "id": f"evt_{uuid4().hex[:12]}",
+                                    "type": "error",
+                                    "desktop_id": "",
+                                    "project_id": "",
+                                    "conversation_id": "",
+                                    "in_response_to": msg.get("id", ""),
+                                    "payload": {"message": "Phone is not paired with this desktop"},
+                                }))
+                                continue
+
                 msg["sender_device_id"] = device_id
                 ok = await sessions.send_to(target, json.dumps(msg))
                 if not ok:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -26,8 +27,12 @@ class DeviceSession:
 class SessionManager:
     """Tracks WebSocket connections for desktops and phones."""
 
+    TICKET_TTL = 300
+
     def __init__(self) -> None:
         self._sessions: dict[str, DeviceSession] = {}
+        self._tickets: dict[str, dict] = {}
+        self._paired_phones: dict[str, str] = {}
 
     def register(self, device_id: str, ws: WebSocket, device_type: str = "desktop",
                  display_name: str = "") -> None:
@@ -105,3 +110,41 @@ class SessionManager:
         """Get the friendly name of a device."""
         session = self._sessions.get(device_id)
         return session.device_name if session else ""
+
+    # --- Ticket store ---
+
+    def register_ticket(self, ticket: str, data: dict) -> None:
+        """Store a pairing ticket with expiration."""
+        data["expires_at"] = time.time() + self.TICKET_TTL
+        self._tickets[ticket] = data
+        logger.info("[Relay] ticket registered: %s", ticket)
+
+    def resolve_ticket(self, ticket: str) -> dict | None:
+        """Resolve a ticket, returning its data. Removes expired tickets.
+
+        Returns None if the ticket doesn't exist or has expired.
+        """
+        data = self._tickets.get(ticket)
+        if data is None:
+            return None
+        if time.time() > data.get("expires_at", 0):
+            self._tickets.pop(ticket, None)
+            logger.info("[Relay] ticket expired: %s", ticket)
+            return None
+        self._tickets.pop(ticket, None)
+        return data
+
+    # --- Phone-desktop pairing ---
+
+    def set_paired(self, phone_id: str, desktop_id: str) -> None:
+        """Record a phone-to-desktop pairing."""
+        self._paired_phones[phone_id] = desktop_id
+        logger.info("[Relay] paired: phone=%s -> desktop=%s", phone_id, desktop_id)
+
+    def get_paired_desktop(self, phone_id: str) -> str | None:
+        """Return the desktop_id this phone is paired with, or None."""
+        return self._paired_phones.get(phone_id)
+
+    def get_paired_phones(self, desktop_id: str) -> list[str]:
+        """Return all phone_ids paired with this desktop."""
+        return [pid for pid, did in self._paired_phones.items() if did == desktop_id]
