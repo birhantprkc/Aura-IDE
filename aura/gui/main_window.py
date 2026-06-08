@@ -183,6 +183,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_bay.launchDroneRequested.connect(self._on_launch_drone)
         self._drone_bay.viewRunReceiptRequested.connect(self._on_view_drone_receipt)
 
+        # Connect Save as Drone
+        self._playground._info_hub.saveAsDroneRequested.connect(self._on_save_as_drone)
+
         # Worker event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
         self._worker_handler = WorkerEventHandler(
@@ -637,6 +640,62 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._drone_bay.refresh()
+
+    def _on_save_as_drone(self, summary: str) -> None:
+        """Open the Drone editor pre-filled from the last Worker run."""
+        from PySide6.QtWidgets import QDialog
+
+        from aura.config import load_workspace_root
+        from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
+
+        workspace_root = load_workspace_root()
+        if not workspace_root:
+            return
+
+        # Gather context from the last dispatch
+        goal = ""
+        spec_text = ""
+        result_summary = summary
+
+        if hasattr(self, '_bridge') and self._bridge is not None:
+            records = self._bridge.dispatch_records
+            if records:
+                last = records[-1]
+                goal = last.spec.get("goal", "") or ""
+                spec_text = last.spec.get("spec", "") or ""
+                result_summary = last.result_summary or summary
+
+        # Detect write policy from registered tools
+        write_policy = "read_only"
+        if hasattr(self, '_bridge') and self._bridge is not None:
+            registry = self._bridge.registry
+            if registry is not None:
+                from aura.conversation.tool_limits import WRITE_TOOLS
+                registered_names = [t["name"] for t in registry.tool_defs()]
+                if any(wt in registered_names for wt in WRITE_TOOLS):
+                    write_policy = "normal_diff_approval"
+
+        # Suggest a name
+        suggested_name = ""
+        if goal:
+            suggested_name = goal[:50]
+        elif summary:
+            # Use first sentence or first 50 chars
+            first_dot = summary.find(". ")
+            suggested_name = summary[:first_dot] if first_dot > 0 else summary[:50]
+
+        dialog = DroneEditorDialog(
+            workspace_root=workspace_root,
+            parent=self,
+            initial_name=suggested_name,
+            initial_instructions=spec_text or summary,
+            initial_output_contract=result_summary,
+            initial_write_policy=write_policy,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Refresh drone bay to show the new drone
+            if self._drone_bay is not None:
+                self._drone_bay.refresh()
 
     def _on_edit_drone(self, drone_id: str) -> None:
         drone = DroneStore.load_drone(self._workspace_root, drone_id)

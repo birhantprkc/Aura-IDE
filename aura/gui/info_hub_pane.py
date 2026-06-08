@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QPlainTextEdit,
@@ -13,11 +13,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.gui.widgets.todo_list import TodoListWidget
 from aura.gui.cards._helpers import _mono_font
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
 from aura.gui.theme import ACCENT, BG, BORDER, FG, FG_MUTED
+from aura.gui.widgets.todo_list import TodoListWidget
 
 
 class InfoHubPane(QWidget):
@@ -32,6 +32,8 @@ class InfoHubPane(QWidget):
         show_final_summary(ok, summary) -> None
         clear() -> None
     """
+
+    saveAsDroneRequested = Signal(str)  # emits the summary text
 
     _LOG_REVEAL_CHARS_PER_TICK = 16
 
@@ -181,6 +183,25 @@ class InfoHubPane(QWidget):
         receipt_text = f"{'═' * 46}\n{prefix}\n{summary}\n{'═' * 46}"
         btn.clicked.connect(lambda checked, b=btn, r=receipt_text: self._on_copy_summary(b, r))
         self._cards_layout.addWidget(btn)
+
+        # Save as Drone button
+        save_drone_btn = QPushButton("🤖 Save as Drone", self._log_tab)
+        save_drone_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_drone_btn.setFlat(True)
+        save_drone_btn.setStyleSheet(f"""
+            QPushButton {{
+                color: {FG_MUTED};
+                font-size: 11px;
+                border: none;
+                padding: 2px 0;
+                text-decoration: none;
+            }}
+            QPushButton:hover {{
+                color: {ACCENT};
+            }}
+        """)
+        save_drone_btn.clicked.connect(lambda checked, s=summary: self.saveAsDroneRequested.emit(s))
+        self._cards_layout.addWidget(save_drone_btn)
 
     def _on_copy_summary(self, btn: QPushButton, receipt_text: str) -> None:
         """Copy summary to clipboard and briefly show 'Copied!'."""

@@ -31,6 +31,11 @@ class DroneEditorDialog(QDialog):
         workspace_root: Path,
         parent: QWidget | None = None,
         drone: DroneDefinition | None = None,
+        *,
+        initial_name: str = "",
+        initial_instructions: str = "",
+        initial_output_contract: str = "",
+        initial_write_policy: str = "read_only",
     ) -> None:
         super().__init__(parent)
         self._workspace_root = workspace_root
@@ -46,6 +51,18 @@ class DroneEditorDialog(QDialog):
         self._build_ui()
         if drone is not None:
             self._populate(drone)
+
+        # Apply initial values (for pre-fill from Save-as-Drone)
+        if initial_name:
+            self._name_edit.setText(initial_name)
+        if initial_instructions:
+            self._instructions_edit.setPlainText(initial_instructions)
+        if initial_output_contract:
+            self._output_contract_edit.setPlainText(initial_output_contract)
+        if initial_write_policy:
+            idx = self._policy_combo.findData(initial_write_policy)
+            if idx >= 0:
+                self._policy_combo.setCurrentIndex(idx)
 
     # -- Public API --
 
