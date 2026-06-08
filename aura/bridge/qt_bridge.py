@@ -358,7 +358,7 @@ class ConversationBridge(QObject):
     def set_workspace_root(self, root) -> None:
         self._registry.set_workspace_root(root)
         self._dispatch_proxy.set_workspace_root(root)
-        self._compute_and_cache_tier1()
+        self.refresh_tier1_context()
 
     def set_read_only(self, value: bool) -> None:
         self._registry.set_read_only(value)
@@ -377,6 +377,15 @@ class ConversationBridge(QObject):
         if workspace_root is not None:
             self._tier1_context = build_tier1_context(workspace_root)
         self._dispatch_proxy.set_tier1_context(self._tier1_context)
+
+    def refresh_tier1_context(self) -> None:
+        """Refresh workspace context and reapply the active system prompt."""
+        self._compute_and_cache_tier1()
+        if self._planner_worker_mode:
+            sys_prompt = self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
+        else:
+            sys_prompt = self._single_system_prompt if self._single_system_prompt else SINGLE_SYSTEM_PROMPT
+        self._history.set_system(inject_tier1_context(sys_prompt, self._tier1_context))
 
     def set_planner_worker_mode(self, enabled: bool) -> None:
         self._planner_worker_mode = enabled

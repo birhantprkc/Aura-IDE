@@ -24,6 +24,7 @@ class EdgeTabRail(QFrame):
 
     terminalTabToggled = Signal(bool)  # True=expanded, False=collapsed
     droneBayRequested = Signal()
+    droneRunFocusRequested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -33,6 +34,7 @@ class EdgeTabRail(QFrame):
         self._checkpoint_tab: QToolButton | None = None
         self._terminal_container: QWidget | None = None
         self._drone_tab: QToolButton | None = None
+        self._drone_run_pips: dict[str, DroneRailPip] = {}
         self._corner_widget: QWidget | None = None
         self._setup_ui()
 
@@ -47,9 +49,9 @@ class EdgeTabRail(QFrame):
             "QFrame#edgeTabRail { background: transparent; border: none; }"
         )
 
-        rail_layout = QVBoxLayout(self)
-        rail_layout.setContentsMargins(0, 0, 0, 0)
-        rail_layout.setSpacing(6)
+        self._rail_layout = QVBoxLayout(self)
+        self._rail_layout.setContentsMargins(0, 0, 0, 0)
+        self._rail_layout.setSpacing(6)
 
         self._terminal_tab = QToolButton(self)
         self._terminal_tab.setObjectName("edgeTerminalTab")
@@ -59,7 +61,7 @@ class EdgeTabRail(QFrame):
         self._terminal_tab.setCheckable(True)
         self._terminal_tab.setFixedSize(40, 44)
         self._terminal_tab.clicked.connect(lambda: self.terminalTabToggled.emit(self._terminal_tab.isChecked()))
-        rail_layout.addWidget(self._terminal_tab)
+        self._rail_layout.addWidget(self._terminal_tab)
 
         self._checkpoint_tab = QToolButton(self)
         self._checkpoint_tab.setObjectName("edgeCheckpointTab")
@@ -70,7 +72,7 @@ class EdgeTabRail(QFrame):
         self._checkpoint_tab.setCursor(Qt.CursorShape.PointingHandCursor)
         self._checkpoint_tab.setFixedSize(40, 44)
         self._checkpoint_tab.setStyleSheet(self._checkpoint_tab_style())
-        rail_layout.addWidget(self._checkpoint_tab)
+        self._rail_layout.addWidget(self._checkpoint_tab)
 
         self._drone_tab = QToolButton(self)
         self._drone_tab.setObjectName("edgeDroneTab")
@@ -83,12 +85,12 @@ class EdgeTabRail(QFrame):
         self._drone_tab.setFixedSize(40, 44)
         self._drone_tab.clicked.connect(lambda: self.droneBayRequested.emit())
         self._drone_tab.setStyleSheet(self._drone_tab_style())
-        rail_layout.addWidget(self._drone_tab)
+        self._rail_layout.addWidget(self._drone_tab)
 
         # Run pip (hidden until active)
         self._drone_run_pip = DroneRailPip(self)
-        rail_layout.addSpacing(2)
-        rail_layout.addWidget(self._drone_run_pip, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._rail_layout.addSpacing(2)
+        self._rail_layout.addWidget(self._drone_run_pip, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.adjustSize()
         self.set_state("dim")
@@ -135,6 +137,38 @@ class EdgeTabRail(QFrame):
         """Notify the rail whether the terminal window is open, so the
         'dim' state can show the active variant."""
         self._is_terminal_open = is_open
+
+    def add_drone_run_pip(self, run_id: str, drone_name: str) -> None:
+        if run_id in self._drone_run_pips:
+            return
+        pip = DroneRailPip(self)
+        pip.setToolTip(f"{drone_name}: running")
+        pip.focused.connect(lambda rid=run_id: self.droneRunFocusRequested.emit(rid))
+        pip.set_running()
+        self._drone_run_pips[run_id] = pip
+        self._rail_layout.addWidget(pip, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._drone_run_pip.set_idle()
+        self.adjustSize()
+
+    def set_drone_run_pip_state(self, run_id: str, drone_name: str, state: str) -> None:
+        pip = self._drone_run_pips.get(run_id)
+        if pip is None:
+            return
+        pip.setToolTip(f"{drone_name}: {state}")
+        if state == "completed":
+            pip.set_completed()
+        elif state in {"failed", "cancelled", "timed_out"}:
+            pip.set_error()
+        elif state in {"running", "summoning", "waiting"}:
+            pip.set_running()
+
+    def remove_drone_run_pip(self, run_id: str) -> None:
+        pip = self._drone_run_pips.pop(run_id, None)
+        if pip is None:
+            return
+        self._rail_layout.removeWidget(pip)
+        pip.deleteLater()
+        self.adjustSize()
 
     # ------------------------------------------------------------------
     # Stylesheets

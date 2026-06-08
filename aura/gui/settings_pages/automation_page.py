@@ -59,6 +59,12 @@ class AutomationPage(QWidget):
         )
         form.addRow("", self._auto_approve_chk)
 
+        self._auto_summon_drones_chk = GlassSwitch(
+            "Auto-summon Drones: Launch suggested Drones without approval",
+            getattr(self._settings, "auto_summon_drones", False),
+        )
+        form.addRow("", self._auto_summon_drones_chk)
+
         self._show_reasoning_chk = GlassSwitch(
             "Show Planner reasoning in the UI",
             self._settings.show_planner_reasoning,
@@ -81,5 +87,6 @@ class AutomationPage(QWidget):
         settings.auto_commit_enabled = self._auto_commit_chk.isChecked()
         settings.auto_dispatch = self._auto_dispatch_chk.isChecked()
         settings.auto_approve = self._auto_approve_chk.isChecked()
+        settings.auto_summon_drones = self._auto_summon_drones_chk.isChecked()
         settings.show_planner_reasoning = self._show_reasoning_chk.isChecked()
         settings.max_tool_rounds = self._max_rounds_spin.value()

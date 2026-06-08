@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from aura.drones.definition import DroneBudget, DroneDefinition, default_tools_for_policy, slugify
 from aura.drones.store import DroneStore
 
@@ -64,10 +66,10 @@ def test_save_creates_directory(tmp_path: Path) -> None:
         id="first",
         name="First",
         description="",
-        instructions="",
+        instructions="Do the first task",
         write_policy="read_only",
         allowed_tools=(),
-        output_contract="",
+        output_contract="Return a summary",
     )
     drone_dir = tmp_path / ".aura" / "drones"
     assert not drone_dir.exists()
@@ -75,15 +77,30 @@ def test_save_creates_directory(tmp_path: Path) -> None:
     assert drone_dir.exists()
 
 
-def test_delete_drone(tmp_path: Path) -> None:
+def test_save_rejects_missing_required_fields(tmp_path: Path) -> None:
     drone = DroneDefinition(
-        id="to-delete",
-        name="Delete Me",
+        id="missing-fields",
+        name="Missing Fields",
         description="",
         instructions="",
         write_policy="read_only",
         allowed_tools=(),
         output_contract="",
+    )
+
+    with pytest.raises(ValueError, match="instructions"):
+        DroneStore.save_drone(tmp_path, drone)
+
+
+def test_delete_drone(tmp_path: Path) -> None:
+    drone = DroneDefinition(
+        id="to-delete",
+        name="Delete Me",
+        description="",
+        instructions="Delete this test drone",
+        write_policy="read_only",
+        allowed_tools=(),
+        output_contract="Return a summary",
     )
     DroneStore.save_drone(tmp_path, drone)
     assert DroneStore.load_drone(tmp_path, "to-delete") is not None
@@ -135,10 +152,10 @@ def test_invalid_json_skipped(tmp_path: Path) -> None:
         id="valid",
         name="Valid",
         description="",
-        instructions="",
+        instructions="Inspect the project",
         write_policy="read_only",
         allowed_tools=(),
-        output_contract="",
+        output_contract="Return a summary",
     )
     DroneStore.save_drone(tmp_path, drone)
 
@@ -164,10 +181,10 @@ def test_next_id_duplicate(tmp_path: Path) -> None:
         id="release-check",
         name="Release Check",
         description="",
-        instructions="",
+        instructions="Check the release",
         write_policy="read_only",
         allowed_tools=(),
-        output_contract="",
+        output_contract="Return a summary",
     )
     DroneStore.save_drone(tmp_path, drone)
     assert DroneStore.next_id(tmp_path, "Release Check") == "release-check-1"
@@ -179,10 +196,10 @@ def test_next_id_multiple_duplicates(tmp_path: Path) -> None:
             id=f"my-drone-{i}" if i > 0 else "my-drone",
             name=f"My Drone {i}",
             description="",
-            instructions="",
+            instructions="Inspect the project",
             write_policy="read_only",
             allowed_tools=(),
-            output_contract="",
+            output_contract="Return a summary",
         )
         DroneStore.save_drone(tmp_path, drone)
 
@@ -234,13 +251,16 @@ def test_default_tools_for_policy_read_only() -> None:
     assert "git_log" in tools
     assert "git_show" in tools
     assert "git_log_file" in tools
+    assert "git_branch_list" in tools
+    assert "git_stash_list" in tools
+    assert "git_stash_show" in tools
     assert "run_terminal_command" in tools
-    assert len(tools) == 14
+    assert len(tools) == 17
 
 
 def test_default_tools_for_policy_unknown() -> None:
     tools = default_tools_for_policy("nonexistent_policy")
-    assert len(tools) == 14
+    assert len(tools) == 17
 
 
 def test_slugify() -> None:

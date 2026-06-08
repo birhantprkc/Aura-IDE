@@ -141,7 +141,13 @@ class AuraPlayground(QWidget):
         self._workspace_root: Path | None = None
 
         # Active drone run card (shown below the stack widget)
-        self._run_card: QWidget | None = None
+        self._run_cards: dict[str, QWidget] = {}
+        self._run_cards_host = QWidget(self)
+        self._run_cards_layout = QVBoxLayout(self._run_cards_host)
+        self._run_cards_layout.setContentsMargins(10, 6, 10, 10)
+        self._run_cards_layout.setSpacing(8)
+        self._run_cards_host.hide()
+        layout.addWidget(self._run_cards_host)
 
         # Aura wrapper reference for atmospheric synchronization
         self._aura_wrapper: AuraWidget | None = None
@@ -192,16 +198,39 @@ class AuraPlayground(QWidget):
 
     def set_active_run_card(self, card: QWidget) -> None:
         """Insert a run card into the playground layout (below the stack)."""
-        self._run_card = card
-        self.layout().addWidget(card)
-        card.show()
+        self.clear_active_run_card()
+        self.add_run_card("__active__", card)
 
     def clear_active_run_card(self) -> None:
         """Remove the run card from the layout and destroy it."""
-        if self._run_card is not None:
-            self.layout().removeWidget(self._run_card)
-            self._run_card.deleteLater()
-            self._run_card = None
+        self.clear_run_cards()
+
+    def add_run_card(self, run_id: str, card: QWidget) -> None:
+        """Insert or replace one Drone run/receipt card."""
+        self.remove_run_card(run_id)
+        self._run_cards[run_id] = card
+        self._run_cards_layout.addWidget(card)
+        self._run_cards_host.show()
+        card.show()
+
+    def remove_run_card(self, run_id: str) -> None:
+        card = self._run_cards.pop(run_id, None)
+        if card is None:
+            return
+        self._run_cards_layout.removeWidget(card)
+        card.deleteLater()
+        if not self._run_cards:
+            self._run_cards_host.hide()
+
+    def clear_run_cards(self) -> None:
+        for run_id in list(self._run_cards):
+            self.remove_run_card(run_id)
+
+    def focus_run_card(self, run_id: str) -> None:
+        card = self._run_cards.get(run_id)
+        if card is not None:
+            self.switch_to_workspace()
+            card.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def stop_aura(self) -> None:
         if self._aura_wrapper:

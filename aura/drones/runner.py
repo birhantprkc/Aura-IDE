@@ -22,12 +22,14 @@ from aura.client.events import (
     ToolCallStart,
     Usage,
 )
-from aura.config import get_provider, resolve_role_default_model
+from aura.config import get_provider, load_settings, resolve_role_default_model
 from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
 from aura.conversation.tools.registry import ToolRegistry
-from aura.drones.definition import DroneDefinition
+from aura.drones.definition import DroneDefinition, WRITE_TOOLS, default_tools_for_policy
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
+from aura.project_env import build_project_command_rewrite
+from aura.sandbox import SandboxExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,7 @@ class DroneRunner(QObject):
         drone: DroneDefinition,
         provider_id: str | None = None,
         model: str | None = None,
+        auto_approve: bool = False,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -71,6 +74,7 @@ class DroneRunner(QObject):
         self._run = DroneRun(drone=drone)
         self._provider = provider_id
         self._model = model
+        self._auto_approve = auto_approve
         self._approval_event: threading.Event | None = None
         self._approval_result: ApprovalDecision | None = None
         self._reject_all: bool = False
@@ -95,19 +99,26 @@ class DroneRunner(QObject):
         self.statusChanged.emit("running")
         self._reject_all = False
 
-        # 1. Create tool registry (read-only or write-capable based on policy)
-        read_only = (self._drone.write_policy == "read_only")
+        # 1. Create a full registry, then expose only the Drone's saved tools.
+        # Terminal commands are handled by ConversationManager in normal runs,
+        # not ToolRegistry, so Drones need their own terminal execution path.
+        read_only = self._drone.write_policy == "read_only"
         registry = ToolRegistry(
             workspace_root=self._workspace_root,
-            read_only=read_only,
+            read_only=False,
             mode="single",
         )
 
-        # 2. Filter to allowed tools if specified
+        # 2. Filter to allowed tools. Treat missing allowed_tools as policy defaults
+        # for backward compatibility with older saved Drone JSON.
+        allowed_set = set(self._drone.allowed_tools or default_tools_for_policy(self._drone.write_policy))
+        if read_only:
+            allowed_set.difference_update(WRITE_TOOLS)
         tool_defs = registry.tool_defs()
-        if self._drone.allowed_tools:
-            allowed_set = set(self._drone.allowed_tools)
-            tool_defs = [t for t in tool_defs if t.get("function", {}).get("name") in allowed_set]
+        tool_defs = [
+            t for t in tool_defs
+            if t.get("function", {}).get("name") in allowed_set
+        ]
 
         # 3. Build messages
         system_prompt = self._build_system_prompt()
@@ -127,12 +138,18 @@ class DroneRunner(QObject):
         # 6. Run the agent loop
         tool_calls_made = 0
         tool_errors = 0
+        content_parts: list[str] = []
+        tool_call_records: list[dict[str, Any]] = []
+        pending_tool_args: dict[str, dict[str, Any]] = {}
+        errors: list[str] = []
         max_rounds = self._drone.budget.max_tool_rounds
         timeout = self._drone.budget.timeout_seconds
         start_time = time.time()
 
-        # Select approval callback based on write policy
-        if self._drone.write_policy == "read_only":
+        # Select approval callback based on write policy.
+        if read_only:
+            approval_cb = self._always_approve
+        elif self._drone.write_policy == "normal_diff_approval" and self._auto_approve:
             approval_cb = self._always_approve
         else:
             approval_cb = self._build_approval_callback()
@@ -167,12 +184,22 @@ class DroneRunner(QObject):
                         break
 
                     if isinstance(event, ContentDelta):
+                        content_parts.append(event.text)
                         self.contentDelta.emit(event.text)
                     elif isinstance(event, ReasoningDelta):
                         pass  # skip reasoning in drone output
                     elif isinstance(event, ToolCallStart):
+                        pending_tool_args[event.id] = {
+                            "name": event.name,
+                            "index": event.index,
+                            "args_text": "",
+                        }
                         self.toolCallStart.emit(event.index, event.id, event.name)
                     elif isinstance(event, ToolCallArgsDelta):
+                        for pending in pending_tool_args.values():
+                            if pending.get("index") == event.index:
+                                pending["args_text"] = str(pending.get("args_text", "")) + event.args_chunk
+                                break
                         self.toolCallArgsDelta.emit(event.index, event.args_chunk)
                     elif isinstance(event, ToolCallEnd):
                         self.toolCallEnd.emit(event.index)
@@ -186,6 +213,7 @@ class DroneRunner(QObject):
                         full_message = event.full_message
                     elif isinstance(event, ApiError):
                         self.apiError.emit(event.status_code or -1, event.message)
+                        errors.append(event.message)
                         self._run.mark("failed")
                         self.statusChanged.emit("failed")
                         break
@@ -216,20 +244,48 @@ class DroneRunner(QObject):
 
                         tool_calls_made += 1
 
-                        # Execute via registry
+                        # Execute via Drone-bounded tool surface.
                         try:
-                            result = registry.execute(name, args, approval_cb=approval_cb, reject_all=self._reject_all)
-                            ok = result.ok
-                            result_str = result.to_tool_message_content()
+                            if name not in allowed_set:
+                                ok = False
+                                result_str = json.dumps(
+                                    {
+                                        "ok": False,
+                                        "error": f"tool not allowed for this Drone: {name}",
+                                        "allowed_tools": sorted(allowed_set),
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            elif name == "run_terminal_command":
+                                ok, result_str = self._execute_terminal_command(args)
+                            else:
+                                result = registry.execute(
+                                    name,
+                                    args,
+                                    approval_cb=approval_cb,
+                                    reject_all=self._reject_all,
+                                )
+                                ok = result.ok
+                                result_str = result.to_tool_message_content()
                             if not ok:
                                 tool_errors += 1
                         except Exception as exc:
                             ok = False
                             result_str = json.dumps({"error": str(exc)}, ensure_ascii=False)
+                            errors.append(str(exc))
                             tool_errors += 1
 
                         # Emit result for UI
                         self.toolResult.emit(tool_call_id, name, ok, result_str)
+                        tool_call_records.append(
+                            {
+                                "id": tool_call_id,
+                                "name": name,
+                                "args": args,
+                                "ok": ok,
+                                "result": result_str,
+                            }
+                        )
 
                         # Build tool result for next API call
                         tool_results_content.append({
@@ -265,10 +321,13 @@ class DroneRunner(QObject):
                 self._run.mark("failed")
                 self.statusChanged.emit("failed")
                 self.apiError.emit(-1, str(exc))
+                errors.append(str(exc))
 
         finally:
             # Build and emit receipt
             ended = dt.datetime.now(dt.timezone.utc).isoformat()
+            summary = "".join(content_parts).strip()
+            elapsed = self._run.elapsed_seconds
             receipt = DroneReceipt(
                 run_id=self._run.run_id,
                 drone_id=self._drone.id,
@@ -278,8 +337,11 @@ class DroneRunner(QObject):
                 ended_at=ended,
                 tool_calls_made=tool_calls_made,
                 tool_errors=tool_errors,
-                summary="",
+                summary=summary,
                 output_contract=self._drone.output_contract,
+                tool_calls=tool_call_records,
+                errors=errors,
+                elapsed_seconds=elapsed,
             )
             self.receiptReady.emit(receipt)
             self.finished.emit()
@@ -304,6 +366,52 @@ class DroneRunner(QObject):
             self._approval_event.wait()
             return self._approval_result or ApprovalDecision(action="reject")
         return callback
+
+    def _execute_terminal_command(self, args: dict[str, Any]) -> tuple[bool, str]:
+        """Execute a bounded terminal command for a Drone run."""
+        requested_command = str(args.get("command") or "").strip()
+        if not requested_command:
+            return False, json.dumps({"ok": False, "error": "command is required"}, ensure_ascii=False)
+
+        command_plan = build_project_command_rewrite(self._workspace_root, requested_command)
+        command = command_plan.command
+        timeout = self._resolve_terminal_timeout(args.get("timeout"))
+        settings = load_settings()
+        sandbox = SandboxExecutor(
+            mode=settings.sandbox_mode,  # type: ignore[arg-type]
+            workspace_root=self._workspace_root,
+            network_enabled=True,
+        )
+        output_parts: list[str] = []
+
+        def on_output(text: str) -> None:
+            output_parts.append(text)
+
+        result = sandbox.run_terminal_command(
+            command=command,
+            timeout=timeout,
+            cancel_event=self._run.cancel_event,
+            on_output=on_output,
+        )
+        output = result.stdout or "".join(output_parts)
+        if not result.ok and result.stderr and "Docker is not available" in result.stderr:
+            output = f"[SANDBOX ERROR] {result.stderr}"
+        payload = {
+            "ok": result.ok,
+            "exit_code": result.exit_code,
+            "output": output,
+            "command": command,
+            "requested_command": requested_command,
+            "original_command": command_plan.original_command or requested_command,
+        }
+        return result.ok, json.dumps(payload, ensure_ascii=False)
+
+    def _resolve_terminal_timeout(self, raw_timeout: Any) -> int:
+        try:
+            timeout = int(raw_timeout)
+        except (TypeError, ValueError):
+            timeout = min(45, self._drone.budget.timeout_seconds)
+        return max(1, min(timeout, self._drone.budget.timeout_seconds))
 
     def _build_system_prompt(self) -> str:
         """Build the system prompt for this drone."""

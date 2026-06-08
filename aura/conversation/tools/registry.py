@@ -247,3 +247,4 @@ TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_mem
 TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory
 TOOL_HANDLERS["run_diagnostic_command"] = ToolRegistry._handle_run_diagnostic_command
 TOOL_HANDLERS["get_workspace_snapshot"] = ToolRegistry._handle_get_workspace_snapshot
+TOOL_HANDLERS["summon_drone"] = ToolRegistry._handle_summon_drone

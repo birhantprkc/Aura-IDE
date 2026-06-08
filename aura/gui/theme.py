@@ -44,6 +44,7 @@ LABEL_FILES = "#7dcfff"         # cyan-blue — files header
 LABEL_MODEL = "#a8aebb"         # muted silver — model config header (same as FG_DIM, keep subtle)
 LABEL_DISPATCH = "#7aa2f7"      # blue — dispatch toggle label
 LABEL_APPROVE = "#9ece6a"       # green — approve toggle label
+LABEL_DRONES = "#7dcfff"        # cyan — drone summon toggle label
 LABEL_READ_ONLY = "#e0af68"     # amber/warm — read-only badge
 LABEL_THREAD = "#a8aebb"        # dim gray — thread titles (same as FG_DIM)
 LABEL_THREAD_HOVER = "#eaecef"  # bright — thread title on hover (same as FG)

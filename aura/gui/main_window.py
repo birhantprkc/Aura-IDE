@@ -37,6 +37,7 @@ from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.runner import DroneRunner
 from aura.drones.store import DroneStore, RunHistoryStore
+from aura.drones.tool_scaffold import scaffold_dynamic_tool
 from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
@@ -44,6 +45,7 @@ from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.drones.drone_bay_pane import DroneBayPane
 from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
 from aura.gui.drones.drone_run_card import DroneRunCard
+from aura.gui.drones.drone_summon_card import DroneSummonCard
 from aura.gui.edge_rails import EdgeTabRail
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
@@ -60,6 +62,8 @@ from aura.gui.worker_handler import WorkerEventHandler
 from aura.handoff import extract_handoff_text, generate_handoff_prompt, save_handoff
 from aura.prompts import SINGLE_SYSTEM_PROMPT
 from aura.updater import UpdateStatus
+
+MAX_PARALLEL_READ_ONLY_DRONES = 3
 
 
 class MainWindow(WindowChromeMixin, QMainWindow):
@@ -110,6 +114,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.read_only_toggled.connect(self._on_read_only_toggled)
         self._toolbar.auto_dispatch_toggled.connect(self._on_auto_dispatch_toggled)
         self._toolbar.auto_approve_toggled.connect(self._on_auto_approve_toggled)
+        self._toolbar.auto_summon_drones_toggled.connect(self._on_auto_summon_drones_toggled)
         self._toolbar.update_requested.connect(self._on_open_update)
         self._toolbar.settings_requested.connect(self._on_open_settings)
         self._toolbar.minimize_requested.connect(self.showMinimized)
@@ -181,6 +186,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_bay.duplicateDroneRequested.connect(self._on_duplicate_drone)
         self._drone_bay.deleteDroneRequested.connect(self._on_delete_drone)
         self._drone_bay.launchDroneRequested.connect(self._on_launch_drone)
+        self._drone_bay.makeToolRequested.connect(self._on_make_drone_tool)
         self._drone_bay.viewRunReceiptRequested.connect(self._on_view_drone_receipt)
 
         # Connect Save as Drone
@@ -260,6 +266,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if checkpoint_tab is not None:
             checkpoint_tab.clicked.connect(lambda: self._on_open_checkpoints())
         self._edge_rail.droneBayRequested.connect(self._on_drone_bay_requested)
+        self._edge_rail.droneRunFocusRequested.connect(self._on_focus_drone_run)
         self._sync_drone_tab_checked()
 
         # Frameless window — no native title bar
@@ -284,11 +291,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.stop_requested.connect(self._send_handler.handle_stop)
         self._input.retry_requested.connect(self._on_retry)
         self._input.handoff_requested.connect(self._on_handoff_requested)
-        # Drone runner state (Phase 2: single runner at a time, no persistence)
+        # Drone runner state. Read-only Drones can run in parallel; write-capable
+        # Drones remain exclusive because they share the write approval lane.
         self._drone_runner: DroneRunner | None = None
         self._drone_runner_thread: QThread | None = None
-        self._active_run_card: DroneRunCard | None = None
+        self._active_run_card: QWidget | None = None
+        self._drone_runs: dict[str, dict] = {}
+        self._write_drone_run_id: str | None = None
         self._drone_receipt: DroneReceipt | None = None
+        self._pending_drone_summons: dict[str, dict[str, str]] = {}
 
         self._pending_handoff: bool = False
         self._tree = self._playground.file_tree()
@@ -640,15 +651,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._drone_bay.refresh()
+            self._refresh_drone_context()
 
     def _on_save_as_drone(self, summary: str) -> None:
         """Open the Drone editor pre-filled from the last Worker run."""
         from PySide6.QtWidgets import QDialog
 
-        from aura.config import load_workspace_root
         from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
 
-        workspace_root = load_workspace_root()
+        workspace_root = self._workspace_root
         if not workspace_root:
             return
 
@@ -665,14 +676,43 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 spec_text = last.spec.get("spec", "") or ""
                 result_summary = last.result_summary or summary
 
-        # Detect write policy from registered tools
+        # Detect write policy from the last Worker run outcome.
         write_policy = "read_only"
         if hasattr(self, '_bridge') and self._bridge is not None:
-            registry = self._bridge.registry
-            if registry is not None:
-                from aura.conversation.tool_limits import WRITE_TOOLS
-                registered_names = [t["name"] for t in registry.tool_defs()]
-                if any(wt in registered_names for wt in WRITE_TOOLS):
+            records = self._bridge.dispatch_records
+            if records:
+                last = records[-1]
+                metadata = (
+                    self._bridge.worker_result_metadata(last.tool_call_id)
+                    if last.tool_call_id
+                    else {}
+                )
+                extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
+                has_write_metadata = bool(
+                    extras.get("writes")
+                    or extras.get("not_applied_writes")
+                    or extras.get("unrecovered_not_applied_writes")
+                    or extras.get("failed_write_tools")
+                )
+                write_tools = {
+                    "write_file",
+                    "delete_file",
+                    "apply_edit_transaction",
+                    "edit_file",
+                    "edit_symbol",
+                    "edit_line_range",
+                    "patch_file",
+                }
+                has_write_call = any(
+                    (
+                        call.get("function", {}).get("name") in write_tools
+                        if isinstance(call, dict)
+                        else False
+                    )
+                    for message in last.worker_history
+                    for call in (message.get("tool_calls") or [])
+                )
+                if has_write_metadata or has_write_call:
                     write_policy = "normal_diff_approval"
 
         # Suggest a name
@@ -696,6 +736,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             # Refresh drone bay to show the new drone
             if self._drone_bay is not None:
                 self._drone_bay.refresh()
+            self._refresh_drone_context()
 
     def _on_edit_drone(self, drone_id: str) -> None:
         drone = DroneStore.load_drone(self._workspace_root, drone_id)
@@ -708,6 +749,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._drone_bay.refresh()
+            self._refresh_drone_context()
 
     def _on_duplicate_drone(self, drone_id: str) -> None:
         drone = DroneStore.load_drone(self._workspace_root, drone_id)
@@ -743,6 +785,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         DroneStore.save_drone(self._workspace_root, dup)
         self._drone_bay.refresh()
+        self._refresh_drone_context()
 
     def _on_delete_drone(self, drone_id: str) -> None:
         reply = QMessageBox.question(
@@ -755,6 +798,32 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if reply == QMessageBox.Yes:
             DroneStore.delete_drone(self._workspace_root, drone_id)
             self._drone_bay.refresh()
+            self._refresh_drone_context()
+
+    def _refresh_drone_context(self) -> None:
+        refresher = getattr(self._bridge, "refresh_tier1_context", None)
+        if callable(refresher):
+            refresher()
+
+    def _on_make_drone_tool(self, drone_id: str) -> None:
+        if self._workspace_root is None:
+            return
+        drone = DroneStore.load_drone(self._workspace_root, drone_id)
+        if drone is None:
+            return
+        try:
+            path = scaffold_dynamic_tool(self._workspace_root, drone)
+        except OSError as exc:
+            QMessageBox.warning(self, "Make Tool", f"Could not create dynamic tool scaffold:\n{exc}")
+            return
+        self._playground.switch_to_workspace()
+        self._sync_drone_tab_checked()
+        self._playground.open_file(path)
+        QMessageBox.information(
+            self,
+            "Make Tool",
+            f"Created or opened dynamic tool scaffold:\n{path.relative_to(self._workspace_root)}",
+        )
 
     # ----- Drone Run lifecycle (Phase 2) --------------------------------
 
@@ -766,77 +835,222 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         drone = DroneStore.load_drone(self._workspace_root, drone_id)
         if drone is None:
             return
+        self._start_drone_run(drone)
 
-        # Clear any previous run card before launching a new one.
-        if self._active_run_card is not None:
-            self._playground.clear_active_run_card()
-            self._active_run_card = None
+    def _start_drone_run(self, drone: DroneDefinition, summon_goal: str = "") -> None:
+        """Start a Drone run from a saved Drone or an Aura-summoned goal."""
+        if self._workspace_root is None:
+            return
+        run_drone = self._drone_for_summoned_goal(drone, summon_goal) if summon_goal else drone
+        if not self._can_start_drone(run_drone):
+            return
 
         # Switch to workspace view to show the run.
         self._playground.switch_to_workspace()
         self._sync_drone_tab_checked()
 
-        run_card = DroneRunCard(drone, parent=self._playground)
-        self._active_run_card = run_card
-        self._playground.set_active_run_card(run_card)
-
-        self._drone_runner_thread = QThread(self)
-        self._drone_runner = DroneRunner(
+        run_card = DroneRunCard(run_drone, parent=self._playground)
+        thread = QThread(self)
+        runner = DroneRunner(
             workspace_root=self._workspace_root,
-            drone=drone,
+            drone=run_drone,
+            provider_id=self._settings.worker_provider,
+            model=self.current_worker_model(),
+            auto_approve=self._settings.auto_approve,
             parent=None,
         )
-        self._drone_runner.moveToThread(self._drone_runner_thread)
+        runner.moveToThread(thread)
+        run_id = runner.run_state.run_id
+        self._drone_runs[run_id] = {
+            "runner": runner,
+            "thread": thread,
+            "card": run_card,
+            "drone": run_drone,
+        }
+        if run_drone.write_policy != "read_only":
+            self._write_drone_run_id = run_id
+        self._drone_runner = runner
+        self._drone_runner_thread = thread
+        self._active_run_card = run_card
+        self._playground.add_run_card(run_id, run_card)
 
         # Connect signals.
-        self._drone_runner.statusChanged.connect(run_card.on_status_changed)
-        self._drone_runner.contentDelta.connect(run_card.on_content_delta)
-        self._drone_runner.toolCallStart.connect(run_card.on_tool_call_start)
-        self._drone_runner.toolCallArgsDelta.connect(run_card.on_tool_call_args)
-        self._drone_runner.toolResult.connect(run_card.on_tool_result)
-        self._drone_runner.apiError.connect(run_card.on_api_error)
-        self._drone_runner.receiptReady.connect(run_card.on_receipt_ready)
-        self._drone_runner.receiptReady.connect(self._on_drone_receipt)
-        self._drone_runner.finished.connect(self._on_drone_finished)
+        runner.statusChanged.connect(run_card.on_status_changed)
+        runner.statusChanged.connect(
+            lambda status, rid=run_id, name=run_drone.name: self._on_drone_status_changed(rid, name, status)
+        )
+        runner.contentDelta.connect(run_card.on_content_delta)
+        runner.toolCallStart.connect(run_card.on_tool_call_start)
+        runner.toolCallArgsDelta.connect(run_card.on_tool_call_args)
+        runner.toolResult.connect(run_card.on_tool_result)
+        runner.apiError.connect(run_card.on_api_error)
+        runner.receiptReady.connect(run_card.on_receipt_ready)
+        runner.receiptReady.connect(self._on_drone_receipt)
+        runner.finished.connect(lambda rid=run_id: self._on_drone_finished(rid))
 
         # Wire approval for write-capable drones.
-        if drone.write_policy != "read_only":
-            self._drone_runner.approval_requested.connect(
-                self._on_drone_approval_requested
+        if run_drone.write_policy != "read_only":
+            runner.approval_requested.connect(
+                lambda request, r=runner: self._on_drone_approval_requested(request, r)
             )
 
         # Wire cancel/close buttons.
-        run_card.cancelRequested.connect(self._on_cancel_drone)
-        run_card.closeRequested.connect(self._on_close_drone_card)
+        run_card.cancelRequested.connect(lambda rid=run_id: self._on_cancel_drone_run(rid))
+        run_card.closeRequested.connect(lambda rid=run_id: self._on_close_drone_card(rid))
 
-        # Show rail pip.
-        self._edge_rail.drone_run_pip.set_running()
-        self._edge_rail.drone_run_pip.focused.connect(self._on_focus_drone_run)
+        self._edge_rail.add_drone_run_pip(run_id, run_drone.name)
 
         # Track active run in the bay pane.
-        self._drone_bay.set_active_run(self._drone_runner.run_state, run_card)
+        self._drone_bay.set_active_run(runner.run_state, run_card)
 
         # Start the thread.
-        self._drone_runner_thread.started.connect(self._drone_runner.run)
-        self._drone_runner_thread.start()
+        thread.started.connect(runner.run)
+        thread.start()
+
+    def _can_start_drone(self, drone: DroneDefinition) -> bool:
+        active_runs = [
+            record for record in self._drone_runs.values()
+            if record["runner"].run_state.is_active
+        ]
+        has_write_active = any(
+            record["drone"].write_policy != "read_only" for record in active_runs
+        )
+        if drone.write_policy != "read_only":
+            if active_runs:
+                QMessageBox.information(
+                    self,
+                    "Drone Bay",
+                    "Write-capable Drones use the shared write lane. Wait for active Drone runs to finish first.",
+                )
+                return False
+            return True
+        if has_write_active:
+            QMessageBox.information(
+                self,
+                "Drone Bay",
+                "A write-capable Drone is active. Read-only parallel Drones can start after it finishes.",
+            )
+            return False
+        if len(active_runs) >= MAX_PARALLEL_READ_ONLY_DRONES:
+            QMessageBox.information(
+                self,
+                "Drone Bay",
+                f"Up to {MAX_PARALLEL_READ_ONLY_DRONES} read-only Drones can run at once.",
+            )
+            return False
+        return True
+
+    @staticmethod
+    def _drone_for_summoned_goal(drone: DroneDefinition, goal: str) -> DroneDefinition:
+        instructions = (
+            f"{drone.instructions.rstrip()}\n\n"
+            "This run was summoned by Aura for a specific goal:\n"
+            f"{goal.strip()}"
+        )
+        return DroneDefinition(
+            id=drone.id,
+            name=drone.name,
+            description=goal.strip() or drone.description,
+            instructions=instructions,
+            write_policy=drone.write_policy,
+            allowed_tools=drone.allowed_tools,
+            output_contract=drone.output_contract,
+            budget=drone.budget,
+            scope=drone.scope,
+            enabled=drone.enabled,
+            created_by=drone.created_by,
+            created_at=drone.created_at,
+            updated_at=drone.updated_at,
+        )
+
+    def _handle_summon_drone_result(self, tool_id: str, extras: dict) -> None:
+        if self._workspace_root is None:
+            return
+        drone_id = str(extras.get("drone_id") or "").strip()
+        goal = str(extras.get("goal") or "").strip()
+        reason = str(extras.get("reason") or "").strip()
+        if not drone_id:
+            return
+        drone = DroneStore.load_drone(self._workspace_root, drone_id)
+        if drone is None:
+            return
+
+        if self._settings.auto_summon_drones:
+            self._start_drone_run(drone, summon_goal=goal)
+            return
+
+        request_id = tool_id or drone_id
+        self._pending_drone_summons[request_id] = {
+            "drone_id": drone_id,
+            "goal": goal,
+            "reason": reason,
+        }
+
+        card = DroneSummonCard(
+            request_id=request_id,
+            drone=drone,
+            goal=goal or drone.description,
+            reason=reason,
+            parent=self._playground,
+        )
+        card.summonRequested.connect(self._on_confirm_summon_drone)
+        card.cancelRequested.connect(self._on_cancel_summon_drone)
+        self._active_run_card = card
+        self._playground.switch_to_workspace()
+        self._sync_drone_tab_checked()
+        self._playground.add_run_card(f"summon:{request_id}", card)
+
+    def _on_confirm_summon_drone(self, request_id: str) -> None:
+        if self._workspace_root is None:
+            return
+        request = self._pending_drone_summons.pop(request_id, None)
+        if request is None:
+            return
+        self._playground.remove_run_card(f"summon:{request_id}")
+        drone = DroneStore.load_drone(self._workspace_root, request["drone_id"])
+        if drone is None:
+            return
+        self._start_drone_run(drone, summon_goal=request.get("goal", ""))
+
+    def _on_cancel_summon_drone(self, request_id: str) -> None:
+        self._pending_drone_summons.pop(request_id, None)
+        self._playground.remove_run_card(f"summon:{request_id}")
+        self._active_run_card = None
 
     def _on_cancel_drone(self) -> None:
         """Request cancellation of the active drone run."""
         if self._drone_runner is not None:
             self._drone_runner.cancel()
 
-    def _on_drone_finished(self) -> None:
+    def _on_cancel_drone_run(self, run_id: str) -> None:
+        record = self._drone_runs.get(run_id)
+        if record is not None:
+            record["runner"].cancel()
+
+    def _on_drone_status_changed(self, run_id: str, drone_name: str, status: str) -> None:
+        self._edge_rail.set_drone_run_pip_state(run_id, drone_name, status)
+
+    def _on_drone_finished(self, run_id: str) -> None:
         """Clean up after drone run completes."""
-        self._edge_rail.drone_run_pip.set_idle()
+        record = self._drone_runs.get(run_id)
+        if record is None:
+            return
+        runner = record["runner"]
+        thread = record["thread"]
+        drone = record["drone"]
+        self._edge_rail.set_drone_run_pip_state(run_id, drone.name, runner.run_state.status)
+        QTimer.singleShot(4500, lambda rid=run_id: self._edge_rail.remove_drone_run_pip(rid))
         # Thread cleanup.
-        if self._drone_runner_thread is not None:
-            self._drone_runner_thread.quit()
-            self._drone_runner_thread.wait(1000)
-            self._drone_runner_thread.deleteLater()
-            self._drone_runner_thread = None
-        if self._drone_runner is not None:
-            self._drone_runner.deleteLater()
+        thread.quit()
+        thread.wait(1000)
+        thread.deleteLater()
+        runner.deleteLater()
+        if self._write_drone_run_id == run_id:
+            self._write_drone_run_id = None
+        self._drone_runs.pop(run_id, None)
+        if self._drone_runner is runner:
             self._drone_runner = None
+            self._drone_runner_thread = None
         # Refresh run history in drone bay so completed run appears immediately.
         self._drone_bay.refresh_run_history()
 
@@ -845,24 +1059,18 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if not isinstance(receipt, DroneReceipt):
             return
         self._drone_receipt = receipt
-        workspace_root = load_workspace_root()
-        if workspace_root is not None:
-            RunHistoryStore.save_run(workspace_root, receipt)
+        if self._workspace_root is not None:
+            RunHistoryStore.save_run(self._workspace_root, receipt)
 
     def _on_view_drone_receipt(self, run_id: str) -> None:
         """Open a read-only run card for a saved receipt."""
-        workspace_root = load_workspace_root()
-        if not workspace_root:
+        workspace_root = self._workspace_root
+        if workspace_root is None:
             return
 
         receipt = RunHistoryStore.load_run(workspace_root, run_id)
         if not receipt:
             return
-
-        # Clear any existing run card
-        if self._active_run_card is not None:
-            self._playground.clear_active_run_card()
-            self._active_run_card = None
 
         # Build a minimal DroneDefinition from the receipt
         minimal_drone = DroneDefinition(
@@ -879,31 +1087,39 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         run_card.populate_from_receipt(receipt)
 
         self._active_run_card = run_card
-        self._playground.set_active_run_card(run_card)
+        card_id = f"receipt:{run_id}"
+        self._playground.add_run_card(card_id, run_card)
 
         # Wire close
-        run_card.closeRequested.connect(self._on_close_drone_card)
+        run_card.closeRequested.connect(lambda cid=card_id: self._on_close_drone_card(cid))
 
         # Switch to workspace view
         self._playground.switch_to_workspace()
         self._sync_drone_tab_checked()
 
-    def _on_focus_drone_run(self) -> None:
+    def _on_focus_drone_run(self, run_id: str = "") -> None:
         """Focus the active run card."""
-        # Phase 2: keep it simple — just switch to workspace.
-        if self._active_run_card is not None:
+        if run_id:
+            self._playground.focus_run_card(run_id)
+            self._sync_drone_tab_checked()
+            return
+        if self._drone_runs:
             self._playground.switch_to_workspace()
             self._sync_drone_tab_checked()
 
-    def _on_close_drone_card(self) -> None:
+    def _on_close_drone_card(self, run_id: str = "") -> None:
         """Close/dismiss the completed run card."""
-        self._playground.clear_active_run_card()
+        if run_id:
+            self._playground.remove_run_card(run_id)
+            self._edge_rail.remove_drone_run_pip(run_id)
+        else:
+            self._playground.clear_active_run_card()
         self._active_run_card = None
         self._drone_bay.set_active_run(None, None)
 
-    def _on_drone_approval_requested(self, request: ApprovalRequest) -> None:
+    def _on_drone_approval_requested(self, request: ApprovalRequest, runner: DroneRunner | None = None) -> None:
         """Show approval dialog for a write operation requested by a Drone."""
-        runner = self._drone_runner
+        runner = runner or self._drone_runner
         if runner is None:
             return
 
@@ -985,6 +1201,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         from aura.config import save_settings
         save_settings(self._settings)
 
+    def _on_auto_summon_drones_toggled(self, checked: bool) -> None:
+        self._settings.auto_summon_drones = checked
+        self._toolbar.set_auto_summon_drones(checked)
+        self._toolbar.refresh_auto_toggle_tooltips()
+        from aura.config import save_settings
+        save_settings(self._settings)
+
     def _on_new_conversation(self) -> None:
         if self._bridge.is_running():
             QMessageBox.information(
@@ -1058,6 +1281,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._bridge.set_auto_approve(self._settings.auto_approve)
             self._toolbar.set_auto_dispatch(self._settings.auto_dispatch)
             self._toolbar.set_auto_approve(self._settings.auto_approve)
+            self._toolbar.set_auto_summon_drones(self._settings.auto_summon_drones)
             self._refresh_status_bar()
 
     def open_api_settings(self) -> None:
@@ -1110,6 +1334,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._bridge.set_auto_approve(self._settings.auto_approve)
             self._toolbar.set_auto_dispatch(self._settings.auto_dispatch)
             self._toolbar.set_auto_approve(self._settings.auto_approve)
+            self._toolbar.set_auto_summon_drones(self._settings.auto_summon_drones)
             self._refresh_status_bar()
 
     def _on_open_update(self) -> None:
@@ -1250,6 +1475,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_tool_result(self, tool_id: str, name: str, ok: bool, result: str, extras: dict) -> None:
         self._chat.set_tool_result(tool_id, ok, result)
+
+        if ok and name == "summon_drone" and extras.get("summon_drone"):
+            self._handle_summon_drone_result(tool_id, extras)
 
         if ok and name in ("read_file", "read_files"):
             try:

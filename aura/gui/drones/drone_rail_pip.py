@@ -31,6 +31,7 @@ class DroneRailPip(QToolButton):
         self.hide()
 
     def set_running(self) -> None:
+        self.setToolTip(self.toolTip() if self.toolTip() else "Drone running - click to view")
         self.setStyleSheet(
             "QToolButton#edgeDroneRunPip { background: #4ec9b0; border: 1px solid #4ec9b0; "
             "border-radius: 5px; }"
@@ -43,6 +44,14 @@ class DroneRailPip(QToolButton):
             "QToolButton#edgeDroneRunPip { background: #f44747; border: 1px solid #f44747; "
             "border-radius: 5px; }"
             "QToolButton#edgeDroneRunPip:hover { background: #f66767; }"
+        )
+        self.show()
+
+    def set_completed(self) -> None:
+        self.setStyleSheet(
+            "QToolButton#edgeDroneRunPip { background: #7aa2f7; border: 1px solid #7aa2f7; "
+            "border-radius: 5px; }"
+            "QToolButton#edgeDroneRunPip:hover { background: #94b6ff; }"
         )
         self.show()
 

@@ -79,6 +79,7 @@ class AppSettings:
     auto_commit_enabled: bool = True
     auto_dispatch: bool = False
     auto_approve: bool = False
+    auto_summon_drones: bool = False
     sandbox_mode: str = DEFAULT_SANDBOX_MODE
     max_tool_rounds: int = 50
     tavily_api_key: str = ""
@@ -192,6 +193,8 @@ class AppSettings:
             s.auto_dispatch = data["auto_dispatch"]
         if isinstance(data.get("auto_approve"), bool):
             s.auto_approve = data["auto_approve"]
+        if isinstance(data.get("auto_summon_drones"), bool):
+            s.auto_summon_drones = data["auto_summon_drones"]
         if isinstance(data.get("sandbox_mode"), str) and data["sandbox_mode"] in ("host", "docker", "wasm"):
             s.sandbox_mode = data["sandbox_mode"]
         # Onboarding fields (backward-compatible)

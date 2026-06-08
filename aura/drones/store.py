@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
@@ -10,6 +11,13 @@ from aura.drones.definition import DroneBudget, DroneDefinition, slugify
 from aura.drones.receipt import DroneReceipt
 
 logger = logging.getLogger(__name__)
+
+_DRONE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_WRITE_POLICIES = {"read_only", "ask_before_writes", "normal_diff_approval"}
+
+
+def _is_safe_drone_id(drone_id: str) -> bool:
+    return bool(_DRONE_ID_RE.fullmatch(str(drone_id or "")))
 
 
 def _drone_from_dict(data: dict) -> DroneDefinition:
@@ -22,7 +30,9 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
         data = {**data, "allowed_tools": tuple(data["allowed_tools"])}
     if "budget" in data and isinstance(data["budget"], dict):
         data = {**data, "budget": DroneBudget(**data["budget"])}
-    return DroneDefinition(**data)
+    drone = DroneDefinition(**data)
+    DroneStore.validate_drone(drone)
+    return drone
 
 
 class DroneStore:
@@ -61,6 +71,8 @@ class DroneStore:
 
     @staticmethod
     def load_drone(workspace_root: Path, drone_id: str) -> DroneDefinition | None:
+        if not _is_safe_drone_id(drone_id):
+            return None
         d = DroneStore.drones_dir(workspace_root)
         p = d / f"{drone_id}.json"
         if not p.exists():
@@ -74,6 +86,7 @@ class DroneStore:
 
     @staticmethod
     def save_drone(workspace_root: Path, drone: DroneDefinition) -> None:
+        DroneStore.validate_drone(drone)
         d = DroneStore._ensure_drones_dir(workspace_root)
         p = d / f"{drone.id}.json"
         data = asdict(drone)
@@ -85,6 +98,8 @@ class DroneStore:
     @staticmethod
     def delete_drone(workspace_root: Path, drone_id: str) -> bool:
         """Remove a drone definition file. Returns True if deleted."""
+        if not _is_safe_drone_id(drone_id):
+            return False
         d = DroneStore.drones_dir(workspace_root)
         p = d / f"{drone_id}.json"
         if not p.exists():
@@ -104,6 +119,24 @@ class DroneStore:
             counter += 1
             candidate = f"{base}-{counter}"
         return candidate
+
+    @staticmethod
+    def validate_drone(drone: DroneDefinition) -> None:
+        """Validate a DroneDefinition before saving or returning it."""
+        if not _is_safe_drone_id(drone.id):
+            raise ValueError("Drone id must be lowercase letters, numbers, and hyphens")
+        if not drone.name.strip():
+            raise ValueError("Drone name is required")
+        if not drone.instructions.strip():
+            raise ValueError("Drone instructions are required")
+        if not drone.output_contract.strip():
+            raise ValueError("Drone output contract is required")
+        if drone.write_policy not in _WRITE_POLICIES:
+            raise ValueError(f"Invalid Drone write policy: {drone.write_policy}")
+        if drone.budget.max_tool_rounds < 1:
+            raise ValueError("Drone max_tool_rounds must be at least 1")
+        if drone.budget.timeout_seconds < 30:
+            raise ValueError("Drone timeout_seconds must be at least 30")
 
 
 class RunHistoryStore:

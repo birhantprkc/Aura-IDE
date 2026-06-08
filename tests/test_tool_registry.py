@@ -1461,7 +1461,7 @@ class TestExecuteUnknown:
 class TestHandlerRegistration:
     """Verify that all expected tools are registered and callable."""
 
-    # The 26 tools registered in TOOL_HANDLERS
+    # The tools registered in TOOL_HANDLERS
     EXPECTED_TOOLS = {
         "read_file",
         "read_files",
@@ -1493,6 +1493,7 @@ class TestHandlerRegistration:
         "save_to_project_memory",
         "run_diagnostic_command",
         "get_workspace_snapshot",
+        "summon_drone",
     }
 
     def test_all_expected_tools_present(self):
@@ -1548,6 +1549,7 @@ class TestModeToolSurfaces:
             "run_research",
             "run_diagnostic_command",
             "get_workspace_snapshot",
+            "summon_drone",
         }
         assert "write_file" not in tool_names
         assert "edit_file" not in tool_names

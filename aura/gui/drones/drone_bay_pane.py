@@ -34,6 +34,7 @@ class DroneBayPane(QWidget):
     duplicateDroneRequested = Signal(str)
     deleteDroneRequested = Signal(str)
     launchDroneRequested = Signal(str)  # drone_id
+    makeToolRequested = Signal(str)
     activeRunFocusRequested = Signal()
     viewRunReceiptRequested = Signal(str)  # run_id
 
@@ -43,6 +44,7 @@ class DroneBayPane(QWidget):
         self._active_run: DroneRun | None = None
         self._active_run_card: DroneRunCard | None = None
         self._history_section: QWidget | None = None
+        self._history_separator: QFrame | None = None
         self._run_history_widgets: list[QWidget] = []
 
         self.setObjectName("droneBayPane")
@@ -271,6 +273,17 @@ class DroneBayPane(QWidget):
         dup_btn.clicked.connect(lambda checked=False, did=drone.id: self.duplicateDroneRequested.emit(did))
         action_row.addWidget(dup_btn)
 
+        tool_btn = QPushButton("Make Tool")
+        tool_btn.setToolTip("Create a .aura/tools scaffold for this Drone")
+        tool_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {ACCENT}; "
+            f"border: 1px solid {BORDER}; border-radius: 4px; "
+            f"padding: 3px 12px; font-size: 12px; }}"
+            f"QPushButton:hover {{ background: {BG_RAISED}; border-color: {ACCENT}; }}"
+        )
+        tool_btn.clicked.connect(lambda checked=False, did=drone.id: self.makeToolRequested.emit(did))
+        action_row.addWidget(tool_btn)
+
         del_btn = QPushButton("Delete")
         del_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {DANGER}; "
@@ -323,6 +336,7 @@ class DroneBayPane(QWidget):
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setStyleSheet("background: rgba(255,255,255,0.1); max-height: 1px;")
+        self._history_separator = sep
         self._card_layout.addWidget(sep)
 
         self._history_section = QWidget()
@@ -442,4 +456,8 @@ class DroneBayPane(QWidget):
             self._card_layout.removeWidget(self._history_section)
             self._history_section.deleteLater()
             self._history_section = None
+        if self._history_separator is not None:
+            self._card_layout.removeWidget(self._history_separator)
+            self._history_separator.deleteLater()
+            self._history_separator = None
         self._run_history_widgets.clear()

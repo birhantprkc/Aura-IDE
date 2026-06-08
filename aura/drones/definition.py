@@ -49,6 +49,9 @@ READ_ONLY_TOOLS = (
     "git_log",
     "git_show",
     "git_log_file",
+    "git_branch_list",
+    "git_stash_list",
+    "git_stash_show",
     "run_terminal_command",
 )
 
