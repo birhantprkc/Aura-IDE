@@ -22,6 +22,7 @@ class EdgeTabRail(QFrame):
     a terminal tab with expand/collapse/hide states and a checkpoint tab."""
 
     terminalTabToggled = Signal(bool)  # True=expanded, False=collapsed
+    droneBayRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -30,6 +31,7 @@ class EdgeTabRail(QFrame):
         self._terminal_tab: QToolButton | None = None
         self._checkpoint_tab: QToolButton | None = None
         self._terminal_container: QWidget | None = None
+        self._drone_tab: QToolButton | None = None
         self._corner_widget: QWidget | None = None
         self._setup_ui()
 
@@ -69,6 +71,17 @@ class EdgeTabRail(QFrame):
         self._checkpoint_tab.setStyleSheet(self._checkpoint_tab_style())
         rail_layout.addWidget(self._checkpoint_tab)
 
+        self._drone_tab = QToolButton(self)
+        self._drone_tab.setObjectName("edgeDroneTab")
+        self._drone_tab.setText("◉")
+        self._drone_tab.setToolTip("Drone Bay")
+        self._drone_tab.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._drone_tab.setCheckable(True)
+        self._drone_tab.setFixedSize(40, 44)
+        self._drone_tab.clicked.connect(lambda: self.droneBayRequested.emit())
+        self._drone_tab.setStyleSheet(self._drone_tab_style())
+        rail_layout.addWidget(self._drone_tab)
+
         self.adjustSize()
         self.set_state("dim")
         self.raise_()
@@ -93,6 +106,10 @@ class EdgeTabRail(QFrame):
     @property
     def checkpoint_tab(self) -> QToolButton | None:
         return self._checkpoint_tab
+
+    @property
+    def drone_tab(self) -> QToolButton | None:
+        return self._drone_tab
 
     @property
     def terminal_container(self) -> QWidget | None:
@@ -141,6 +158,28 @@ class EdgeTabRail(QFrame):
             f"  color: {FG};"
             f"  border-color: {ACCENT};"
             "  border-right: none;"
+            "}"
+        )
+
+    def _drone_tab_style(self) -> str:
+        cyan = "#7dcfff"
+        return (
+            "QToolButton#edgeDroneTab {"
+            "  background: #0b202b;"
+            f"  color: {cyan};"
+            f"  border: 1px solid {cyan};"
+            "  border-right: none;"
+            "  border-top-left-radius: 8px;"
+            "  border-bottom-left-radius: 8px;"
+            "  border-top-right-radius: 0px;"
+            "  border-bottom-right-radius: 0px;"
+            "  font-size: 18px;"
+            "  font-weight: 800;"
+            "  padding: 0px;"
+            "}"
+            "QToolButton#edgeDroneTab:hover {"
+            "  background: #123344;"
+            f"  color: {FG};"
             "}"
         )
 

@@ -28,10 +28,13 @@ from aura.config import (
     save_settings,
     save_workspace_root,
 )
+from aura.drones.store import DroneStore
 from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
+from aura.gui.drones.drone_bay_pane import DroneBayPane
+from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
 from aura.gui.edge_rails import EdgeTabRail
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
@@ -161,6 +164,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         self._playground.set_aura_wrapper(self._playground_aura)
 
+        # Drone Bay
+        self._drone_bay = DroneBayPane(workspace_root=self._workspace_root, parent=self)
+        self._playground.set_drone_bay(self._drone_bay)
+        self._drone_bay.newDroneRequested.connect(self._on_new_drone)
+        self._drone_bay.editDroneRequested.connect(self._on_edit_drone)
+        self._drone_bay.duplicateDroneRequested.connect(self._on_duplicate_drone)
+        self._drone_bay.deleteDroneRequested.connect(self._on_delete_drone)
+
         # Worker event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
         self._worker_handler = WorkerEventHandler(
@@ -234,6 +245,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         checkpoint_tab = self._edge_rail.checkpoint_tab
         if checkpoint_tab is not None:
             checkpoint_tab.clicked.connect(lambda: self._on_open_checkpoints())
+        self._edge_rail.droneBayRequested.connect(self._on_drone_bay_requested)
 
         # Frameless window — no native title bar
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
@@ -275,7 +287,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chat.mermaid_detected.connect(self._playground.add_mermaid_artifact)
 
         self._update_workspace_label()
-        
+
         # Wire project thread selection from left pane
         self._left_pane.thread_selected.connect(self._on_thread_selected)
         self._persistence.project_thread_updated.connect(self._on_project_thread_updated)
@@ -544,6 +556,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._workspace_root = root_path
         self._checkpoint_dialog = None
+        if hasattr(self, '_drone_bay'):
+            self._drone_bay.set_workspace_root(root_path)
+            self._drone_bay.refresh()
         self._bridge.set_workspace_root(root_path)
         self._input.set_workspace_root(root_path)
         self._send_handler.set_workspace_root(root_path)
@@ -582,6 +597,72 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_focused_action_requested(self, prompt: str) -> None:
         payload = SendPayload(text=prompt, attachments=[])
         self._send_handler.handle_send(payload, self.current_model(), self.current_thinking())
+
+    # ----- Drone Bay handlers --------------------------------------------
+
+    def _on_drone_bay_requested(self) -> None:
+        self._playground.toggle_drone_bay()
+        self._position_edge_tabs()
+
+    def _on_new_drone(self) -> None:
+        dlg = DroneEditorDialog(
+            workspace_root=self._workspace_root,
+            parent=self,
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._drone_bay.refresh()
+
+    def _on_edit_drone(self, drone_id: str) -> None:
+        drone = DroneStore.load_drone(self._workspace_root, drone_id)
+        if drone is None:
+            return
+        dlg = DroneEditorDialog(
+            workspace_root=self._workspace_root,
+            parent=self,
+            drone=drone,
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._drone_bay.refresh()
+
+    def _on_duplicate_drone(self, drone_id: str) -> None:
+        drone = DroneStore.load_drone(self._workspace_root, drone_id)
+        if drone is None:
+            return
+        import datetime
+        from copy import deepcopy
+        dup = deepcopy(drone)
+        new_id = DroneStore.next_id(self._workspace_root, drone.name)
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        from aura.drones.definition import DroneDefinition
+        dup = DroneDefinition(
+            id=new_id,
+            name=drone.name,
+            description=drone.description,
+            instructions=drone.instructions,
+            write_policy=drone.write_policy,
+            allowed_tools=drone.allowed_tools,
+            output_contract=drone.output_contract,
+            budget=drone.budget,
+            scope=drone.scope,
+            enabled=True,
+            created_by=drone.created_by,
+            created_at=now,
+            updated_at=now,
+        )
+        DroneStore.save_drone(self._workspace_root, dup)
+        self._drone_bay.refresh()
+
+    def _on_delete_drone(self, drone_id: str) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Delete Drone",
+            "Are you sure you want to delete this Drone?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            DroneStore.delete_drone(self._workspace_root, drone_id)
+            self._drone_bay.refresh()
 
     def _on_auto_dispatch_toggled(self, checked: bool) -> None:
         self._settings.auto_dispatch = checked

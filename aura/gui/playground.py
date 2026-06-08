@@ -4,10 +4,19 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QSplitter, QToolButton, QVBoxLayout, QWidget, QSizePolicy
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QSplitter,
+    QStackedWidget,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
-from aura.gui.theme import BORDER
 from aura.gui.controllers import ToolStreamController
+from aura.gui.theme import BORDER
 from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.workspace_tree import WorkspaceTree
 
@@ -110,7 +119,12 @@ class AuraPlayground(QWidget):
         self._outer_splitter.setStretchFactor(1, 1)
         self._outer_splitter.setSizes([240, 800])
 
-        layout.addWidget(self._outer_splitter, 1)
+        # Stacked widget: index 0 = workspace view, index 1 = Drone Bay
+        self._stack = QStackedWidget(self)
+        self._stack.addWidget(self._outer_splitter)  # index 0
+        self._drone_bay: QWidget | None = None
+
+        layout.addWidget(self._stack, 1)
 
         # Floating terminal window. It is intentionally not added to this
         # layout, so terminal output never consumes worker/workspace space.
@@ -128,6 +142,26 @@ class AuraPlayground(QWidget):
 
         # Aura wrapper reference for atmospheric synchronization
         self._aura_wrapper: AuraWidget | None = None
+
+    def set_drone_bay(self, drone_bay: QWidget) -> None:
+        self._drone_bay = drone_bay
+        self._stack.addWidget(drone_bay)  # index 1
+
+    def toggle_drone_bay(self) -> None:
+        if self._drone_bay is None:
+            return
+        if self._stack.currentIndex() == 0:
+            self._stack.setCurrentIndex(1)
+        else:
+            self._stack.setCurrentIndex(0)
+
+    def show_drone_bay(self) -> None:
+        if self._drone_bay is not None:
+            self._stack.setCurrentIndex(1)
+
+    def refresh_drone_bay(self) -> None:
+        if self._drone_bay is not None and hasattr(self._drone_bay, 'refresh'):
+            self._drone_bay.refresh()
 
     def set_aura_wrapper(self, wrapper: AuraWidget) -> None:
         self._aura_wrapper = wrapper

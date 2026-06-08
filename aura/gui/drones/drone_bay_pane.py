@@ -1,0 +1,264 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+from aura.drones.definition import DroneDefinition
+from aura.drones.store import DroneStore
+from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
+
+
+class DroneBayPane(QWidget):
+    """Panel that displays saved Drones with action buttons."""
+
+    newDroneRequested = Signal()
+    editDroneRequested = Signal(str)
+    duplicateDroneRequested = Signal(str)
+    deleteDroneRequested = Signal(str)
+
+    def __init__(self, workspace_root: Path | None = None, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._workspace_root = workspace_root
+
+        self.setObjectName("droneBayPane")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+
+        # -- Header --
+        header = QWidget(self)
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(2)
+
+        title = QLabel("Drones")
+        title.setObjectName("droneBayTitle")
+        title.setStyleSheet(
+            f"font-size: 18px; font-weight: 700; color: {FG}; background: transparent;"
+        )
+        header_layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Small focused workers Aura can save and launch for repeatable tasks."
+        )
+        subtitle.setObjectName("droneBaySubtitle")
+        subtitle.setStyleSheet(
+            f"font-size: 12px; color: {FG_DIM}; background: transparent;"
+        )
+        subtitle.setWordWrap(True)
+        header_layout.addWidget(subtitle)
+
+        new_btn = QPushButton("+ New Drone")
+        new_btn.setObjectName("primary")
+        new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        new_btn.setStyleSheet(
+            f"QPushButton#primary {{ background: {ACCENT}; color: {BG}; "
+            f"border: 1px solid {ACCENT}; border-radius: 6px; "
+            f"padding: 6px 16px; font-weight: 600; font-size: 13px; }}"
+            f"QPushButton#primary:hover {{ background: #94b6ff; }}"
+        )
+        new_btn.clicked.connect(self.newDroneRequested.emit)
+        header_layout.addWidget(new_btn)
+
+        layout.addWidget(header)
+
+        # -- Scrollable card area --
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setObjectName("droneBayScroll")
+        scroll.setStyleSheet(
+            "QScrollArea#droneBayScroll { background: transparent; border: none; }"
+        )
+
+        self._card_container = QWidget()
+        self._card_container.setObjectName("droneCardContainer")
+        self._card_container.setStyleSheet("background: transparent;")
+        self._card_layout = QVBoxLayout(self._card_container)
+        self._card_layout.setContentsMargins(0, 0, 0, 0)
+        self._card_layout.setSpacing(8)
+        self._card_layout.addStretch(1)
+
+        scroll.setWidget(self._card_container)
+        layout.addWidget(scroll, 1)
+
+        self.refresh()
+
+    # -- Public API --
+
+    def refresh(self) -> None:
+        """Reload drones from DroneStore and rebuild cards."""
+        # Clear existing cards (remove all widgets except the stretch)
+        while self._card_layout.count() > 0:
+            item = self._card_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if self._workspace_root is None:
+            self._show_empty_state()
+            return
+
+        drones = DroneStore.list_drones(self._workspace_root)
+        if not drones:
+            self._show_empty_state()
+            return
+
+        for drone in drones:
+            card = self._build_drone_card(drone)
+            self._card_layout.addWidget(card)
+        self._card_layout.addStretch(1)
+
+    def set_workspace_root(self, root: Path | None) -> None:
+        self._workspace_root = root
+        self.refresh()
+
+    # -- Internal helpers --
+
+    def _show_empty_state(self) -> None:
+        empty = QLabel(
+            "No drones yet.\n\n"
+            "Create one from scratch, or save a useful Aura workflow later."
+        )
+        empty.setObjectName("droneBayEmpty")
+        empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty.setWordWrap(True)
+        empty.setStyleSheet(
+            f"color: {FG_MUTED}; font-size: 13px; padding: 48px 16px; "
+            f"background: transparent;"
+        )
+        self._card_layout.addWidget(empty)
+        self._card_layout.addStretch(1)
+
+    def _build_drone_card(self, drone: DroneDefinition) -> QFrame:
+        card = QFrame()
+        card.setObjectName("droneCard")
+        card.setStyleSheet(
+            f"QFrame#droneCard {{ background: rgba(28, 28, 34, 0.50); "
+            f"border: 1px solid {BORDER}; border-radius: 8px; "
+            f"padding: 10px; }}"
+            f"QFrame#droneCard:hover {{ background: rgba(35, 35, 42, 0.65); "
+            f"border-color: {ACCENT}; }}"
+        )
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(10, 8, 10, 8)
+        card_layout.setSpacing(4)
+
+        # Name
+        name_label = QLabel(drone.name)
+        name_label.setStyleSheet(
+            f"font-size: 14px; font-weight: 700; color: {FG}; background: transparent;"
+        )
+        card_layout.addWidget(name_label)
+
+        # Description
+        desc_label = QLabel(drone.description)
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet(
+            f"font-size: 12px; color: {FG_DIM}; background: transparent;"
+        )
+        card_layout.addWidget(desc_label)
+
+        # Badge row
+        badge_row = QHBoxLayout()
+        badge_row.setContentsMargins(0, 2, 0, 2)
+        badge_row.setSpacing(6)
+
+        write_badge = self._make_policy_badge(drone.write_policy)
+        badge_row.addWidget(write_badge)
+
+        budget_label = QLabel(
+            f"{drone.budget.max_tool_rounds} rounds · "
+            f"{drone.budget.timeout_seconds // 60} min"
+        )
+        budget_label.setStyleSheet(
+            f"font-size: 11px; color: {FG_MUTED}; background: transparent;"
+        )
+        badge_row.addWidget(budget_label)
+        badge_row.addStretch(1)
+
+        card_layout.addLayout(badge_row)
+
+        # Action buttons
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 4, 0, 0)
+        action_row.setSpacing(6)
+
+        launch_btn = QPushButton("Launch")
+        launch_btn.setEnabled(False)
+        launch_btn.setToolTip("Drone running lands in the next phase.")
+        launch_btn.setStyleSheet(
+            f"QPushButton {{ background: {ACCENT}; color: {BG}; "
+            f"border: 1px solid {ACCENT}; border-radius: 4px; "
+            f"padding: 3px 12px; font-size: 12px; font-weight: 600; }}"
+            f"QPushButton:disabled {{ background: {BG_RAISED}; color: {FG_MUTED}; "
+            f"border-color: {BORDER}; }}"
+        )
+        action_row.addWidget(launch_btn)
+
+        edit_btn = QPushButton("Edit")
+        edit_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {FG}; "
+            f"border: 1px solid {BORDER}; border-radius: 4px; "
+            f"padding: 3px 12px; font-size: 12px; }}"
+            f"QPushButton:hover {{ background: {BG_RAISED}; border-color: {ACCENT}; }}"
+        )
+        edit_btn.clicked.connect(lambda checked=False, did=drone.id: self.editDroneRequested.emit(did))
+        action_row.addWidget(edit_btn)
+
+        dup_btn = QPushButton("Duplicate")
+        dup_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {FG}; "
+            f"border: 1px solid {BORDER}; border-radius: 4px; "
+            f"padding: 3px 12px; font-size: 12px; }}"
+            f"QPushButton:hover {{ background: {BG_RAISED}; border-color: {ACCENT}; }}"
+        )
+        dup_btn.clicked.connect(lambda checked=False, did=drone.id: self.duplicateDroneRequested.emit(did))
+        action_row.addWidget(dup_btn)
+
+        del_btn = QPushButton("Delete")
+        del_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {DANGER}; "
+            f"border: 1px solid {DANGER}; border-radius: 4px; "
+            f"padding: 3px 12px; font-size: 12px; }}"
+            f"QPushButton:hover {{ background: rgba(247, 118, 142, 0.10); }}"
+        )
+        del_btn.clicked.connect(lambda checked=False, did=drone.id: self.deleteDroneRequested.emit(did))
+        action_row.addWidget(del_btn)
+
+        card_layout.addLayout(action_row)
+        return card
+
+    def _make_policy_badge(self, write_policy: str) -> QLabel:
+        if write_policy == "read_only":
+            text = "Read-only"
+            color = WARN
+        elif write_policy == "ask_before_writes":
+            text = "Ask before writes"
+            color = ACCENT
+        elif write_policy == "normal_diff_approval":
+            text = "Normal diff approval"
+            color = SUCCESS
+        else:
+            text = write_policy
+            color = FG_DIM
+
+        badge = QLabel(text)
+        badge.setStyleSheet(
+            f"font-size: 11px; font-weight: 600; color: {color}; "
+            f"background: transparent; padding: 1px 0;"
+        )
+        return badge
