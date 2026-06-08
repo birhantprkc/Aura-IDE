@@ -117,7 +117,7 @@ function LoginScreen() {
       await new Promise(r => setTimeout(r, 200));
 
       setPhase('pairing');
-      const token = await new Promise<string>((resolve, reject) => {
+      await new Promise<void>((resolve, reject) => {
         const unsubConfirmed = socket.on('pair.confirmed', (data: any) => {
           const t = data.payload?.token;
           if (t) {
@@ -130,13 +130,18 @@ function LoginScreen() {
             if (data.payload?.project_name) safeCtx.project_name = data.payload.project_name;
             if (data.payload?.conversation_id) safeCtx.conversation_id = data.payload.conversation_id;
             if (data.payload?.phone_id) safeCtx.phone_id = data.payload.phone_id;
+            const ticketDesktopId = data.payload?.scoped_to || data.payload?.desktop_id || '';
+            if (ticketDesktopId) {
+              safeCtx.desktop_id = ticketDesktopId;
+              try { sessionStorage.setItem('companion_desktop_id', ticketDesktopId); } catch {}
+            }
             if (Object.keys(safeCtx).length > 0) {
               CompanionSocket.setStoredSafeContext(safeCtx);
             }
 
             unsubConfirmed();
             unsubError();
-            resolve(t);
+            resolve();
           } else {
             reject(new Error('No token in pair.confirmed'));
           }
@@ -193,10 +198,9 @@ function LoginScreen() {
     if (!qrTicket) return;
     if (autoStartedRef.current) return;
     if (alreadyPaired) return;
-    const host = window.location.hostname;
-    const derivedRelay = `ws://${host}:8765`;
-    setRelayUrl(derivedRelay);
-    autoPairWithTicket(qrTicket, derivedRelay);
+    const configuredRelay = import.meta.env.VITE_AURA_RELAY_WS_URL || 'ws://localhost:8765';
+    setRelayUrl(configuredRelay);
+    autoPairWithTicket(qrTicket, configuredRelay);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qrTicket]);
 

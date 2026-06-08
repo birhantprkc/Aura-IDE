@@ -25,7 +25,7 @@ function ChatScreen() {
   const safeCtx = CompanionSocket.getStoredSafeContext();
   const projectId = safeCtx.project_id || '';
   const conversationId = safeCtx.conversation_id || '';
-  const desktopId = sessionStorage.getItem('companion_desktop_id') || '';
+  const desktopId = sessionStorage.getItem('companion_desktop_id') || safeCtx.desktop_id || '';
   const desktopName = safeCtx.desktop_name || sessionStorage.getItem('companion_desktop_name') || 'Aura Desktop';
 
   useEffect(() => {

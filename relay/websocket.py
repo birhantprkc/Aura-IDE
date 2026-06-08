@@ -46,9 +46,9 @@ async def handle_websocket(ws: WebSocket, sessions: SessionManager) -> None:
 
     sessions.register(device_id, ws, device_type, display_name)
 
-    # Desktops are trusted on the LAN: they own the pairing-code authority,
-    # so we mark them authenticated as soon as they connect. Phones must
-    # complete the pair handshake before non-skip messages route.
+    # LOCAL DEV ONLY: any client claiming device_type="desktop" is
+    # auto-authenticated without any credential check. This relay does not
+    # verify desktop identity and is not safe to expose on a public host.
     if device_type == "desktop":
         sessions.set_authenticated(device_id, {"role": "desktop", "desktop_id": device_id})
         logger.info("[Relay] desktop %s auto-authenticated", device_id)

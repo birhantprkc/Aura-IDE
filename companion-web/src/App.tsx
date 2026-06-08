@@ -80,7 +80,8 @@ function AppLayout() {
     }
     if (!socket.connected && !socket.connecting) {
       // Try to reconnect; if it fails the Chat screen surfaces it
-      const desktopId = sessionStorage.getItem('companion_desktop_id');
+      const safeCtx = CompanionSocket.getStoredSafeContext();
+      const desktopId = sessionStorage.getItem('companion_desktop_id') || safeCtx.desktop_id;
       if (!desktopId) {
         navigate('/login', { replace: true });
       }

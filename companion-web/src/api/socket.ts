@@ -200,6 +200,11 @@ class CompanionSocket {
           if (data.payload?.project_name) safeCtx.project_name = data.payload.project_name;
           if (data.payload?.conversation_id) safeCtx.conversation_id = data.payload.conversation_id;
           if (data.payload?.phone_id) safeCtx.phone_id = data.payload.phone_id;
+          const desktopId = data.payload?.scoped_to || data.payload?.desktop_id || '';
+          if (desktopId) {
+            safeCtx.desktop_id = desktopId;
+            try { sessionStorage.setItem('companion_desktop_id', desktopId); } catch {}
+          }
           if (Object.keys(safeCtx).length > 0) {
             CompanionSocket.setStoredSafeContext(safeCtx);
           }
