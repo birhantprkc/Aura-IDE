@@ -67,7 +67,7 @@ class CompanionWsClient(QObject):
                     # Send handshake
                     await ws.send(json.dumps({
                         "type": "hello",
-                        "device_id": self._token.split(":")[0] if self._token else "unknown",
+                        "device_id": self._token or "unknown",
                         "device_type": "desktop",
                         "token": self._token or "",
                     }))

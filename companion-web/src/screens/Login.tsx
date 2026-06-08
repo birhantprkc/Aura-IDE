@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import CompanionSocket, { socket } from '../api/socket';
 
@@ -9,7 +9,24 @@ function LoginScreen() {
   const [deviceName, setDeviceName] = useState('Aura Companion');
   const [status, setStatus] = useState<'idle'|'connecting'|'connected'|'pairing'|'paired'|'error'>('idle');
   const [error, setError] = useState('');
-  const [alreadyPaired, setAlreadyPaired] = useState(CompanionSocket.isPaired());
+  const forceRender = useState(0)[1];
+  const alreadyPaired = CompanionSocket.isPaired();
+  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Re-check pairing state when tab regains focus (handles cross-tab unpairing).
+  useEffect(() => {
+    const onFocus = () => forceRender(n => n + 1);
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
 
   const handleConnect = () => {
     setStatus('connecting');
@@ -17,9 +34,13 @@ function LoginScreen() {
     socket.connect(relayUrl);
     const unsub = socket.on('welcome', () => {
       unsub();
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = undefined;
+      }
       setStatus('connected');
     });
-    setTimeout(() => {
+    timeoutRef.current = setTimeout(() => {
       setStatus((s) => (s === 'connecting' ? 'idle' : s));
       setError((s) => (s === '' ? 'Connection timed out' : s));
     }, 10000);
@@ -54,7 +75,7 @@ function LoginScreen() {
   const handleClearPairing = () => {
     socket.logout();
     CompanionSocket.setStoredToken('');
-    setAlreadyPaired(false);
+    forceRender(n => n + 1);
   };
 
   // Already paired screen
