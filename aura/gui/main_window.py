@@ -28,6 +28,7 @@ from aura.config import (
     save_settings,
     save_workspace_root,
 )
+from aura.drones.runner import DroneRunner
 from aura.drones.store import DroneStore
 from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
@@ -35,6 +36,7 @@ from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.drones.drone_bay_pane import DroneBayPane
 from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
+from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.edge_rails import EdgeTabRail
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
@@ -171,6 +173,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_bay.editDroneRequested.connect(self._on_edit_drone)
         self._drone_bay.duplicateDroneRequested.connect(self._on_duplicate_drone)
         self._drone_bay.deleteDroneRequested.connect(self._on_delete_drone)
+        self._drone_bay.launchDroneRequested.connect(self._on_launch_drone)
 
         # Worker event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
@@ -270,6 +273,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.stop_requested.connect(self._send_handler.handle_stop)
         self._input.retry_requested.connect(self._on_retry)
         self._input.handoff_requested.connect(self._on_handoff_requested)
+        # Drone runner state (Phase 2: single runner at a time, no persistence)
+        self._drone_runner: DroneRunner | None = None
+        self._drone_runner_thread: QThread | None = None
+        self._active_run_card: DroneRunCard | None = None
+
         self._pending_handoff: bool = False
         self._tree = self._playground.file_tree()
         self._tree.file_activated.connect(self._playground.open_file)
@@ -680,6 +688,100 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if reply == QMessageBox.Yes:
             DroneStore.delete_drone(self._workspace_root, drone_id)
             self._drone_bay.refresh()
+
+    # ----- Drone Run lifecycle (Phase 2) --------------------------------
+
+    def _on_launch_drone(self, drone_id: str) -> None:
+        """Launch a read-only Drone."""
+        if self._workspace_root is None:
+            return
+
+        drone = DroneStore.load_drone(self._workspace_root, drone_id)
+        if drone is None:
+            return
+
+        if drone.write_policy != "read_only":
+            # Shouldn't happen (Launch disabled in UI), but guard anyway.
+            return
+
+        # Switch to workspace view to show the run.
+        self._playground.switch_to_workspace()
+        self._sync_drone_tab_checked()
+
+        run_card = DroneRunCard(drone, parent=self._playground)
+        self._active_run_card = run_card
+        # TODO: In Phase 2, insert the run card into the right pane.
+        # For now, hold the reference; future phases will add it to the layout.
+
+        self._drone_runner_thread = QThread(self)
+        self._drone_runner = DroneRunner(
+            workspace_root=self._workspace_root,
+            drone=drone,
+            parent=None,
+        )
+        self._drone_runner.moveToThread(self._drone_runner_thread)
+
+        # Connect signals.
+        self._drone_runner.statusChanged.connect(run_card.on_status_changed)
+        self._drone_runner.contentDelta.connect(run_card.on_content_delta)
+        self._drone_runner.toolCallStart.connect(run_card.on_tool_call_start)
+        self._drone_runner.toolCallArgsDelta.connect(run_card.on_tool_call_args)
+        self._drone_runner.toolResult.connect(run_card.on_tool_result)
+        self._drone_runner.apiError.connect(run_card.on_api_error)
+        self._drone_runner.receiptReady.connect(run_card.on_receipt_ready)
+        self._drone_runner.receiptReady.connect(self._on_drone_receipt)
+        self._drone_runner.finished.connect(self._on_drone_finished)
+
+        # Wire cancel/close buttons.
+        run_card.cancelRequested.connect(self._on_cancel_drone)
+        run_card.closeRequested.connect(self._on_close_drone_card)
+
+        # Show rail pip.
+        self._edge_rail.drone_run_pip.set_running()
+        self._edge_rail.drone_run_pip.focused.connect(self._on_focus_drone_run)
+
+        # Track active run in the bay pane.
+        self._drone_bay.set_active_run(self._drone_runner.run_state, run_card)
+
+        # Start the thread.
+        self._drone_runner_thread.started.connect(self._drone_runner.run)
+        self._drone_runner_thread.start()
+
+    def _on_cancel_drone(self) -> None:
+        """Request cancellation of the active drone run."""
+        if self._drone_runner is not None:
+            self._drone_runner.cancel()
+
+    def _on_drone_finished(self) -> None:
+        """Clean up after drone run completes."""
+        self._edge_rail.drone_run_pip.set_idle()
+        # Thread cleanup.
+        if self._drone_runner_thread is not None:
+            self._drone_runner_thread.quit()
+            self._drone_runner_thread.wait(1000)
+            self._drone_runner_thread.deleteLater()
+            self._drone_runner_thread = None
+        if self._drone_runner is not None:
+            self._drone_runner.deleteLater()
+            self._drone_runner = None
+
+    def _on_drone_receipt(self, receipt: object) -> None:
+        """Handle completed drone receipt."""
+        # Phase 2: receipt is stored in the run card, no persistence.
+        pass
+
+    def _on_focus_drone_run(self) -> None:
+        """Focus the active run card."""
+        # Phase 2: keep it simple — just switch to workspace.
+        if self._active_run_card is not None:
+            self._playground.switch_to_workspace()
+            self._sync_drone_tab_checked()
+
+    def _on_close_drone_card(self) -> None:
+        """Close/dismiss the completed run card."""
+        self._active_run_card = None
+        self._drone_bay.set_active_run(None, None)
+        # TODO: Remove card from UI layout in a future phase.
 
     def _on_auto_dispatch_toggled(self, checked: bool) -> None:
         self._settings.auto_dispatch = checked

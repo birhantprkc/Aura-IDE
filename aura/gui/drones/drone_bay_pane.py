@@ -15,7 +15,9 @@ from PySide6.QtWidgets import (
 )
 
 from aura.drones.definition import DroneDefinition
+from aura.drones.run import DroneRun
 from aura.drones.store import DroneStore
+from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 
 
@@ -31,10 +33,14 @@ class DroneBayPane(QWidget):
     editDroneRequested = Signal(str)
     duplicateDroneRequested = Signal(str)
     deleteDroneRequested = Signal(str)
+    launchDroneRequested = Signal(str)  # drone_id
+    activeRunFocusRequested = Signal()
 
     def __init__(self, workspace_root: Path | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._workspace_root = workspace_root
+        self._active_run: DroneRun | None = None
+        self._active_run_card: DroneRunCard | None = None
 
         self.setObjectName("droneBayPane")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -130,6 +136,15 @@ class DroneBayPane(QWidget):
         self._workspace_root = root
         self.refresh()
 
+    def set_active_run(self, run: DroneRun | None, card: DroneRunCard | None = None) -> None:
+        """Track the currently active Drone run and its card."""
+        self._active_run = run
+        self._active_run_card = card
+
+    def has_active_run(self) -> bool:
+        """Return True if there is an active Drone run."""
+        return self._active_run is not None and self._active_run.is_active
+
     # -- Internal helpers --
 
     def _show_empty_state(self) -> None:
@@ -210,8 +225,12 @@ class DroneBayPane(QWidget):
         action_row.setSpacing(6)
 
         launch_btn = QPushButton("Launch")
-        launch_btn.setEnabled(False)
-        launch_btn.setToolTip("Drone running lands in the next phase.")
+        if drone.write_policy == "read_only":
+            launch_btn.setEnabled(True)
+            launch_btn.setToolTip(f"Launch {drone.name}")
+        else:
+            launch_btn.setEnabled(False)
+            launch_btn.setToolTip("Write-capable Drone runs land in a later phase.")
         launch_btn.setStyleSheet(
             f"QPushButton {{ background: {ACCENT}; color: {BG}; "
             f"border: 1px solid {ACCENT}; border-radius: 4px; "
@@ -219,6 +238,10 @@ class DroneBayPane(QWidget):
             f"QPushButton:disabled {{ background: #2a2a30; color: #555566; "
             f"border: 1px solid #333340; }}"
         )
+        if drone.write_policy == "read_only":
+            launch_btn.clicked.connect(
+                lambda checked=False, did=drone.id: self.launchDroneRequested.emit(did)
+            )
         action_row.addWidget(launch_btn)
 
         edit_btn = QPushButton("Edit")

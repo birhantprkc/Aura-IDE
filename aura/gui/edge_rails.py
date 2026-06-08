@@ -8,6 +8,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QFrame, QToolButton, QVBoxLayout, QWidget
 
 from aura.config import media_path
+from aura.gui.drones.drone_rail_pip import DroneRailPip
 from aura.gui.theme import ACCENT, BG_RAISED, BORDER, DANGER, FG, FG_DIM, SUCCESS, WARN
 
 
@@ -84,6 +85,11 @@ class EdgeTabRail(QFrame):
         self._drone_tab.setStyleSheet(self._drone_tab_style())
         rail_layout.addWidget(self._drone_tab)
 
+        # Run pip (hidden until active)
+        self._drone_run_pip = DroneRailPip(self)
+        rail_layout.addSpacing(2)
+        rail_layout.addWidget(self._drone_run_pip, alignment=Qt.AlignmentFlag.AlignCenter)
+
         self.adjustSize()
         self.set_state("dim")
         self.raise_()
@@ -112,6 +118,10 @@ class EdgeTabRail(QFrame):
     @property
     def drone_tab(self) -> QToolButton | None:
         return self._drone_tab
+
+    @property
+    def drone_run_pip(self) -> DroneRailPip:
+        return self._drone_run_pip
 
     @property
     def terminal_container(self) -> QWidget | None:
