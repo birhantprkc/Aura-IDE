@@ -1,11 +1,11 @@
 """WebSocket client for Companion — connects to Relay safely from a worker thread.
 
-Threading model
----------------
 ``CompanionWsClient`` is a thin facade that lives on the UI thread. It owns a
 ``QThread`` and a separate ``_WsWorker`` QObject (parentless) that is moved into
-that thread. The worker runs the asyncio loop. All cross-thread communication
-happens via signals — no shared mutable state, no parent on a moved QObject.
+that thread. The worker runs the asyncio loop. Outbound signals (connected,
+disconnected, message_received) use Qt signals from worker→UI thread. Inbound
+communication (send, shutdown) uses ``asyncio.run_coroutine_threadsafe`` directly
+on the worker's event loop — no Qt queued signals into the worker.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import json
 import logging
 
 import websockets
-from PySide6.QtCore import QMetaObject, QObject, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,6 @@ class _WsWorker(QObject):
     connected = Signal()
     disconnected = Signal()
     message_received = Signal(str)
-    send_request = Signal(str)  # internal: UI -> worker
 
     def __init__(self, url: str, token: str) -> None:
         super().__init__()  # No parent — required for moveToThread
@@ -38,7 +37,6 @@ class _WsWorker(QObject):
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._should_run = True
         self._reconnect_delay = 1.0
-        self.send_request.connect(self._on_send_request, Qt.ConnectionType.QueuedConnection)
 
     @Slot()
     def run(self) -> None:
@@ -93,11 +91,6 @@ class _WsWorker(QObject):
                 break
             self._reconnect_delay = min(self._reconnect_delay * 2, 30.0)
 
-    @Slot(str)
-    def _on_send_request(self, data: str) -> None:
-        if self._loop and self._ws is not None:
-            asyncio.run_coroutine_threadsafe(self._send_async(data), self._loop)
-
     async def _send_async(self, data: str) -> None:
         ws = self._ws
         if ws is not None:
@@ -106,7 +99,6 @@ class _WsWorker(QObject):
             except Exception as exc:
                 logger.warning("[CompanionWsClient] send failed: %s", exc)
 
-    @Slot()
     def shutdown(self) -> None:
         """Stop the loop and close the socket. Safe to call from any thread."""
         self._should_run = False
@@ -160,8 +152,6 @@ class CompanionWsClient(QObject):
         self._worker.message_received.connect(self.message_received)
 
         self._thread.started.connect(self._worker.run)
-        # When the worker run() returns, quit the thread; after thread quits, clean up.
-        self._worker.disconnected.connect(self._maybe_quit_thread)
         self._thread.start()
 
     @Slot()
@@ -174,23 +164,23 @@ class CompanionWsClient(QObject):
         self._is_connected = False
         self.disconnected.emit()
 
-    @Slot()
-    def _maybe_quit_thread(self) -> None:
-        # Worker emits disconnected on every reconnect cycle, so do NOT quit
-        # the thread here — only when shutdown() is called.
-        pass
-
     def send(self, data: str) -> None:
         worker = self._worker
         if worker is not None:
-            # Queued connection: worker reads on its own thread.
-            worker.send_request.emit(data)
+            loop = worker._loop
+            if loop is not None:
+                asyncio.run_coroutine_threadsafe(worker._send_async(data), loop)
+            else:
+                logger.warning("[CompanionWsClient] send: loop not ready")
 
     def close(self) -> None:
         worker = self._worker
         if worker is not None:
-            # Trigger shutdown on the worker thread via a queued slot.
-            QMetaObject.invokeMethod(worker, "shutdown", Qt.ConnectionType.QueuedConnection)
+            worker._should_run = False
+            loop = worker._loop
+            ws = worker._ws
+            if loop is not None and ws is not None:
+                asyncio.run_coroutine_threadsafe(ws.close(), loop)
         if self._thread is not None:
             self._thread.quit()
             self._thread.wait(3000)

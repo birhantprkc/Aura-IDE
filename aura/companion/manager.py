@@ -158,7 +158,7 @@ class CompanionManager(QObject):
             "code": code,
             "exp": int(expires_at),
         })
-        pair_url = f"{web_url}/?{query}"
+        pair_url = f"{web_url}/login?{query}"
         return {
             "code": code,
             "expires_at": expires_at,
