@@ -200,6 +200,9 @@ export class RelayDO implements DurableObject {
 
   constructor(_state: DurableObjectState, env: Env) {
     this.env = env;
+
+    if (!env.RELAY_SECRET) console.warn("[Aura Relay] RELAY_SECRET is not set — JWT signing is insecure");
+    if (!env.DESKTOP_SECRET) console.warn("[Aura Relay] DESKTOP_SECRET is not set — any device can claim to be a desktop");
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -208,7 +211,13 @@ export class RelayDO implements DurableObject {
     if (url.pathname === "/health") {
       const desktops = [...this.sessions.values()].filter((s) => s.deviceType === "desktop").length;
       const phones = [...this.sessions.values()].filter((s) => s.deviceType === "phone").length;
-      return Response.json({ status: "ok", online_desktops: desktops, online_phones: phones });
+      return Response.json({
+        status: "ok",
+        online_desktops: desktops,
+        online_phones: phones,
+        relay_secret_configured: !!this.env.RELAY_SECRET,
+        desktop_secret_configured: !!this.env.DESKTOP_SECRET,
+      });
     }
 
     if (url.pathname !== "/ws") {
