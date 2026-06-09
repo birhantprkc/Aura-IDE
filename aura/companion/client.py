@@ -80,11 +80,14 @@ class _WsWorker(QObject):
                         if not self._should_run:
                             break
                         self.message_received.emit(raw)
-            except websockets.ConnectionClosed:
-                logger.warning("[CompanionWsClient] connection closed")
+            except websockets.ConnectionClosed as exc:
+                message = f"{exc.__class__.__name__}: code={getattr(exc, 'code', '')} reason={getattr(exc, 'reason', '')}"
+                logger.warning("[CompanionWsClient] connection closed: %s", message)
+                self.error.emit(message)
             except Exception as exc:
-                logger.error("[CompanionWsClient] connection error: %s", exc)
-                self.error.emit(str(exc))
+                message = f"{exc.__class__.__name__}: {exc}"
+                logger.error("[CompanionWsClient] connection error: %s", message)
+                self.error.emit(message)
             finally:
                 self._ws = None
                 self.disconnected.emit()
