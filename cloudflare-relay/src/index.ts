@@ -69,6 +69,16 @@ interface Ticket {
   expiresAt: number; // ms epoch
 }
 
+interface PairAttempt {
+  ticket: string;
+  desktopId: string;
+  phoneId: string;
+  phoneName: string;
+  originalMsgId: string;
+  createdAt: number; // ms epoch
+  expiresAt: number; // ms epoch
+}
+
 interface JwtPayload {
   role: string;
   desktop_id: string;
@@ -166,6 +176,8 @@ export class RelayDO implements DurableObject {
   private readonly tickets = new Map<string, Ticket>();
   /** phone_id → desktop_id */
   private readonly pairedPhones = new Map<string, string>();
+  /** original_msg_id (phone's pair.connect msg id) → PairAttempt */
+  private readonly pairAttempts = new Map<string, PairAttempt>();
 
   private env!: Env;
 
@@ -454,6 +466,19 @@ export class RelayDO implements DurableObject {
       return;
     }
 
+    // Store pairing attempt bound to this desktop session
+    const attempt: PairAttempt = {
+      ticket: ticket || "",
+      desktopId: targetDesktopId,
+      phoneId: deviceId,
+      phoneName,
+      originalMsgId: msgId ?? "",
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 300_000, // 5 min
+    };
+    this.pairAttempts.set(msgId ?? "", attempt);
+    this.purgeExpiredPairAttempts();
+
     const verifyMsg = envelope(
       "pair.verify",
       {
@@ -473,8 +498,8 @@ export class RelayDO implements DurableObject {
   // -------------------------------------------------------------------------
 
   private async handlePairConfirmed(
-    _deviceId: string,
-    _ws: WebSocket,
+    deviceId: string,
+    ws: WebSocket,
     msg: Record<string, unknown>,
     _msgId: string | undefined,
     raw: string,
@@ -483,36 +508,72 @@ export class RelayDO implements DurableObject {
     const phoneId = String(payload["phone_id"] ?? "");
     const token = String(payload["token"] ?? "");
     const phoneName = String(payload["device_name"] ?? "Phone");
-    const desktopId = String(msg["desktop_id"] ?? _deviceId);
 
-    if (phoneId) {
-      // Verify the JWT the desktop issued and mark phone as authenticated
-      if (token) {
-        const jwtPayload = await verifyJwt(token, this.env.RELAY_SECRET ?? "");
-        if (jwtPayload) {
-          const phoneSession = this.sessions.get(phoneId);
-          if (phoneSession) {
-            phoneSession.authenticated = true;
-            phoneSession.role = jwtPayload.role;
-            phoneSession.displayName = phoneName;
-          }
+    // Look up the pairing attempt
+    const lookupKey =
+      typeof msg["in_response_to"] === "string" && (msg["in_response_to"] as string).length > 0
+        ? (msg["in_response_to"] as string)
+        : typeof payload["original_msg_id"] === "string"
+          ? (payload["original_msg_id"] as string)
+          : "";
+    const attempt = lookupKey ? this.pairAttempts.get(lookupKey) : undefined;
+
+    if (!attempt) {
+      ws.send(
+        envelope("pair.error", { message: "No matching pairing attempt" }, { inResponseTo: msg["id"] as string }),
+      );
+      return;
+    }
+    if (attempt.desktopId !== deviceId) {
+      ws.send(
+        envelope("pair.error", { message: "Desktop connection does not own this pairing attempt" }, { inResponseTo: msg["id"] as string }),
+      );
+      return;
+    }
+    if (Date.now() > attempt.expiresAt) {
+      this.pairAttempts.delete(lookupKey);
+      ws.send(
+        envelope("pair.error", { message: "Pairing attempt expired" }, { inResponseTo: msg["id"] as string }),
+      );
+      return;
+    }
+
+    // Remove the attempt now that it is confirmed
+    this.pairAttempts.delete(lookupKey);
+
+    if (!phoneId) {
+      ws.send(
+        envelope("pair.error", { message: "Missing phone_id" }, { inResponseTo: msg["id"] as string }),
+      );
+      return;
+    }
+
+    // Verify the JWT the desktop issued and mark phone as authenticated
+    if (token) {
+      const jwtPayload = await verifyJwt(token, this.env.RELAY_SECRET ?? "");
+      if (jwtPayload) {
+        const phoneSession = this.sessions.get(phoneId);
+        if (phoneSession) {
+          phoneSession.authenticated = true;
+          phoneSession.role = jwtPayload.role;
+          phoneSession.displayName = phoneName;
         }
       }
+    }
 
-      // Record pairing
-      this.pairedPhones.set(phoneId, desktopId);
-      const phoneSession = this.sessions.get(phoneId);
-      if (phoneSession) {
-        phoneSession.pairedDesktop = desktopId;
-      }
+    // Record pairing
+    this.pairedPhones.set(phoneId, deviceId);
+    const phoneSession = this.sessions.get(phoneId);
+    if (phoneSession) {
+      phoneSession.pairedDesktop = deviceId;
+    }
 
-      // Forward to phone with scoped_to added
-      const confirmed = JSON.parse(raw) as Record<string, unknown>;
-      (confirmed["payload"] as Record<string, unknown>)["scoped_to"] = desktopId;
-      const phoneConn = this.sessions.get(phoneId);
-      if (phoneConn) {
-        phoneConn.ws.send(JSON.stringify(confirmed));
-      }
+    // Forward to phone with scoped_to added
+    const confirmed = JSON.parse(raw) as Record<string, unknown>;
+    (confirmed["payload"] as Record<string, unknown>)["scoped_to"] = deviceId;
+    const phoneConn = this.sessions.get(phoneId);
+    if (phoneConn) {
+      phoneConn.ws.send(JSON.stringify(confirmed));
     }
   }
 
@@ -632,6 +693,13 @@ export class RelayDO implements DurableObject {
     const now = Date.now();
     for (const [k, v] of this.tickets) {
       if (now > v.expiresAt) this.tickets.delete(k);
+    }
+  }
+
+  private purgeExpiredPairAttempts(): void {
+    const now = Date.now();
+    for (const [k, v] of this.pairAttempts) {
+      if (now > v.expiresAt) this.pairAttempts.delete(k);
     }
   }
 }
