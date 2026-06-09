@@ -38,6 +38,7 @@ class _WsWorker(QObject):
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._should_run = True
         self._reconnect_delay = 1.0
+        self._sleep_task: asyncio.Task | None = None
 
     @Slot()
     def run(self) -> None:
@@ -89,9 +90,12 @@ class _WsWorker(QObject):
                 break
             logger.info("[CompanionWsClient] reconnecting in %.1fs", self._reconnect_delay)
             try:
-                await asyncio.sleep(self._reconnect_delay)
+                self._sleep_task = asyncio.create_task(asyncio.sleep(self._reconnect_delay))
+                await self._sleep_task
             except asyncio.CancelledError:
                 break
+            finally:
+                self._sleep_task = None
             self._reconnect_delay = min(self._reconnect_delay * 2, 30.0)
 
     async def _send_async(self, data: str) -> None:
@@ -103,15 +107,24 @@ class _WsWorker(QObject):
                 logger.warning("[CompanionWsClient] send failed: %s", exc)
 
     def shutdown(self) -> None:
-        """Stop the loop and close the socket. Safe to call from any thread."""
+        """Stop the loop and close the socket. Safe to call from any thread, idempotent."""
         self._should_run = False
         loop = self._loop
-        ws = self._ws
-        if loop and ws is not None:
-            try:
-                asyncio.run_coroutine_threadsafe(ws.close(), loop)
-            except Exception:
-                pass
+        if loop is None or loop.is_closed():
+            return
+
+        def _do_shutdown() -> None:
+            ws = self._ws
+            if ws is not None:
+                loop.create_task(ws.close())
+            task = self._sleep_task
+            if task is not None and not task.done():
+                task.cancel()
+
+        try:
+            loop.call_soon_threadsafe(_do_shutdown)
+        except Exception:
+            pass
 
 
 class CompanionWsClient(QObject):
@@ -177,15 +190,14 @@ class CompanionWsClient(QObject):
 
     def close(self) -> None:
         worker = self._worker
+        thread = self._thread
         if worker is not None:
-            worker._should_run = False
-            loop = worker._loop
-            ws = worker._ws
-            if loop is not None and ws is not None:
-                asyncio.run_coroutine_threadsafe(ws.close(), loop)
-        if self._thread is not None:
-            self._thread.quit()
-            self._thread.wait(3000)
-            self._thread = None
+            worker.shutdown()
+        if thread is not None:
+            thread.quit()
+            if not thread.wait(5000):
+                logger.warning("[CompanionWsClient] worker thread did not stop within 5 s — not clearing references")
+                return
+        self._thread = None
         self._worker = None
         self._is_connected = False

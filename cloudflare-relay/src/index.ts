@@ -280,15 +280,21 @@ export class RelayDO implements DurableObject {
 
     ws.addEventListener("close", () => {
       if (deviceId) {
-        this.sessions.delete(deviceId);
-        this.broadcastOnline();
+        const existing = this.sessions.get(deviceId);
+        if (existing && existing.ws === ws) {
+          this.sessions.delete(deviceId);
+          this.broadcastOnline();
+        }
       }
     });
 
     ws.addEventListener("error", () => {
       if (deviceId) {
-        this.sessions.delete(deviceId);
-        this.broadcastOnline();
+        const existing = this.sessions.get(deviceId);
+        if (existing && existing.ws === ws) {
+          this.sessions.delete(deviceId);
+          this.broadcastOnline();
+        }
       }
     });
   }

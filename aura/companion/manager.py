@@ -282,13 +282,16 @@ class CompanionManager(QObject):
         device_id = get_device_id()
         desktop_secret = os.environ.get("AURA_COMPANION_DESKTOP_SECRET", "")
 
-        self._ws_client = CompanionWsClient(url, device_id, desktop_secret, self)
-        self._ws_client.connected.connect(self._on_connected)
-        self._ws_client.disconnected.connect(self._on_disconnected)
-        self._ws_client.message_received.connect(self._on_raw_message)
-        self._ws_client.connect_to_relay()
+        client = CompanionWsClient(url, device_id, desktop_secret, self)
+        self._ws_client = client
+        client.connected.connect(lambda c=client: self._on_connected(c))
+        client.disconnected.connect(lambda c=client: self._on_disconnected(c))
+        client.message_received.connect(self._on_raw_message)
+        client.connect_to_relay()
 
-    def _on_connected(self) -> None:
+    def _on_connected(self, client: CompanionWsClient | None = None) -> None:
+        if client is not None and client is not self._ws_client:
+            return
         self.connection_status_changed.emit("connected")
         logger.info("[Companion] connected to Relay")
         # Send desktop.online event
@@ -298,7 +301,9 @@ class CompanionManager(QObject):
             "capabilities": ["chat.send", "project.list_recent", "conversation.*"],
         }, desktop_id=get_device_id()))
 
-    def _on_disconnected(self) -> None:
+    def _on_disconnected(self, client: CompanionWsClient | None = None) -> None:
+        if client is not None and client is not self._ws_client:
+            return
         self.connection_status_changed.emit("error")
         logger.warning("[Companion] disconnected from Relay")
 
