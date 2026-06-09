@@ -423,9 +423,9 @@ class CompanionManager(QObject):
     def _handle_project_list_recent(self, msg: dict) -> None:
         """List recent projects."""
         if not self._workspace_root:
-            self.send_event(make_envelope("project.list_result", {
+            self._reply_to_sender(msg, "project.list_result", {
                 "projects": [],
-            }, in_response_to=msg.get("id", "")))
+            })
             return
         try:
             store = ProjectStore()
@@ -445,33 +445,33 @@ class CompanionManager(QObject):
                     updated_at=p.updated_at,
                     thread_count=thread_count,
                 ).to_dict())
-            self.send_event(make_envelope("project.list_result", {
+            self._reply_to_sender(msg, "project.list_result", {
                 "projects": dtos,
-            }, in_response_to=msg.get("id", "")))
+            })
         except Exception as exc:
             logger.error("[Companion] project.list_recent error: %s", exc)
-            self.send_event(make_envelope("project.list_result", {
+            self._reply_to_sender(msg, "project.list_result", {
                 "projects": [],
                 "error": str(exc),
-            }, in_response_to=msg.get("id", "")))
+            })
 
     def _handle_conversation_list(self, msg: dict) -> None:
         """List threads for the current project, or a specified project."""
         payload = msg.get("payload", {})
         project_id = payload.get("project_id", self._current_project_id)
         if not project_id or not self._workspace_root:
-            self.send_event(make_envelope("conversation.list_result", {
+            self._reply_to_sender(msg, "conversation.list_result", {
                 "threads": [],
-            }, in_response_to=msg.get("id", "")))
+            })
             return
         try:
             store = ProjectStore()
             project = store.load_project(project_id)
             if not project:
-                self.send_event(make_envelope("conversation.list_result", {
+                self._reply_to_sender(msg, "conversation.list_result", {
                     "threads": [],
                     "error": "Project not found",
-                }, in_response_to=msg.get("id", "")))
+                })
                 return
             threads = store.list_threads(project)
             threads.sort(key=lambda t: t.updated_at, reverse=True)
@@ -481,17 +481,17 @@ class CompanionManager(QObject):
                     id=t.id,
                     title=t.title or "Untitled",
                     updated_at=t.updated_at,
-                    is_current=(t.id == self._current_project_id),
+                    is_current=(t.id == self._current_conversation_id),
                 ).to_dict())
-            self.send_event(make_envelope("conversation.list_result", {
+            self._reply_to_sender(msg, "conversation.list_result", {
                 "threads": dtos,
-            }, in_response_to=msg.get("id", "")))
+            })
         except Exception as exc:
             logger.error("[Companion] conversation.list error: %s", exc)
-            self.send_event(make_envelope("conversation.list_result", {
+            self._reply_to_sender(msg, "conversation.list_result", {
                 "threads": [],
                 "error": str(exc),
-            }, in_response_to=msg.get("id", "")))
+            })
 
     def _handle_conversation_select(self, msg: dict) -> None:
         """Select a thread as the active conversation."""
@@ -499,22 +499,22 @@ class CompanionManager(QObject):
         thread_id = payload.get("thread_id", "")
         project_id = payload.get("project_id", self._current_project_id)
         if not thread_id or not project_id:
-            self.send_event(make_envelope("conversation.selected", {
+            self._reply_to_sender(msg, "conversation.selected", {
                 "error": "Missing thread_id or project_id",
-            }, in_response_to=msg.get("id", "")))
+            })
             return
         self._current_project_id = project_id
-        self.send_event(make_envelope("conversation.selected", {
+        self._reply_to_sender(msg, "conversation.selected", {
             "project_id": project_id,
             "thread_id": thread_id,
-        }, in_response_to=msg.get("id", "")))
+        })
 
     def _handle_drone_list_recent(self, msg: dict) -> None:
         """List recent drone runs."""
         if not self._workspace_root:
-            self.send_event(make_envelope("drone.list_result", {
+            self._reply_to_sender(msg, "drone.list_result", {
                 "runs": [],
-            }, in_response_to=msg.get("id", "")))
+            })
             return
         try:
             root = Path(self._workspace_root)
@@ -528,15 +528,15 @@ class CompanionManager(QObject):
                     status=r.get("status", "unknown"),
                     started_at=r.get("started_at"),
                 ).to_dict())
-            self.send_event(make_envelope("drone.list_result", {
+            self._reply_to_sender(msg, "drone.list_result", {
                 "runs": summaries,
-            }, in_response_to=msg.get("id", "")))
+            })
         except Exception as exc:
             logger.error("[Companion] drone.list_recent error: %s", exc)
-            self.send_event(make_envelope("drone.list_result", {
+            self._reply_to_sender(msg, "drone.list_result", {
                 "runs": [],
                 "error": str(exc),
-            }, in_response_to=msg.get("id", "")))
+            })
 
     def _handle_drone_status(self, msg: dict) -> None:
         """Report current drone runner status."""
@@ -552,24 +552,24 @@ class CompanionManager(QObject):
                     status=state.status,
                     started_at=started_at_str,
                 ).to_dict()
-                self.send_event(make_envelope("drone.status_result", {
+                self._reply_to_sender(msg, "drone.status_result", {
                     "running": True,
                     "run": summary,
-                }, in_response_to=msg.get("id", "")))
+                })
                 return
             except Exception as exc:
                 logger.error("[Companion] drone.status error: %s", exc)
-        self.send_event(make_envelope("drone.status_result", {
+        self._reply_to_sender(msg, "drone.status_result", {
             "running": False,
             "run": None,
-        }, in_response_to=msg.get("id", "")))
+        })
 
     def _handle_receipt_list_recent(self, msg: dict) -> None:
         """List recent receipts (same data as drone runs, ReceiptSummary DTO)."""
         if not self._workspace_root:
-            self.send_event(make_envelope("receipt.list_result", {
+            self._reply_to_sender(msg, "receipt.list_result", {
                 "receipts": [],
-            }, in_response_to=msg.get("id", "")))
+            })
             return
         try:
             root = Path(self._workspace_root)
@@ -584,15 +584,15 @@ class CompanionManager(QObject):
                     completed_at=r.get("ended_at", r.get("started_at", "")),
                     summary=r.get("summary", ""),
                 ).to_dict())
-            self.send_event(make_envelope("receipt.list_result", {
+            self._reply_to_sender(msg, "receipt.list_result", {
                 "receipts": receipts,
-            }, in_response_to=msg.get("id", "")))
+            })
         except Exception as exc:
             logger.error("[Companion] receipt.list_recent error: %s", exc)
-            self.send_event(make_envelope("receipt.list_result", {
+            self._reply_to_sender(msg, "receipt.list_result", {
                 "receipts": [],
                 "error": str(exc),
-            }, in_response_to=msg.get("id", "")))
+            })
 
     def _on_bridge_content_delta(self, text: str) -> None:
         self.send_event(make_envelope("chat.message.delta", {
