@@ -9,7 +9,7 @@ class_name = "RelayDO"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["RelayDO"]
+new_sqlite_classes = ["RelayDO"]
 
 [vars]
 # Override in wrangler secret or dashboard:
