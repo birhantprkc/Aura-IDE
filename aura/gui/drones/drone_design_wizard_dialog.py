@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from aura.gui.theme import ACCENT, BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 
 
-@dataclass
+@dataclass(frozen=True)
 class DesignedDroneDraft:
     name: str
     instructions: str
@@ -357,9 +357,13 @@ class DroneDesignWizardDialog(QDialog):
         # Validate current page before advancing
         if current == 1:  # Job description
             if not self._job_edit.toPlainText().strip():
+                QMessageBox.warning(self, "Job Description", "Please describe the job this Drone should do.")
+                self._job_edit.setFocus()
                 return
         elif current == 3:  # Output contract
             if not self._contract_edit.toPlainText().strip():
+                QMessageBox.warning(self, "Output Contract", "Please describe what the Drone should bring back.")
+                self._contract_edit.setFocus()
                 return
 
         if current < _PAGE_COUNT - 1:
@@ -375,7 +379,6 @@ class DroneDesignWizardDialog(QDialog):
         is_last = index == _PAGE_COUNT - 1
         self._next_btn.setVisible(not is_last)
         self._accept_btn.setVisible(is_last)
-        self._cancel_btn.setVisible(not is_last)
 
     # -- Draft building --
 
@@ -424,8 +427,6 @@ class DroneDesignWizardDialog(QDialog):
 
         # Clean up trailing punctuation
         name = name.rstrip(".,;:!?")
-        # Title case for nice names
-        name = name.title()
         return name[:60]
 
     @staticmethod
@@ -437,6 +438,8 @@ class DroneDesignWizardDialog(QDialog):
         lines.append("")
         lines.append(job_text)
         lines.append("")
+        lines.append("You are an Aura Drone operating in the current workspace.")
+        lines.append("")
 
         # Operating rules
         lines.append("## Operating Rules")
@@ -446,20 +449,22 @@ class DroneDesignWizardDialog(QDialog):
         lines.append("- Read relevant files to understand context before acting.")
         lines.append("- Report progress honestly and concisely.")
         lines.append("- If you encounter errors or blockers, report them clearly.")
+        lines.append("- Stay inside the current workspace — do not access paths outside it.")
+        lines.append("- Inspect relevant files before making claims or suggestions.")
 
         # Write policy guidance
         lines.append("")
         if write_policy == "read_only":
-            lines.append("- Do not modify any files. This is a read-only investigation.")
+            lines.append("- Do not modify any files. This is a read-only investigation. Do not use write tools.")
         elif write_policy == "ask_before_writes":
             lines.append(
                 "- You have write access but must ask before each write. "
-                "Aura's approval flow will handle the decision."
+                "Use Aura's approval flow for each change. Make small, reviewable changes."
             )
         else:
             lines.append(
                 "- You have write access. Use Aura's approval and validation flow for all changes. "
-                "After making changes, summarize what files were modified."
+                "Make small, reviewable changes. After changing files, summarize what was modified and why."
             )
 
         lines.append("")
