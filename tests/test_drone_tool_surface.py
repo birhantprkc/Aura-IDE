@@ -5,6 +5,7 @@ import pytest
 from aura.drones.capabilities import CapabilityBinding
 from aura.drones.definition import (
     READ_ONLY_TOOLS,
+    TERMINAL_TOOLS,
     WRITE_TOOLS,
     DroneBudget,
     DroneDefinition,
@@ -82,13 +83,13 @@ class TestDroneToolSurface:
         assert surface.setup_notes == ()
 
     def test_write_capable_drone_gets_all_tools(self, tmp_path):
-        """Write-capable drone with empty allowed_tools gets READ_ONLY + WRITE_TOOLS."""
+        """Write-capable drone with empty allowed_tools gets READ_ONLY + WRITE + TERMINAL_TOOLS."""
         drone = _drone(
             write_policy="normal_diff_approval",
             allowed_tools=(),
         )
         surface = build_drone_tool_surface(tmp_path, drone)
-        assert surface.allowed_tools == frozenset(READ_ONLY_TOOLS + WRITE_TOOLS)
+        assert surface.allowed_tools == frozenset(READ_ONLY_TOOLS + WRITE_TOOLS + TERMINAL_TOOLS)
 
     def test_surface_is_frozen(self, tmp_path):
         """DroneToolSurface fields cannot be mutated."""

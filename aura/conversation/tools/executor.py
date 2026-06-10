@@ -1,9 +1,11 @@
 """Tool execution dispatcher — routes tool calls to static, MCP, or dynamic handlers."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from aura.conversation.tools._types import ApprovalCallback, ToolExecResult
+from aura.conversation.tools._types import ApprovalCallback, ApprovalRequest, ToolExecResult
+from aura.conversation.tools.consequential import is_consequential
 from aura.conversation.tools.dynamic import execute_dynamic_tool
 
 
@@ -46,11 +48,61 @@ class ToolExecutor:
 
             # 2. MCP tools
             if self._mcp_tools.can_execute(name):
+                if is_consequential(name):
+                    if reject_all:
+                        return ToolExecResult(
+                            ok=False,
+                            payload={"ok": False, "rejected": True, "error": f"rejected: {name}"},
+                        )
+                    if approval_cb is not None:
+                        request = ApprovalRequest(
+                            tool_name=name,
+                            rel_path=f"mcp:{name}",
+                            old_content="",
+                            new_content=json.dumps(args),
+                            is_new_file=True,
+                        )
+                        decision = approval_cb(request)
+                        if decision.action in ("reject", "reject_all"):
+                            return ToolExecResult(
+                                ok=False,
+                                payload={
+                                    "ok": False,
+                                    "rejected": True,
+                                    "error": f"rejected: {name}",
+                                    "decision": decision.action,
+                                },
+                            )
                 return self._mcp_tools.execute(name, args)
 
             # 3. Dynamic tools
             dynamic_path = self._dynamic_tools.get(name)
             if dynamic_path is not None:
+                if is_consequential(name):
+                    if reject_all:
+                        return ToolExecResult(
+                            ok=False,
+                            payload={"ok": False, "rejected": True, "error": f"rejected: {name}"},
+                        )
+                    if approval_cb is not None:
+                        request = ApprovalRequest(
+                            tool_name=name,
+                            rel_path=f"dynamic:{name}",
+                            old_content="",
+                            new_content=json.dumps(args),
+                            is_new_file=True,
+                        )
+                        decision = approval_cb(request)
+                        if decision.action in ("reject", "reject_all"):
+                            return ToolExecResult(
+                                ok=False,
+                                payload={
+                                    "ok": False,
+                                    "rejected": True,
+                                    "error": f"rejected: {name}",
+                                    "decision": decision.action,
+                                },
+                            )
                 result = execute_dynamic_tool(
                     dynamic_path, name, args, self._owner.workspace_root
                 )

@@ -112,3 +112,22 @@ def test_runner_blocks_tool_not_in_allowed_set(tmp_path) -> None:
     surface = build_drone_tool_surface(tmp_path, drone)
     assert "write_file" not in surface.allowed_tools
     assert "read_file" in surface.allowed_tools
+
+
+class TestRunTerminalCommandPolicy:
+    """Tests for run_terminal_command policy visibility."""
+
+    def test_not_in_read_only_policy(self):
+        """run_terminal_command is NOT available in read_only policy."""
+        tools = default_tools_for_policy("read_only")
+        assert "run_terminal_command" not in tools
+
+    def test_in_write_capable_policy(self):
+        """run_terminal_command IS available in normal_diff_approval policy."""
+        tools = default_tools_for_policy("normal_diff_approval")
+        assert "run_terminal_command" in tools
+
+    def test_in_ask_before_writes_policy(self):
+        """run_terminal_command IS available in ask_before_writes policy."""
+        tools = default_tools_for_policy("ask_before_writes")
+        assert "run_terminal_command" in tools

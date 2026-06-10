@@ -58,10 +58,14 @@ READ_ONLY_TOOLS = (
     "git_branch_list",
     "git_stash_list",
     "git_stash_show",
-    "run_terminal_command",
     "run_diagnostic_command",
     "get_workspace_snapshot",
 )
+
+
+# run_terminal_command requires shell execution capability and is only
+# available to write-capable policies.
+TERMINAL_TOOLS = ("run_terminal_command",)
 
 
 WRITE_TOOLS = (
@@ -79,5 +83,5 @@ def default_tools_for_policy(write_policy: str) -> tuple[str, ...]:
     if write_policy == "read_only":
         return READ_ONLY_TOOLS
     if write_policy in ("ask_before_writes", "normal_diff_approval"):
-        return READ_ONLY_TOOLS + WRITE_TOOLS
+        return READ_ONLY_TOOLS + WRITE_TOOLS + TERMINAL_TOOLS
     return READ_ONLY_TOOLS
