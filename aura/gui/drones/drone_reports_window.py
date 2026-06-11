@@ -216,8 +216,9 @@ class DroneReportsWindow(QDialog):
         self.hide()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """WM close → accept so Qt hides via its own path. WA_DeleteOnClose=False prevents deletion."""
-        event.accept()
+        """WM close → ignore and defer hide via singleShot to avoid re-entrant close/hide crashes."""
+        event.ignore()
+        QTimer.singleShot(0, self._hide_window)
 
     def _refresh_empty_state(self) -> None:
         self._empty_label.setVisible(not self._cards)
