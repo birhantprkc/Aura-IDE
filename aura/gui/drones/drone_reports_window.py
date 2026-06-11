@@ -34,7 +34,7 @@ class DroneReportsWindow(QDialog):
         initial_geometry: str = "",
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Drone Reports")
+        self.setWindowTitle("Drone Activity")
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.Tool, True)
         self._geometry_restore_done = False
@@ -68,11 +68,11 @@ class DroneReportsWindow(QDialog):
         title_col.setContentsMargins(0, 0, 0, 0)
         title_col.setSpacing(0)
 
-        title = QLabel("Drone Reports", header)
+        title = QLabel("Drone Activity", header)
         title.setStyleSheet(f"color: {FG}; font-weight: 700; font-size: 13px;")
         title_col.addWidget(title)
 
-        subtitle = QLabel("Live run cards, tool output, and final receipts", header)
+        subtitle = QLabel("Active runs & completed reports", header)
         subtitle.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         title_col.addWidget(subtitle)
 
@@ -113,7 +113,7 @@ class DroneReportsWindow(QDialog):
         self._card_layout.setSpacing(12)
 
         self._empty_label = QLabel(
-            "No Drone reports yet.\n\nLaunch a Drone from Drone Bay to see its run card here.",
+            "No Drone runs yet.\n\nLaunch a Drone from Drone Bay to see its activity here.",
             self._card_host,
         )
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)

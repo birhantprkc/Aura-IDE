@@ -676,13 +676,17 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     # ----- Drone Bay handlers --------------------------------------------
 
     def _on_drone_bay_requested(self) -> None:
-        self._playground.toggle_drone_bay()
+        if self._drone_runs:
+            self._drone_reports_window.toggle()
+        else:
+            self._playground.toggle_drone_bay()
         self._sync_drone_tab_checked()
         self._position_edge_tabs()
 
     def _sync_drone_tab_checked(self) -> None:
         if self._edge_rail.drone_tab is not None:
-            self._edge_rail.drone_tab.setChecked(self._playground.is_drone_bay_open())
+            is_open = self._playground.is_drone_bay_open() or self._drone_reports_window.is_open()
+            self._edge_rail.drone_tab.setChecked(is_open)
 
     def _on_new_drone(self) -> None:
         dlg = DroneEditorDialog(
@@ -997,7 +1001,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._edge_rail.add_drone_run_pip(run_id, run_drone.name)
         self._position_edge_tabs()
-        self._drone_reports_window.show_and_focus(run_id)
 
         # Start the thread.
         thread.started.connect(runner.run)

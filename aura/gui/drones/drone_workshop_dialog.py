@@ -184,9 +184,15 @@ class DroneWorkshopDialog(QDialog):
         self._conversation.append({"role": "user", "content": text})
         self._input_edit.clear()
 
-        # Disable input while running
+        # Disable input while running; show thinking state
         self._input_edit.setEnabled(False)
         self._send_btn.setEnabled(False)
+        self._send_btn.setText("Thinking…")
+        self._send_btn.setStyleSheet(
+            f"QPushButton {{ background: #2a2a30; color: #555566; "
+            f"border: 1px solid #333340; border-radius: 6px; "
+            f"padding: 6px 18px; font-weight: 600; font-size: 13px; }}"
+        )
 
         # Start assistant message
         self._assistant_buffer = ""
@@ -233,6 +239,7 @@ class DroneWorkshopDialog(QDialog):
             # Update preview with build_brief text
             if response.brief is not None:
                 self._preview_text.setPlainText(response.brief.build_brief)
+                self._preview_text.setReadOnly(not response.brief.ready_to_build)
                 self._build_btn.setEnabled(response.brief.ready_to_build)
             else:
                 self._preview_text.setPlainText(
@@ -252,9 +259,15 @@ class DroneWorkshopDialog(QDialog):
         self._build_btn.setEnabled(False)
 
     def _on_runner_finished(self) -> None:
-        # Re-enable input
+        # Re-enable input; restore Send button
         self._input_edit.setEnabled(True)
         self._send_btn.setEnabled(True)
+        self._send_btn.setText("Send")
+        self._send_btn.setStyleSheet(
+            f"QPushButton {{ background: {ACCENT}; color: {BG}; "
+            f"border: 1px solid {ACCENT}; border-radius: 6px; "
+            f"padding: 6px 18px; font-weight: 600; font-size: 13px; }}"
+        )
         # Clean up thread
         if self._runner_thread is not None:
             self._runner_thread.quit()
@@ -268,6 +281,10 @@ class DroneWorkshopDialog(QDialog):
     def _on_approve_build(self) -> None:
         """User clicked Build this Drone — emit brief and accept."""
         if self._current_brief is not None:
+            # Apply any edits the user made to the build brief
+            edited = self._preview_text.toPlainText()
+            if edited != self._current_brief.build_brief:
+                object.__setattr__(self._current_brief, "build_brief", edited)
             self.buildSpecApproved.emit(self._current_brief)
         self.accept()
 
