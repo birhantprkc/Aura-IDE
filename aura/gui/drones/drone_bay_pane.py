@@ -276,7 +276,6 @@ class DroneBayPane(QWidget):
             f"font-size: 12px; color: {FG_DIM}; background: transparent;"
         )
         desc_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        desc_label.setElideMode(Qt.TextElideMode.ElideRight)
         desc_label.setContentsMargins(0, 0, 0, 0)
         row_layout.addWidget(desc_label, 1)
 
