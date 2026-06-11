@@ -26,7 +26,6 @@ from aura.bridge.dispatch import (
     _is_validation_scratch_path,
     _unrecovered_validation_failures,
     _validation_results_for_task,
-    _worker_result_allows_auto_commit,
     _workspace_file_exists,
 )
 from aura.bridge.event_relay import _is_validation_terminal_record
@@ -1275,30 +1274,4 @@ def test_environment_caveat_is_not_edit_mechanics_failure():
     ) == WorkerOutcomeStatus.completed_with_caveats.value
 
 
-def test_auto_commit_allowed_only_for_clean_final_worker_success():
-    clean = {
-        "ok": True,
-        "needs_followup": False,
-        "recoverable": False,
-        "status": WorkerOutcomeStatus.completed.value,
-        "internal_error": "",
-        "failed_validation": [],
-        "not_applied_writes": [],
-        "unrecovered_not_applied_writes": [],
-        "environment_setup_blockers": [],
-        "validation_not_run": False,
-        "result_errors": [],
-    }
 
-    assert _worker_result_allows_auto_commit(**clean)
-    assert not _worker_result_allows_auto_commit(**{**clean, "needs_followup": True})
-    assert not _worker_result_allows_auto_commit(**{**clean, "recoverable": True})
-    assert not _worker_result_allows_auto_commit(
-        **{**clean, "failed_validation": [{"command": "python -m py_compile a.py"}]}
-    )
-    assert not _worker_result_allows_auto_commit(
-        **{**clean, "not_applied_writes": [{"path": "a.py"}]}
-    )
-    assert not _worker_result_allows_auto_commit(
-        **{**clean, "environment_setup_blockers": [{"path": "a.py"}]}
-    )

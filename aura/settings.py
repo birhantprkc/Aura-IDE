@@ -76,7 +76,6 @@ class AppSettings:
     system_prompt: str = ""
     planner_system_prompt: str = ""
     worker_system_prompt: str = ""
-    auto_commit_enabled: bool = True
     auto_dispatch: bool = False
     auto_approve: bool = False
     auto_summon_drones: bool = False
@@ -196,8 +195,6 @@ class AppSettings:
             s.planner_system_prompt = data["planner_system_prompt"]
         if isinstance(data.get("worker_system_prompt"), str):
             s.worker_system_prompt = data["worker_system_prompt"]
-        if isinstance(data.get("auto_commit_enabled"), bool):
-            s.auto_commit_enabled = data["auto_commit_enabled"]
         if isinstance(data.get("auto_dispatch"), bool):
             s.auto_dispatch = data["auto_dispatch"]
         if isinstance(data.get("auto_approve"), bool):

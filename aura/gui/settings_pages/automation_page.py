@@ -41,12 +41,6 @@ class AutomationPage(QWidget):
         )
         form.addRow("", self._restore_chk)
 
-        self._auto_commit_chk = GlassSwitch(
-            "Auto-commit changes after worker completes",
-            self._settings.auto_commit_enabled,
-        )
-        form.addRow("", self._auto_commit_chk)
-
         self._auto_dispatch_chk = GlassSwitch(
             "Auto-dispatch: Send specs to worker without approval",
             self._settings.auto_dispatch,
@@ -84,7 +78,6 @@ class AutomationPage(QWidget):
 
     def collect_settings(self, settings: AppSettings) -> None:
         settings.restore_last_conversation = self._restore_chk.isChecked()
-        settings.auto_commit_enabled = self._auto_commit_chk.isChecked()
         settings.auto_dispatch = self._auto_dispatch_chk.isChecked()
         settings.auto_approve = self._auto_approve_chk.isChecked()
         settings.auto_summon_drones = self._auto_summon_drones_chk.isChecked()

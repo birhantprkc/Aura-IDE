@@ -130,7 +130,6 @@ class _DispatchProxy(QObject):
         self._worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
         self._worker_temperature: float = 0.7
         self._worker_system_prompt: str = ""
-        self._auto_commit_enabled: bool = True
         self._tier1_context: str = ""
         self._max_tool_rounds: int | None = None
 
@@ -158,9 +157,6 @@ class _DispatchProxy(QObject):
 
     def set_worker_system_prompt(self, prompt: str) -> None:
         self._worker_system_prompt = prompt
-
-    def set_auto_commit_enabled(self, enabled: bool) -> None:
-        self._auto_commit_enabled = enabled
 
     def set_tier1_context(self, context: str) -> None:
         self._tier1_context = context
@@ -709,59 +705,6 @@ class _DispatchProxy(QObject):
         if isinstance(task_shape_ms, (int, float)):
             extras["task_shape_ms"] = task_shape_ms
 
-        auto_commit_allowed = _worker_result_allows_auto_commit(
-            ok=ok,
-            needs_followup=needs_followup,
-            recoverable=recoverable,
-            status=status,
-            internal_error=internal_error,
-            failed_validation=failed_validation,
-            not_applied_writes=not_applied_writes,
-            unrecovered_not_applied_writes=unrecovered_not_applied_writes,
-            environment_setup_blockers=environment_setup_blockers,
-            validation_not_run=validation_not_run,
-            result_errors=result_errors,
-        )
-        extras["auto_commit_allowed"] = auto_commit_allowed
-        extras["auto_commit_attempted"] = False
-        extras["auto_commit_success"] = None
-        extras["auto_commit_message"] = ""
-
-        # Auto-commit only after a clean final Worker result.
-        if (
-            self._auto_commit_enabled
-            and self._workspace_root is not None
-            and auto_commit_allowed
-        ):
-            written_files = _applied_modified_files(relay.write_results)
-            if written_files:
-                extras["auto_commit_attempted"] = True
-                try:
-                    from aura.git_ops import auto_commit
-
-                    success, message = auto_commit(
-                        self._workspace_root,
-                        req.goal,
-                        written_files,
-                        summary,
-                    )
-                    extras["auto_commit_success"] = success
-                    extras["auto_commit_message"] = message
-                except Exception as exc:
-                    extras["auto_commit_success"] = False
-                    extras["auto_commit_message"] = (
-                        f"Auto-commit failed: {type(exc).__name__}: {exc}"
-                    )
-
-                auto_commit_message = extras["auto_commit_message"]
-                if extras["auto_commit_success"]:
-                    summary = f"{summary.rstrip()}\nAuto-commit: {auto_commit_message}"
-                else:
-                    summary = (
-                        f"{summary.rstrip()}\n"
-                        f"Auto-commit skipped/failed: {auto_commit_message}"
-                    )
-
         spec_dict = req.to_dict()
         spec_dict["task_spec"] = task_spec.to_dict()
         record = WorkerDispatchRecord(
@@ -1090,35 +1033,6 @@ def _format_recoverable_write_failure(result: dict[str, Any]) -> str:
     if isinstance(op, dict) and op:
         op_text = f" Failed operation: {json.dumps(op, ensure_ascii=False, sort_keys=True)}."
     return f"Recoverable edit mechanics failure from {name}{target}: {error}. Next tactic: {suggested}.{op_text}"
-
-
-def _worker_result_allows_auto_commit(
-    *,
-    ok: bool,
-    needs_followup: bool,
-    recoverable: bool,
-    status: str | None,
-    internal_error: str | None,
-    failed_validation: list[dict[str, Any]],
-    not_applied_writes: list[dict[str, Any]],
-    unrecovered_not_applied_writes: list[dict[str, Any]],
-    environment_setup_blockers: list[dict[str, Any]],
-    validation_not_run: bool,
-    result_errors: list[str],
-) -> bool:
-    if not ok or needs_followup or recoverable:
-        return False
-    if status not in {WorkerOutcomeStatus.completed.value, WorkerOutcomeStatus.completed_with_caveats.value}:
-        return False
-    if internal_error or result_errors:
-        return False
-    if failed_validation or validation_not_run:
-        return False
-    if environment_setup_blockers:
-        return False
-    if not_applied_writes or unrecovered_not_applied_writes:
-        return False
-    return True
 
 
 def _unrecovered_validation_failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:

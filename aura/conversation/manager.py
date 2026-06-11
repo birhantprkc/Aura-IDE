@@ -235,6 +235,7 @@ class ConversationManager:
         syntax_validation_required: set[str] = set()
         write_attempts_by_path: dict[str, int] = {}
         worker_recovery_nudge_sent = False
+        stale_validation_notes: list[str] = []
         task_completion_context = False
         final_messages_after_completion = 0
         last_completion_final_text = ""
@@ -397,16 +398,28 @@ class ConversationManager:
                         or syntax_repair_pending
                     ):
                         if not worker_recovery_nudge_sent:
-                            instruction = (
-                                WORKER_EDIT_RECOVERY_INSTRUCTION
-                                if edit_recovery_pending
-                                else (
-                                    "Previous py_compile failed. Re-read the touched "
-                                    "Python file, repair it with patch_file or write_file only "
-                                    "for a new file or intentional full replacement, then run python -m py_compile again. "
-                                    "Finish only after py_compile passes."
+                            if edit_recovery_pending:
+                                instruction = WORKER_EDIT_RECOVERY_INSTRUCTION
+                            else:
+                                # Distinguish craft-gate failures from terminal py_compile failures
+                                any_repair_failed = any(
+                                    state.get("repair_failed")
+                                    for state in syntax_repair_required.values()
                                 )
-                            )
+                                if any_repair_failed:
+                                    instruction = (
+                                        "Previous py_compile failed. Re-read the touched "
+                                        "Python file, repair it with patch_file or write_file only "
+                                        "for a new file or intentional full replacement, then run python -m py_compile again. "
+                                        "Finish only after py_compile passes."
+                                    )
+                                else:
+                                    instruction = (
+                                        "Validation caught invalid Python in the following file(s). "
+                                        "Re-read the file, repair with patch_file (or write_file for new/full replacement), "
+                                        "then run python -m py_compile. "
+                                        "Finish only after py_compile passes."
+                                    )
                             if not edit_recovery_pending:
                                 diagnostic_parts = []
                                 for path, state in syntax_repair_required.items():
@@ -422,17 +435,31 @@ class ConversationManager:
                             self._history.append_user_text(instruction)
                             worker_recovery_nudge_sent = True
                             continue
+                        error_parts = [
+                            "Worker stopped before recovering from a recoverable failure."
+                        ]
+                        details: dict[str, Any] = {}
+                        if syntax_repair_pending:
+                            sync_paths = sorted(
+                                self._syntax_repair_paths(syntax_repair_required)
+                            )
+                            error_parts.append(
+                                f" Syntax repair pending on: {', '.join(sync_paths)}."
+                            )
+                            details["syntax_paths"] = sync_paths
+                        if edit_recovery_pending:
+                            error_parts.append(
+                                " Edit mechanics recovery pending."
+                            )
+                            details.update(self._edit_recovery_details(
+                                edit_fallback_required,
+                                line_range_reread_required,
+                            ))
                         self._finish_worker_unrecoverable(
                             on_event,
                             failure_class="worker_recovery_exhausted",
-                            error=(
-                                "Worker stopped before recovering from a recoverable edit "
-                                "mechanics failure."
-                            ),
-                            details=self._edit_recovery_details(
-                                edit_fallback_required,
-                                line_range_reread_required,
-                            ),
+                            error="".join(error_parts),
+                            details=details or None,
                         )
                         return
                     syntax_validation_required.difference_update(
@@ -510,7 +537,7 @@ class ConversationManager:
                 return
 
             def process_task(task: dict[str, Any]) -> dict[str, Any]:
-                nonlocal _terminal_dispatch, _worker_phase_boundary_info, reject_all_for_turn, worker_redispatches
+                nonlocal _terminal_dispatch, _worker_phase_boundary_info, reject_all_for_turn, worker_redispatches, stale_validation_notes
                 tool_call_id = task["id"]
                 name = task["name"]
                 args = task["args"]
@@ -595,6 +622,7 @@ class ConversationManager:
                             loop_info=loop_info,
                             syntax_repair_required=syntax_repair_required,
                             syntax_validation_required=syntax_validation_required,
+                            stale_validation_notes=stale_validation_notes,
                         )
                     if self._is_recoverable_phase_boundary(loop_info):
                         _worker_phase_boundary_info = loop_info
@@ -713,6 +741,10 @@ class ConversationManager:
 
             # History is not thread-safe. Reorder results by original tool_call_id order and append.
             results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
+
+            if stale_validation_notes:
+                note_text = "\n".join(stale_validation_notes)
+                self._history.append_user_text(note_text)
 
             completed_dispatch_for_final = False
             completed_tool_result_for_final = False
@@ -1344,6 +1376,7 @@ class ConversationManager:
         loop_info: dict[str, Any] | None,
         syntax_repair_required: dict[str, dict[str, Any]],
         syntax_validation_required: set[str],
+        stale_validation_notes: list[str] | None = None,
     ) -> None:
         payload = loop_info.get("_terminal_payload") if isinstance(loop_info, dict) else None
         if not isinstance(payload, dict):
@@ -1363,6 +1396,13 @@ class ConversationManager:
             return
         if payload.get("ok"):
             for path in targets:
+                state = self._syntax_repair_state_for_path(syntax_repair_required, path)
+                if state and state.get("awaiting_validation") is False:
+                    if stale_validation_notes is not None:
+                        stale_validation_notes.append(
+                            "Stale validation cleared: "
+                            f"py_compile passed for {path} after a prior craft-gate rejection."
+                        )
                 self._pop_syntax_repair_state(syntax_repair_required, path)
                 self._discard_syntax_validation_path(syntax_validation_required, path)
             return
@@ -1426,16 +1466,26 @@ class ConversationManager:
             return _normalize_worker_path(str(args.get("path", ""))) in syntax_paths
         if name == "run_terminal_command":
             command = str(args.get("command", ""))
-            if not re.search(
+            # py_compile targeting a broken file
+            if re.search(
                 r"(?i)(?:^|[;&|]\s*)"
                 r"(?:(?:\"[^\"]*python3?(?:\.exe)?\")|(?:'[^']*python3?(?:\.exe)?')|"
                 r"(?:[A-Za-z]:)?[A-Za-z0-9_./\\\-]*python3?(?:\.exe)?|py)"
                 r"\s+-m\s+py_compile\b",
                 command,
             ):
-                return False
-            targets = ConversationManager._py_compile_targets(command)
-            return bool(targets) and any(target in syntax_paths for target in targets)
+                targets = ConversationManager._py_compile_targets(command)
+                return bool(targets) and any(target in syntax_paths for target in targets)
+            # pytest targeting a broken file (substring check)
+            if re.search(
+                r"(?i)(?:^|[;&|]\s*)"
+                r"(?:(?:\"[^\"]*python3?(?:\.exe)?\")|(?:'[^']*python3?(?:\.exe)?')|"
+                r"(?:[A-Za-z]:)?[A-Za-z0-9_./\\\-]*python3?(?:\.exe)?|py)"
+                r"\s+-m\s+pytest\b",
+                command,
+            ):
+                return any(path in command for path in syntax_paths)
+            return False
         return False
 
     @staticmethod

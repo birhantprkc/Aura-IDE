@@ -189,11 +189,19 @@ def test_syntax_repair_allows_python3_py_compile(tmp_workspace):
 def test_syntax_repair_blocks_unrelated_terminal_commands(tmp_workspace):
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
 
+    # pytest with no specific file matching syntax_paths is still blocked
     assert not manager._syntax_repair_tool_allowed(
         "run_terminal_command",
         {"command": "python -m pytest tests"},
         {"database.py"},
     )
+    # pytest referencing a file whose name matches a syntax_path IS now allowed
+    assert manager._syntax_repair_tool_allowed(
+        "run_terminal_command",
+        {"command": "python -m pytest tests/test_database.py"},
+        {"database.py"},
+    )
+    # echo is not an allowed terminal command
     assert not manager._syntax_repair_tool_allowed(
         "run_terminal_command",
         {"command": "echo py_compile database.py"},
@@ -412,3 +420,104 @@ def test_cd_wrapper_is_stripped_from_terminal_command(tmp_workspace):
     for raw, expected in cases:
         result = _CD_WRAPPER_RE.sub('', raw, count=1).lstrip()
         assert result == expected, f"Failed on {raw!r}: got {result!r}"
+
+
+def test_syntax_repair_allows_focused_pytest(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+
+    assert manager._syntax_repair_tool_allowed(
+        "run_terminal_command",
+        {"command": "python -m pytest tests/test_database.py"},
+        {"database.py"},
+    )
+
+
+def test_syntax_repair_blocks_broad_pytest(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+
+    assert not manager._syntax_repair_tool_allowed(
+        "run_terminal_command",
+        {"command": "python -m pytest tests"},
+        {"database.py"},
+    )
+
+
+def test_stale_validation_note_on_passing_py_compile(tmp_workspace):
+    (tmp_workspace / "database.py").write_text("x = 1")
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    syntax_repair_required = {
+        "database.py": {"awaiting_validation": False, "failed_repairs": 1}
+    }
+    syntax_validation_required = set()
+    stale_notes: list[str] = []
+
+    manager._update_syntax_state_from_terminal(
+        args={"command": "python -m py_compile database.py"},
+        loop_info={
+            "_terminal_payload": {
+                "ok": True,
+                "command": "python -m py_compile database.py",
+                "output": "",
+            }
+        },
+        syntax_repair_required=syntax_repair_required,
+        syntax_validation_required=syntax_validation_required,
+        stale_validation_notes=stale_notes,
+    )
+
+    assert len(stale_notes) == 1
+    assert "Stale validation cleared" in stale_notes[0]
+    assert "database.py" in stale_notes[0]
+    assert syntax_repair_required == {}
+
+
+def test_read_only_tools_available_after_syntax_failure(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+
+    for tool in (
+        "read_file",
+        "read_files",
+        "grep_search",
+        "read_file_outline",
+        "search_codebase",
+        "find_usages",
+        "glob",
+        "list_directory",
+    ):
+        assert manager._syntax_repair_tool_allowed(
+            tool,
+            {"path": "any.py"},
+            {"broken.py"},
+        ), f"{tool} should be allowed during syntax repair"
+
+
+def test_patch_file_allowed_for_broken_file_after_syntax_failure(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+
+    assert manager._syntax_repair_tool_allowed(
+        "patch_file",
+        {"path": "broken.py"},
+        {"broken.py"},
+    )
+    # Unrelated path is still blocked
+    assert not manager._syntax_repair_tool_allowed(
+        "patch_file",
+        {"path": "other.py"},
+        {"broken.py"},
+    )
+
+
+def test_py_compile_allowed_for_broken_file_after_syntax_failure(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+
+    assert manager._syntax_repair_tool_allowed(
+        "run_terminal_command",
+        {"command": "python -m py_compile broken.py"},
+        {"broken.py"},
+    )
+    # Non-py_compile terminal command is still blocked
+    assert not manager._syntax_repair_tool_allowed(
+        "run_terminal_command",
+        {"command": "echo hello"},
+        {"broken.py"},
+    )

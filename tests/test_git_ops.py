@@ -1,4 +1,4 @@
-"""Tests for aura.git_ops — git integration, auto-commit, snapshots."""
+"""Tests for aura.git_ops — git integration, snapshots, and checkpoints."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import subprocess
 from pathlib import Path
 
 from aura.git_ops import (
-    auto_commit,
     commit_changed_files,
     commit_diff,
     ensure_aura_gitignored,
@@ -110,168 +109,6 @@ class TestIsGitRepo:
             _make_run([subprocess.TimeoutExpired("git", 5)]),
         )
         assert is_git_repo(tmp_path) is False
-
-
-# ===================================================================
-# TestAutoCommit
-# ===================================================================
-
-
-class TestAutoCommit:
-    """auto_commit() — stage and commit changed files."""
-
-    # -------------------- early returns --------------------
-
-    def test_not_a_repo(self, monkeypatch, tmp_path: Path) -> None:
-        """Return early when the workspace is not a git repo."""
-        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: False)
-        ok, msg = auto_commit(tmp_path, "goal", ["f.txt"], "summary")
-        assert ok is False
-        assert msg == "Not a git repository."
-
-    def test_empty_files_list(self, monkeypatch, tmp_path: Path) -> None:
-        """Return early when the files list is empty."""
-        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
-        ok, msg = auto_commit(tmp_path, "goal", [], "summary")
-        assert ok is False
-        assert msg == "No files to commit."
-
-    # -------------------- git add failure --------------------
-
-    def test_git_add_fails_called_process_error(
-        self, monkeypatch, tmp_path: Path,
-    ) -> None:
-        """Return failure when git add raises CalledProcessError."""
-        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            subprocess, "run",
-            _make_run([subprocess.CalledProcessError(1, ["git", "add"])]),
-        )
-        ok, msg = auto_commit(tmp_path, "goal", ["f.txt"], "summary")
-        assert ok is False
-        assert msg == "git add failed."
-
-    def test_git_add_fails_timeout(self, monkeypatch, tmp_path: Path) -> None:
-        """Return failure when git add times out."""
-        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            subprocess, "run",
-            _make_run([subprocess.TimeoutExpired("git add", 10)]),
-        )
-        ok, msg = auto_commit(tmp_path, "goal", ["f.txt"], "summary")
-        assert ok is False
-        assert msg == "git add failed."
-
-    # -------------------- no changes to stage --------------------
-
-    def test_no_changes_to_commit(self, monkeypatch, tmp_path: Path) -> None:
-        """Return early when diff --cached --quiet returns 0 (no staged changes).
-
-        Also verify that ``git reset`` was called to unstage by ensuring
-        all side-effects (including the reset call) are consumed.
-        """
-        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
-        # Three calls: git add, git diff (returns 0 -> no changes), git reset
-        monkeypatch.setattr(
-            subprocess, "run", _make_run([
-                MockResult(),              # git add — OK
-                MockResult(returncode=0),  # git diff — no changes
-                MockResult(),              # git reset — unstage
-            ])
-        )
-        ok, msg = auto_commit(tmp_path, "goal", ["f.txt"], "summary")
-        assert ok is False
-        assert msg == "No changes to commit."
-
-    # -------------------- successful commit --------------------
-
-    def test_success(self, monkeypatch, tmp_path: Path) -> None:
-        """Return success when all git operations succeed."""
-        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
-        # git add, git diff (returns 1 -> has changes), git commit
-        monkeypatch.setattr(
-            subprocess, "run", _make_run([
-                MockResult(),              # git add — OK
-                MockResult(returncode=1),  # git diff — changes exist
-                MockResult(),              # git commit — OK
-            ])
-        )
-        ok, msg = auto_commit(tmp_path, "goal", ["f.txt"], "summary")
-        assert ok is True
-        assert msg == "Committed: goal"
-
-    # -------------------- commit failure --------------------
-
-    def test_commit_fails_called_process_error(
-        self, monkeypatch, tmp_path: Path,
-    ) -> None:
-        """Return failure when git commit raises CalledProcessError.
-
-        Verify that ``git reset`` is called on commit failure.
-        """
-        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
-        # git add, git diff (returns 1), git commit (raises), git reset
-        monkeypatch.setattr(
-            subprocess, "run", _make_run([
-                MockResult(),                            # git add — OK
-                MockResult(returncode=1),                # git diff — changes exist
-                subprocess.CalledProcessError(           # git commit — fails
-                    1, ["git", "commit", "-m", "msg"]
-                ),
-                MockResult(),                            # git reset — unstage
-            ])
-        )
-        ok, msg = auto_commit(tmp_path, "goal", ["f.txt"], "summary")
-        assert ok is False
-        assert msg == "git commit failed."
-
-    def test_commit_fails_timeout(self, monkeypatch, tmp_path: Path) -> None:
-        """Return failure when git commit times out.
-
-        Verify that ``git reset`` is called on commit failure.
-        """
-        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
-        # git add, git diff (returns 1), git commit (times out), git reset
-        monkeypatch.setattr(
-            subprocess, "run", _make_run([
-                MockResult(),                            # git add — OK
-                MockResult(returncode=1),                # git diff — changes exist
-                subprocess.TimeoutExpired("git commit", 10),  # git commit — times out
-                MockResult(),                            # git reset — unstage
-            ])
-        )
-        ok, msg = auto_commit(tmp_path, "goal", ["f.txt"], "summary")
-        assert ok is False
-        assert msg == "git commit failed."
-
-    # -------------------- message truncation --------------------
-
-    def test_message_truncation(self, monkeypatch, tmp_path: Path) -> None:
-        """Truncate the commit message when goal + summary exceeds 2000 chars."""
-        monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
-
-        # The goal becomes the subject and is truncated to 72 chars.
-        # To exceed 2000 chars total, we must use a very long summary.
-        long_goal = "short goal"
-        long_summary = "s" * 2500  # total > 2000
-
-        captured_message: list[str] = []
-
-        def _tracking_run(*args: object, **kwargs: object) -> MockResult:
-            cmd = args[0]
-            if isinstance(cmd, list) and len(cmd) >= 4 and cmd[:2] == ["git", "commit"]:
-                captured_message.append(str(cmd[3]))
-            return MockResult(returncode=1)
-
-        monkeypatch.setattr(subprocess, "run", _tracking_run)
-        ok, msg = auto_commit(tmp_path, long_goal, ["f.txt"], long_summary)
-        assert ok is True
-        assert msg == f"Committed: {long_goal}"
-        assert len(captured_message) == 1
-        committed_msg = captured_message[0]
-        assert committed_msg.endswith("... (truncated)")
-        # The truncated part should be <= 2000 + len("\n... (truncated)")
-        assert len(committed_msg) <= 2000 + len("\n... (truncated)")
 
 
 # ===================================================================

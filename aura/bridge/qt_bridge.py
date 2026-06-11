@@ -61,7 +61,6 @@ from aura.conversation import (
     ConversationManager,
     History,
 )
-from aura.conversation.tool_limits import WRITE_TOOLS
 from aura.conversation.tools import (
     ToolRegistry,
 )
@@ -102,7 +101,6 @@ class _Worker(QObject):
         thinking: ThinkingMode,
         temperature: float = 0.7,
         workspace_root: Path | None = None,
-        auto_commit_enabled: bool = True,
         max_tool_rounds: int | None = None,
     ) -> None:
         super().__init__()
@@ -114,9 +112,7 @@ class _Worker(QObject):
         self._thinking = thinking
         self._temperature = temperature
         self._workspace_root = workspace_root
-        self._auto_commit_enabled = auto_commit_enabled
         self._max_tool_rounds = max_tool_rounds
-        self._write_paths: list[str] = []
 
     @Slot()
     def run(self) -> None:
@@ -137,19 +133,6 @@ class _Worker(QObject):
                 hook_name='generate_planner_code',
                 max_tool_rounds=self._max_tool_rounds,
             )
-            # Auto-commit writes in single mode
-            if self._auto_commit_enabled and self._write_paths and self._workspace_root is not None:
-                try:
-                    from aura.git_ops import auto_commit
-                    goal_msg = f"AI-assisted edit: {', '.join(self._write_paths)}"
-                    summary_msg = f"Modified {len(self._write_paths)} file(s)"
-                    threading.Thread(
-                        target=auto_commit,
-                        args=(self._workspace_root, goal_msg, self._write_paths, summary_msg),
-                        daemon=True,
-                    ).start()
-                except Exception:
-                    pass  # Never block the chat on git failures
         except Exception as exc:
             from aura.config import redact_secrets
             self.apiError.emit(-1, redact_secrets(f"{type(exc).__name__}: {exc}"))
@@ -184,16 +167,6 @@ class _Worker(QObject):
                 self.streamDone.emit(ev.finish_reason or "", ev.full_message)
         elif isinstance(ev, ToolResult):
             self.toolResultEmitted.emit(ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {})
-            # Track successful writes for auto-commit in single mode
-            if ev.name in WRITE_TOOLS and ev.ok:
-                try:
-                    import json
-                    parsed = json.loads(ev.result)
-                    path = parsed.get("path")
-                    if isinstance(path, str) and path:
-                        self._write_paths.append(path)
-                except Exception:
-                    pass
         elif isinstance(ev, WorkerDispatchRequested):
             self.workerDispatchRequested.emit(
                 ev.tool_call_id, ev.goal, list(ev.files), ev.spec, ev.acceptance, ev.summary
@@ -298,7 +271,6 @@ class ConversationBridge(QObject):
         self._temperature: float = 0.7
         self._single_system_prompt: str = ""
         self._planner_system_prompt: str = ""
-        self._auto_commit_enabled: bool = True
         self._tier1_context: str = ""
         self._auto_dispatch: bool = False
         self._pre_worker_sha: str | None = None
@@ -428,10 +400,6 @@ class ConversationBridge(QObject):
     def set_worker_temperature(self, temperature: float) -> None:
         self._dispatch_proxy.set_worker_temperature(temperature)
 
-    def set_auto_commit_enabled(self, enabled: bool) -> None:
-        self._auto_commit_enabled = enabled
-        self._dispatch_proxy.set_auto_commit_enabled(enabled)
-
     def set_auto_dispatch(self, enabled: bool) -> None:
         self._auto_dispatch = enabled
 
@@ -548,7 +516,6 @@ class ConversationBridge(QObject):
             thinking=thinking,
             temperature=self._temperature,
             workspace_root=self._registry.workspace_root,
-            auto_commit_enabled=self._auto_commit_enabled,
             max_tool_rounds=max_tool_rounds,
         )
         self._worker.moveToThread(self._thread)

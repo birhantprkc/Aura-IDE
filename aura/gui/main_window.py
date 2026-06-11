@@ -109,7 +109,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._settings.planner_system_prompt,
             self._settings.worker_system_prompt,
         )
-        self._bridge.set_auto_commit_enabled(self._settings.auto_commit_enabled)
         self._bridge.set_auto_dispatch(self._settings.auto_dispatch)
         self._bridge.set_auto_approve(self._settings.auto_approve)
 
@@ -1407,7 +1406,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             settings.planner_system_prompt,
             settings.worker_system_prompt,
         )
-        self._bridge.set_auto_commit_enabled(settings.auto_commit_enabled)
         self._bridge.set_auto_dispatch(settings.auto_dispatch)
         self._bridge.set_auto_approve(settings.auto_approve)
         self._toolbar.set_auto_dispatch(settings.auto_dispatch)

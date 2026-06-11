@@ -1,8 +1,7 @@
-"""Git integration for auto-commit on worker writes and /undo command.
+"""Git integration for /undo and repository queries.
 
 Provides:
 - is_git_repo: check if a directory is inside a git working tree
-- auto_commit: stage and commit changed files with an AI-generated message
 - undo_last_commit: soft-reset HEAD~1, keeping changes in the working directory
 """
 
@@ -80,85 +79,6 @@ def build_commit_message(goal: str, files: list[str], summary: str) -> str:
         message = message[:max_len] + "\n... (truncated)"
 
     return message
-
-
-def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str) -> tuple[bool, str]:
-    """Stage the listed files and create a commit. Returns (success, message)."""
-    if not is_git_repo(workspace_root):
-        return False, "Not a git repository."
-    if not files:
-        return False, "No files to commit."
-
-    # Stage files
-    try:
-        subprocess.run(
-            ["git", "add", "--"] + files,
-            cwd=str(workspace_root),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=True,
-            timeout=10,
-            **get_subprocess_kwargs(),
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return False, "git add failed."
-
-    # Check if there are staged changes
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--quiet"],
-            cwd=str(workspace_root),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=5,
-            **get_subprocess_kwargs(),
-        )
-        if result.returncode == 0:
-            # No changes to commit — unstage and return
-            subprocess.run(
-                ["git", "reset", "--"] + files,
-                cwd=str(workspace_root),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                **get_subprocess_kwargs(),
-            )
-            return False, "No changes to commit."
-    except subprocess.CalledProcessError:
-        pass
-
-    message = build_commit_message(goal, files, summary)
-
-    try:
-        subprocess.run(
-            ["git", "commit", "-m", message],
-            cwd=str(workspace_root),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=True,
-            timeout=10,
-            **get_subprocess_kwargs(),
-        )
-        return True, f"Committed: {goal}"
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        # Unstage on failure
-        subprocess.run(
-            ["git", "reset", "--"] + files,
-            cwd=str(workspace_root),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            **get_subprocess_kwargs(),
-        )
-        return False, "git commit failed."
 
 
 def recent_commits(workspace_root: Path, limit: int = 30) -> tuple[bool, list[dict], str]:
