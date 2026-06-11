@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
 
 from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
+from aura.gui.cards._helpers import _MarkdownTextBlock
+from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 
 
@@ -88,7 +90,7 @@ class DroneRunCard(QFrame):
             self._meta_elapsed.setText(f"{elapsed:.1f}s")
         else:
             self._meta_elapsed.setText(f"{elapsed / 60:.1f}m")
-        self._meta_tool_count.setText(f"Tools: {self._tool_count}")
+        self._meta_tool_count.setText(f"· Tools: {self._tool_count}")
 
     def _build_ui(self) -> None:
         self.setObjectName("droneRunCard")
@@ -114,7 +116,7 @@ class DroneRunCard(QFrame):
         self._status_badge = QLabel("summoning")
         self._status_badge.setStyleSheet(
             f"color: {WARN}; font-size: 11px; font-weight: 600; "
-            f"padding: 2px 8px; border-radius: 4px; background: #1a1a24; border: 1px solid {WARN};"
+            f"padding: 2px 10px; border-radius: 4px; background: #1a1a24; border: 1px solid {WARN};"
         )
         header.addWidget(self._status_badge)
 
@@ -159,14 +161,8 @@ class DroneRunCard(QFrame):
         self._report_area.setStyleSheet(
             f"QFrame {{ background: {BG}; border: 1px solid {BORDER}; border-radius: 4px; }}"
         )
-        report_layout = QVBoxLayout(self._report_area)
-        report_layout.setContentsMargins(8, 6, 8, 6)
-
-        self._report_label = QLabel("")
-        self._report_label.setWordWrap(True)
-        self._report_label.setTextFormat(0)  # PlainText
-        self._report_label.setStyleSheet(f"color: {FG}; font-size: 13px; background: transparent;")
-        report_layout.addWidget(self._report_label)
+        self._report_layout = QVBoxLayout(self._report_area)
+        self._report_layout.setContentsMargins(8, 6, 8, 6)
 
         self._report_area.hide()
         layout.addWidget(self._report_area)
@@ -213,7 +209,7 @@ class DroneRunCard(QFrame):
         self._copy_btn = QPushButton("Copy Report")
         self._copy_btn.setStyleSheet(
             f"QPushButton {{ background: #1a1a24; color: {FG_DIM}; "
-            f"border: 1px solid {BORDER}; border-radius: 4px; "
+            f"border: 1px solid {BORDER}; border-radius: 6px; "
             f"padding: 4px 16px; font-size: 12px; }}"
             f"QPushButton:hover {{ background: #222230; color: {FG}; }}"
         )
@@ -226,7 +222,7 @@ class DroneRunCard(QFrame):
         self._cancel_btn = QPushButton("Cancel")
         self._cancel_btn.setStyleSheet(
             f"QPushButton {{ background: #2a1a1a; color: {DANGER}; "
-            f"border: 1px solid {DANGER}; border-radius: 4px; "
+            f"border: 1px solid {DANGER}; border-radius: 6px; "
             f"padding: 4px 16px; font-size: 12px; }}"
             f"QPushButton:hover {{ background: #3a2020; }}"
         )
@@ -236,7 +232,7 @@ class DroneRunCard(QFrame):
         self._close_btn = QPushButton("Close")
         self._close_btn.setStyleSheet(
             f"QPushButton {{ background: #1a1a24; color: {FG_DIM}; "
-            f"border: 1px solid {BORDER}; border-radius: 4px; "
+            f"border: 1px solid {BORDER}; border-radius: 6px; "
             f"padding: 4px 16px; font-size: 12px; }}"
             f"QPushButton:hover {{ background: #222230; color: {FG}; }}"
         )
@@ -321,19 +317,19 @@ class DroneRunCard(QFrame):
             color = WARN if normalized == "waiting_for_approval" else ACCENT
             self._status_badge.setStyleSheet(
                 f"color: {color}; font-size: 11px; font-weight: 600; "
-                f"padding: 2px 8px; border-radius: 4px; "
+                f"padding: 2px 10px; border-radius: 4px; "
                 f"background: #1a1a24; border: 1px solid {color};"
             )
         elif normalized == "running":
             self._status_badge.setStyleSheet(
                 f"color: {SUCCESS}; font-size: 11px; font-weight: 600; "
-                f"padding: 2px 8px; border-radius: 4px; "
+                f"padding: 2px 10px; border-radius: 4px; "
                 f"background: #0a1a10; border: 1px solid {SUCCESS};"
             )
         elif normalized == "completed":
             self._status_badge.setStyleSheet(
                 f"color: {SUCCESS}; font-size: 11px; font-weight: 600; "
-                f"padding: 2px 8px; border-radius: 4px; "
+                f"padding: 2px 10px; border-radius: 4px; "
                 f"background: #0a1a10; border: 1px solid {SUCCESS};"
             )
             self._cancel_btn.hide()
@@ -341,7 +337,7 @@ class DroneRunCard(QFrame):
         elif normalized == "cancelled":
             self._status_badge.setStyleSheet(
                 f"color: {FG_MUTED}; font-size: 11px; font-weight: 600; "
-                f"padding: 2px 8px; border-radius: 4px; "
+                f"padding: 2px 10px; border-radius: 4px; "
                 f"background: #18191f; border: 1px solid {FG_MUTED};"
             )
             self._cancel_btn.hide()
@@ -349,7 +345,7 @@ class DroneRunCard(QFrame):
         elif normalized in ("failed", "timed_out"):
             self._status_badge.setStyleSheet(
                 f"color: {DANGER}; font-size: 11px; font-weight: 600; "
-                f"padding: 2px 8px; border-radius: 4px; "
+                f"padding: 2px 10px; border-radius: 4px; "
                 f"background: #1a0a0a; border: 1px solid {DANGER};"
             )
             self._cancel_btn.hide()
@@ -364,7 +360,7 @@ class DroneRunCard(QFrame):
         """Increment tool count and log for expander."""
         self._tool_count += 1
         self._tool_calls_log.append((call_id, name, True, ""))
-        self._meta_tool_count.setText(f"Tools: {self._tool_count}")
+        self._meta_tool_count.setText(f"· Tools: {self._tool_count}")
         self._tool_toggle.setText(f"Show tool output ({self._tool_count} calls)")
 
         # If expanded, append live to the tool output area
@@ -420,6 +416,14 @@ class DroneRunCard(QFrame):
         self._live_content += f"\n⚠ API Error ({status_code}): {message}"
         self._live_label.setText(self._live_content)
 
+    def _clear_report_content(self) -> None:
+        """Remove all widgets from the report layout."""
+        while self._report_layout.count():
+            item = self._report_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
     def on_receipt_ready(self, receipt: DroneReceipt) -> None:
         """Transform card into final-report mode."""
         self._receipt = receipt
@@ -435,10 +439,15 @@ class DroneRunCard(QFrame):
 
         # Switch from live to report
         self._live_area.hide()
+        self._clear_report_content()
         if receipt.summary:
-            self._report_label.setText(receipt.summary)
+            html = _render_markdown_with_code(receipt.summary)
+            md_block = _MarkdownTextBlock(html, self._report_area)
+            self._report_layout.addWidget(md_block)
         else:
-            self._report_label.setText("(no summary)")
+            label = QLabel("(no summary)")
+            label.setStyleSheet(f"color: {FG_DIM}; font-size: 13px; background: transparent;")
+            self._report_layout.addWidget(label)
         self._report_area.show()
 
         self._copy_btn.show()
@@ -474,16 +483,21 @@ class DroneRunCard(QFrame):
         self._status_badge.setText(status.upper())
         self._status_badge.setStyleSheet(
             f"color: {status_color}; font-size: 11px; font-weight: 600; "
-            f"padding: 2px 8px; border-radius: 4px; "
+            f"padding: 2px 10px; border-radius: 4px; "
             f"background: {status_color}22; border: 1px solid {status_color};"
         )
 
         # Hide live, show report
         self._live_area.hide()
+        self._clear_report_content()
         if receipt.summary:
-            self._report_label.setText(receipt.summary)
+            html = _render_markdown_with_code(receipt.summary)
+            md_block = _MarkdownTextBlock(html, self._report_area)
+            self._report_layout.addWidget(md_block)
         else:
-            self._report_label.setText("(no summary)")
+            label = QLabel("(no summary)")
+            label.setStyleSheet(f"color: {FG_DIM}; font-size: 13px; background: transparent;")
+            self._report_layout.addWidget(label)
         self._report_area.show()
 
         self._cancel_btn.hide()

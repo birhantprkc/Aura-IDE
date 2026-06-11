@@ -1060,6 +1060,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             created_by=drone.created_by,
             created_at=drone.created_at,
             updated_at=drone.updated_at,
+            capability_requirements=drone.capability_requirements,
+            capability_bindings=drone.capability_bindings,
+            setup_steps=drone.setup_steps,
+            first_run_test=drone.first_run_test,
         )
 
     def _handle_summon_drone_result(self, tool_id: str, extras: dict) -> None:

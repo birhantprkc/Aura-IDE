@@ -78,6 +78,8 @@ class DroneReportsWindow(QDialog):
 
         header_layout.addLayout(title_col)
 
+        header_layout.addStretch(1)
+
         close_btn = QToolButton(header)
         close_btn.setText("✕")
         close_btn.setAutoRaise(True)
@@ -87,8 +89,6 @@ class DroneReportsWindow(QDialog):
         )
         close_btn.clicked.connect(self.close)
         header_layout.addWidget(close_btn)
-
-        header_layout.addStretch(1)
 
         outer.addWidget(header)
 
