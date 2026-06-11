@@ -363,10 +363,27 @@ class ConversationManager:
             if not tool_calls:
                 if mode == "worker":
                     if self._has_terminal_syntax_failure(syntax_repair_required):
+                        if not worker_recovery_nudge_sent:
+                            diagnostic_parts = []
+                            for path, state in syntax_repair_required.items():
+                                if state.get("repair_failed") and state.get("error"):
+                                    diagnostic_parts.append(f"{path}:\n{state['error']}")
+                            diagnostic_text = "\n\n".join(diagnostic_parts)
+                            instruction = (
+                                "Terminal py_compile still failing after repair. "
+                                "Re-read the failing Python file, fix the syntax error, "
+                                "then re-run python -m py_compile. "
+                                "Finish only after py_compile passes."
+                            )
+                            if diagnostic_text:
+                                instruction += f"\n\nDiagnostic output:\n{diagnostic_text}"
+                            self._history.append_user_text(instruction)
+                            worker_recovery_nudge_sent = True
+                            continue
                         self._finish_worker_unrecoverable(
                             on_event,
                             failure_class="syntax_invalid",
-                            error="Python syntax still fails after one repair attempt.",
+                            error="Python syntax still fails after two repair attempts.",
                         )
                         return
                     edit_recovery_pending = bool(
@@ -390,6 +407,18 @@ class ConversationManager:
                                     "Finish only after py_compile passes."
                                 )
                             )
+                            if not edit_recovery_pending:
+                                diagnostic_parts = []
+                                for path, state in syntax_repair_required.items():
+                                    if (
+                                        not state.get("awaiting_validation")
+                                        and not state.get("repair_failed")
+                                        and state.get("error")
+                                    ):
+                                        diagnostic_parts.append(f"{path}:\n{state['error']}")
+                                diagnostic_text = "\n\n".join(diagnostic_parts)
+                                if diagnostic_text:
+                                    instruction += f"\n\nDiagnostic output:\n{diagnostic_text}"
                             self._history.append_user_text(instruction)
                             worker_recovery_nudge_sent = True
                             continue
@@ -1018,17 +1047,21 @@ class ConversationManager:
             target = sorted(syntax_paths)[0]
             state = self._syntax_repair_state_for_path(syntax_repair_required, target)
             repair_failed = bool(state.get("repair_failed"))
+            error_msg = (
+                f"Python syntax is invalid in {target}. "
+                + (
+                    "Syntax still fails after one repair attempt."
+                    if repair_failed
+                    else "Repair that file and pass py_compile before any unrelated tool call."
+                )
+            )
+            diagnostic = state.get("error", "")
+            if diagnostic:
+                error_msg += f"\n\nDiagnostic output:\n{diagnostic}"
             payload = self._recovery_payload(
                 path=target,
                 failure_class="syntax_invalid",
-                error=(
-                    f"Python syntax is invalid in {target}. "
-                    + (
-                        "Syntax still fails after one repair attempt."
-                        if repair_failed
-                        else "Repair that file and pass py_compile before any unrelated tool call."
-                    )
-                ),
+                error=error_msg,
                 suggested_next_tool="patch_file",
                 suggested_next_action=(
                     "Repair the touched file, then run python -m py_compile on it before continuing validation. "
