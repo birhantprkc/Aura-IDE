@@ -1177,6 +1177,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             return
         runner = record["runner"]
         drone = record["drone"]
+        logger.debug("[DroneRun] _on_drone_finished start run_id=%s", run_id)
         logger.debug("[DroneRun] finished  run_id=%s  drone=%s", run_id, drone.name)
         # Pip state already reflects the final status via statusChanged signal;
         # schedule timed removal so the user can see the final badge briefly.
@@ -1187,8 +1188,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._drone_runner = None
             self._companion.set_drone_runner(None)
             self._drone_runner_thread = None
-        # Refresh run history in drone bay so completed run appears immediately.
-        self._drone_bay.refresh_run_history()
+        logger.debug("[DroneRun] _on_drone_finished end run_id=%s", run_id)
+        QTimer.singleShot(200, self._deferred_drone_bay_history_refresh)
+
+    def _deferred_drone_bay_history_refresh(self) -> None:
+        """Refresh Drone Bay history only if the bay is currently visible."""
+        logger.debug("[DroneRun] _deferred_drone_bay_history_refresh visible=%s", self._drone_bay.isVisible())
+        if self._drone_bay.isVisible():
+            self._drone_bay.refresh_run_history()
 
     def _on_drone_receipt(self, receipt: object) -> None:
         """Handle completed drone receipt — save to disk."""

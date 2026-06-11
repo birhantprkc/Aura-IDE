@@ -149,7 +149,7 @@ class DroneBayPane(QWidget):
             return
 
         # Build last-run lookup: map drone_id -> most recent run data
-        all_runs = RunHistoryStore.list_runs(self._workspace_root)
+        all_runs = RunHistoryStore.list_run_summaries(self._workspace_root)
         last_run_by_drone: dict[str, dict] = {}
         for run_data in all_runs:
             did = run_data.get("drone_id", "")
@@ -302,7 +302,7 @@ class DroneBayPane(QWidget):
         )
         if last_run_info:
             elapsed = last_run_info.get("elapsed_seconds", 0)
-            tool_calls = len(last_run_info.get("tool_calls", []))
+            tool_calls = last_run_info.get("tool_calls_count", 0)
             if elapsed < 60:
                 dur_str = f"{elapsed:.0f}s"
             else:
@@ -507,7 +507,7 @@ class DroneBayPane(QWidget):
 
         # Query runs filtered to this drone
         if self._workspace_root is not None:
-            drone_runs = RunHistoryStore.list_runs(self._workspace_root)
+            drone_runs = RunHistoryStore.list_run_summaries(self._workspace_root)
             filtered = [r for r in drone_runs if r.get("drone_id") == drone.id][:5]
         else:
             filtered = []
@@ -555,7 +555,7 @@ class DroneBayPane(QWidget):
         if self._workspace_root is None:
             return
 
-        runs = RunHistoryStore.list_runs(self._workspace_root)
+        runs = RunHistoryStore.list_run_summaries(self._workspace_root)
         if not runs:
             return
 
@@ -671,7 +671,7 @@ class DroneBayPane(QWidget):
         layout.addWidget(dur_label)
 
         # Tool count
-        tool_count = len(run_data.get("tool_calls", []))
+        tool_count = run_data.get("tool_calls_count", 0)
         calls_label = QLabel(f"{tool_count} calls")
         calls_label.setStyleSheet(f"font-size: 11px; color: {FG_MUTED}; background: transparent;")
         layout.addWidget(calls_label)

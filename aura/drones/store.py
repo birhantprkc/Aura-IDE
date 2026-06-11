@@ -261,6 +261,39 @@ class RunHistoryStore:
         return runs[:limit]
 
     @staticmethod
+    def list_run_summaries(workspace_root: Path, limit: int = 50) -> list[dict]:
+        """Return lightweight run summaries sorted most-recent-first.
+
+        Only includes fields needed for history cards: run_id, drone_id,
+        drone_name, status, started_at, elapsed_seconds, tool_calls_count.
+        Does NOT load tool_calls, summary, errors, or output_contract.
+        """
+        d = RunHistoryStore.history_dir(workspace_root)
+        if not d.exists():
+            return []
+        runs: list[dict] = []
+        for p in d.glob("*.json"):
+            try:
+                with open(p, encoding="utf-8") as f:
+                    data = json.load(f)
+                summary = {
+                    "run_id": data.get("run_id", ""),
+                    "drone_id": data.get("drone_id", ""),
+                    "drone_name": data.get("drone_name", ""),
+                    "status": data.get("status", ""),
+                    "started_at": data.get("started_at", ""),
+                    "elapsed_seconds": data.get("elapsed_seconds", 0),
+                    "tool_calls_count": len(data.get("tool_calls", [])),
+                }
+                runs.append(summary)
+            except Exception:
+                logger.warning("Skipping invalid run file: %s", p)
+                continue
+        runs.sort(key=lambda r: r.get("started_at", ""), reverse=True)
+        logger.debug("[RunHistory] list_run_summaries: %d runs in %s", len(runs), d)
+        return runs[:limit]
+
+    @staticmethod
     def load_run(workspace_root: Path, run_id: str) -> DroneReceipt | None:
         d = RunHistoryStore.history_dir(workspace_root)
         path = d / f"{run_id}.json"

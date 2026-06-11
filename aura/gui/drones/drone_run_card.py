@@ -1,7 +1,10 @@
 """Real-time Drone run progress card — one per active run."""
 from __future__ import annotations
 
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -69,6 +72,7 @@ class DroneRunCard(QFrame):
         self._tool_output_expanded = False
         self._live_content = ""
         self._elapsed_timer: QTimer | None = None
+        self._report_placeholder: QLabel | None = None
         self._build_ui()
         self._start_elapsed_timer()
 
@@ -426,6 +430,7 @@ class DroneRunCard(QFrame):
 
     def on_receipt_ready(self, receipt: DroneReceipt) -> None:
         """Transform card into final-report mode."""
+        logger.debug("[DroneRunCard] on_receipt_ready start run_id=%s", receipt.run_id)
         self._receipt = receipt
         if self._elapsed_timer is not None:
             self._elapsed_timer.stop()
@@ -441,18 +446,40 @@ class DroneRunCard(QFrame):
         self._live_area.hide()
         self._clear_report_content()
         if receipt.summary:
-            html = _render_markdown_with_code(receipt.summary)
-            md_block = _MarkdownTextBlock(html, self._report_area)
-            self._report_layout.addWidget(md_block)
+            self._report_placeholder = QLabel("Loading report...")
+            self._report_placeholder.setStyleSheet(f"color: {FG_DIM}; font-size: 13px; background: transparent;")
+            self._report_layout.addWidget(self._report_placeholder)
+            self._report_area.show()
+            QTimer.singleShot(0, self._render_receipt_report)
         else:
             label = QLabel("(no summary)")
             label.setStyleSheet(f"color: {FG_DIM}; font-size: 13px; background: transparent;")
             self._report_layout.addWidget(label)
-        self._report_area.show()
+            self._report_area.show()
 
         self._copy_btn.show()
         self._cancel_btn.hide()
         self._close_btn.show()
+        logger.debug("[DroneRunCard] on_receipt_ready end run_id=%s", receipt.run_id)
+
+    def _render_receipt_report(self) -> None:
+        """Deferred: render the full receipt summary markdown into the report area."""
+        if self._receipt is None or not self._receipt.summary:
+            return
+        logger.debug(
+            "[DroneRunCard] _render_receipt_report start run_id=%s len=%d",
+            self._receipt.run_id,
+            len(self._receipt.summary),
+        )
+        # Remove placeholder
+        if hasattr(self, '_report_placeholder') and self._report_placeholder is not None:
+            self._report_layout.removeWidget(self._report_placeholder)
+            self._report_placeholder.deleteLater()
+            self._report_placeholder = None
+        html = _render_markdown_with_code(self._receipt.summary)
+        md_block = _MarkdownTextBlock(html, self._report_area)
+        self._report_layout.addWidget(md_block)
+        logger.debug("[DroneRunCard] _render_receipt_report end run_id=%s", self._receipt.run_id)
 
     def _copy_report(self) -> None:
         """Copy receipt summary to clipboard."""
