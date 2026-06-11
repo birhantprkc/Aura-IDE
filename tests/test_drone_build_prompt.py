@@ -184,8 +184,8 @@ def test_prompt_does_not_frame_routes_as_closed_list() -> None:
     assert "MCP, browser" not in prompt
     assert "three routes" not in prompt.lower()
     assert "choose between" not in prompt.lower()
-    # Must use open-ended language
-    assert "candidate" in prompt.lower()
+    # Must use open-ended language about harness or external capabilities
+    assert "existing harness" in prompt.lower()
 
 
 def test_prompt_old_bad_fields_stay_absent() -> None:
@@ -204,3 +204,58 @@ def test_prompt_old_bad_fields_stay_absent() -> None:
     assert "Do not add external browser" not in prompt
     assert "Gmail" not in prompt
     assert "scheduler capabilities" not in prompt
+
+
+def test_save_drone_definition_remains_required() -> None:
+    """save_drone_definition must be mentioned as the required persistence step."""
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    assert "save_drone_definition" in prompt
+
+
+def test_resolve_capability_no_longer_mandatory_for_every_drone() -> None:
+    """Prompt must NOT say "Call resolve_capability for each" or similar universal phrasing."""
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    # Must not force resolve_capability for every drone
+    assert "resolve_capability for each" not in prompt.lower()
+    assert "resolve_capability for every" not in prompt.lower()
+    assert "resolve_capability for all" not in prompt.lower()
+
+
+def test_existing_harness_tools_can_be_used_directly() -> None:
+    """Prompt must mention that existing harness tools can go directly into allowed_tools."""
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    assert (
+        "existing harness" in prompt.lower()
+        or "choose allowed_tools directly" in prompt.lower()
+        or "default_tools_for_policy" in prompt.lower()
+    )
+
+
+def test_external_capabilities_can_still_use_resolve_capability() -> None:
+    """Prompt must still mention resolve_capability for external/unknown capabilities."""
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    assert "resolve_capability" in prompt
