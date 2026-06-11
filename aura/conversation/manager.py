@@ -1305,6 +1305,38 @@ class ConversationManager:
 
         return content
 
+    @staticmethod
+    def _is_py_compile_error(output: str) -> bool:
+        """Check if output contains Python-level error markers (py_compile actually ran)."""
+        return bool(
+            "SyntaxError" in output
+            or re.search(r'\bFile "', output)
+            or "NameError" in output
+            or "IndentationError" in output
+            or "TypeError:" in output
+        )
+
+    @staticmethod
+    def _is_shell_failure(output: str) -> bool:
+        """Check if output indicates a shell-level failure (command never reached py_compile)."""
+        shell_markers = [
+            "cannot find the path specified",
+            "not recognized as an internal or external command",
+            "No such file or directory",
+            "command not found",
+            "not found",
+        ]
+        output_lower = output.lower()
+        for marker in shell_markers:
+            if marker in output_lower:
+                return True
+        first_lines = output.split("\n")[:3]
+        for line in first_lines:
+            stripped = line.strip()
+            if stripped.startswith("cd:") or stripped.startswith("chdir:"):
+                return True
+        return False
+
     def _update_syntax_state_from_terminal(
         self,
         *,
@@ -1333,6 +1365,11 @@ class ConversationManager:
             for path in targets:
                 self._pop_syntax_repair_state(syntax_repair_required, path)
                 self._discard_syntax_validation_path(syntax_validation_required, path)
+            return
+        # Shell-level failures (cd prefix, command not found) should not trigger
+        # Python syntax repair — the command never reached py_compile.
+        output = str(payload.get("output") or "")
+        if not self._is_py_compile_error(output) and self._is_shell_failure(output):
             return
         for path in targets:
             prior = self._syntax_repair_state_for_path(syntax_repair_required, path)

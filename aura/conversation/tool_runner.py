@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,11 @@ from aura.sandbox import SandboxExecutor, SandboxResult
 DEFAULT_TERMINAL_TIMEOUT_SECONDS = 45
 DEFAULT_PY_COMPILE_TIMEOUT_SECONDS = 30
 MAX_TERMINAL_TIMEOUT_SECONDS = 300
+
+_CD_WRAPPER_RE = re.compile(
+    r'^(?:cd|chdir)\s+(?:"[^"]*"|\'[^\']*\'|\S+)\s*(?:&&|;)\s*',
+    re.IGNORECASE
+)
 
 
 class ToolRunner:
@@ -372,6 +378,8 @@ class ToolRunner:
             )
             command = command_plan.command
             original_command = command_plan.original_command or requested_command
+
+        command = _CD_WRAPPER_RE.sub('', command, count=1).lstrip()
 
         timeout = self._resolve_terminal_timeout(
             command=command,

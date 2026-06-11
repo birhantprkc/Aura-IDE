@@ -346,3 +346,69 @@ def test_patch_file_failure_reread_clears_normalized_path(tmp_workspace):
 
     assert fallback_required == {}
     assert line_range_required == {}
+
+
+def test_shell_failure_with_cd_prefix_does_not_trigger_syntax_repair(tmp_workspace):
+    """Shell-level failures (cd /workspace not found) should NOT set syntax_repair_required."""
+    (tmp_workspace / "database.py").write_text("dummy content")
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    syntax_repair_required = {}
+    syntax_validation_required = set()
+
+    manager._update_syntax_state_from_terminal(
+        args={"command": "cd /workspace && python -m py_compile database.py"},
+        loop_info={
+            "_terminal_payload": {
+                "ok": False,
+                "command": "cd /workspace && python -m py_compile database.py",
+                "output": "The system cannot find the path specified.",
+            }
+        },
+        syntax_repair_required=syntax_repair_required,
+        syntax_validation_required=syntax_validation_required,
+    )
+
+    assert syntax_repair_required == {}
+
+
+def test_real_py_compile_syntax_error_still_triggers_syntax_repair(tmp_workspace):
+    """Real Python syntax errors should still set syntax_repair_required."""
+    (tmp_workspace / "database.py").write_text("invalid syntax here")
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    syntax_repair_required = {}
+    syntax_validation_required = set()
+
+    manager._update_syntax_state_from_terminal(
+        args={"command": "python -m py_compile database.py"},
+        loop_info={
+            "_terminal_payload": {
+                "ok": False,
+                "command": "python -m py_compile database.py",
+                "output": 'File "database.py", line 1\n    invalid syntax here\n         ^^^^^\nSyntaxError: invalid syntax',
+            }
+        },
+        syntax_repair_required=syntax_repair_required,
+        syntax_validation_required=syntax_validation_required,
+    )
+
+    assert "database.py" in syntax_repair_required
+    assert syntax_repair_required["database.py"]["error"] is not None
+
+
+def test_cd_wrapper_is_stripped_from_terminal_command(tmp_workspace):
+    """The _CD_WRAPPER_RE regex correctly strips cd/chdir prefixes from commands."""
+    from aura.conversation.tool_runner import _CD_WRAPPER_RE
+
+    cases = [
+        ("cd /workspace && python -m py_compile database.py",
+         "python -m py_compile database.py"),
+        ("cd /workspace ; python -m py_compile database.py",
+         "python -m py_compile database.py"),
+        ("cd \"C:\\Users\\me\" && python -m py_compile database.py",
+         "python -m py_compile database.py"),
+        ("chdir /workspace && python -m py_compile database.py",
+         "python -m py_compile database.py"),
+    ]
+    for raw, expected in cases:
+        result = _CD_WRAPPER_RE.sub('', raw, count=1).lstrip()
+        assert result == expected, f"Failed on {raw!r}: got {result!r}"
