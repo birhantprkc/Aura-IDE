@@ -99,7 +99,7 @@ function AppLayout() {
           <Route path="/chat/:threadId?" element={<ChatScreen />} />
           <Route path="/runs" element={<RunsScreen />} />
           <Route path="/receipts" element={<ReceiptsScreen />} />
-          <Route path="*" element={<Navigate to={(hasPairParams || !isPaired) ? (isPairRoute ? '/pair' : '/login') : '/chat'} replace />} />
+          <Route path="*" element={<Navigate to={(hasPairParams || !isPaired) ? (isPairRoute ? '/pair' : '/login') : '/login'} replace />} />
         </Routes>
       </div>
       {showNav && <BottomNav />}

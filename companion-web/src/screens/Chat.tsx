@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import CompanionSocket, { socket } from '../api/socket';
+import { useDesktopVerification } from '../hooks/useDesktopVerification';
 import { tokens, glassCard, statusPillStyle } from '../ui/theme';
 
 interface Message {
@@ -12,13 +13,12 @@ interface Message {
 
 function ChatScreen() {
   const navigate = useNavigate();
-  const isPaired = CompanionSocket.isPaired();
+  const { phase, error: verifyError, retry, goToLogin } = useDesktopVerification();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
-  const [error, setError] = useState('');
-  const [connected, setConnected] = useState(socket.connected);
+  const [chatError, setChatError] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -33,31 +33,16 @@ function ChatScreen() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Phase-gated message listeners — only active when verified
   useEffect(() => {
-    if (!isPaired) {
-      navigate('/login', { replace: true });
-      return;
-    }
-    if (!desktopId) {
-      navigate('/login', { replace: true });
-      return;
-    }
-    if (!socket.connected) {
-      // Reconnect using stored token
-      socket.connect(localStorage.getItem('companion_relay_url') || 'ws://localhost:8765');
-    }
-  }, [isPaired, desktopId, navigate]);
+    if (phase !== 'connected') return;
 
-  useEffect(() => {
-    setConnected(socket.connected);
-
-    const unsubWelcome = socket.on('welcome', () => setConnected(true));
     const unsubDelta = socket.on('chat.message.delta', (msg: any) => {
       clearWatchdog();
-      setError('');
+      setChatError('');
       const text = msg.payload?.text || '';
       const kind = msg.payload?.type || 'content';
-      if (kind === 'reasoning') return;  // skip reasoning in MVP
+      if (kind === 'reasoning') return;
       setMessages(prev => {
         const last = prev[prev.length - 1];
         if (last && last.role === 'assistant' && !last.final) {
@@ -79,8 +64,6 @@ function ChatScreen() {
         const updated = [...prev];
         const last = updated[updated.length - 1];
         if (last.role === 'assistant') {
-          // Use the streamed text we already have if final text is empty/cancelled,
-          // otherwise replace with the canonical full text.
           if (finishReason === 'cancelled' && !text) {
             updated[updated.length - 1] = { ...last, final: true };
           } else {
@@ -93,24 +76,18 @@ function ChatScreen() {
       });
       setStreaming(false);
     });
-    const unsubError = socket.on('chat.error', (msg: any) => {
+    const unsubChatErr = socket.on('chat.error', (msg: any) => {
       clearWatchdog();
-      setError(msg.payload?.message || 'An error occurred');
+      setChatError(msg.payload?.message || 'An error occurred');
       setStreaming(false);
-    });
-    const unsubAuthError = socket.on('auth.error', () => {
-      CompanionSocket.setStoredToken('');
-      navigate('/login', { replace: true });
     });
     return () => {
       clearWatchdog();
-      unsubWelcome();
       unsubDelta();
       unsubComplete();
-      unsubError();
-      unsubAuthError();
+      unsubChatErr();
     };
-  }, []);
+  }, [phase]);
 
   const sendMessage = useCallback(() => {
     const text = input.trim();
@@ -118,13 +95,12 @@ function ChatScreen() {
     setMessages(prev => [...prev, { id: `msg_${Date.now()}`, role: 'user', text, final: true }]);
     setInput('');
     setStreaming(true);
-    setError('');
+    setChatError('');
     socket.send('chat.send', { text }, desktopId, projectId, conversationId);
-    // Start watchdog — if desktop doesn't respond in 60s, show error
     clearWatchdog();
     watchdogRef.current = setTimeout(() => {
       setStreaming(false);
-      setError('No response from desktop. Check Aura Desktop.');
+      setChatError('No response from desktop. Check Aura Desktop.');
     }, 60_000);
     if (taRef.current) taRef.current.style.height = 'auto';
   }, [input, streaming, desktopId, projectId, conversationId]);
@@ -142,6 +118,68 @@ function ChatScreen() {
     }
   };
 
+  // Connecting / verifying full-screen spinner
+  if (phase === 'connecting' || phase === 'verifying') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', padding: '0 0.75rem', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ ...glassCard, padding: '2rem 1.5rem', textAlign: 'center', maxWidth: 380 }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: '50%',
+            border: `3px solid ${tokens.border}`,
+            borderTopColor: tokens.accent,
+            animation: 'spin 0.9s linear infinite',
+            margin: '0 auto 1rem',
+          }} />
+          <div style={{ color: tokens.fgDim, fontSize: '0.9rem' }}>
+            {phase === 'connecting' ? 'Connecting to your Aura desktop…' : 'Verifying with your Aura desktop…'}
+          </div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      </div>
+    );
+  }
+
+  // Unavailable full-screen card
+  if (phase === 'unavailable') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', padding: '0 0.75rem', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ ...glassCard, padding: '1.5rem', textAlign: 'center', maxWidth: 380, width: '100%' }}>
+          <div style={{ fontSize: '1.1rem', fontWeight: 600, color: tokens.danger, marginBottom: 4 }}>
+            Previous desktop unavailable
+          </div>
+          <div style={{ color: tokens.fgDim, fontSize: '0.9rem', marginBottom: '1rem' }}>
+            {verifyError || 'Could not reach your Aura desktop.'}
+          </div>
+          <button
+            onClick={goToLogin}
+            style={{
+              width: '100%', padding: '0.75rem 1rem',
+              background: tokens.accent, color: '#0a0f1f',
+              border: 'none', borderRadius: 10,
+              fontSize: '0.9rem', fontWeight: 600,
+              marginBottom: '0.5rem', cursor: 'pointer',
+            }}
+          >
+            Go to Login
+          </button>
+          <button
+            onClick={retry}
+            style={{
+              width: '100%', padding: '0.75rem 1rem',
+              background: 'transparent', color: tokens.fg,
+              border: `1px solid ${tokens.borderStrong}`,
+              borderRadius: 10, fontSize: '0.9rem', fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Connected — normal chat UI
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', padding: '0 0.75rem' }}>
       {/* Header */}
@@ -180,39 +218,10 @@ function ChatScreen() {
             </div>
           )}
         </div>
-        <span style={statusPillStyle(connected ? 'connected' : 'disconnected')}>
-          ● {connected ? 'Online' : 'Offline'}
+        <span style={statusPillStyle('connected')}>
+          ● Online
         </span>
       </header>
-
-      {/* Connection lost banner */}
-      {!connected && (
-        <div style={{
-          padding: '0.55rem 0.85rem',
-          background: 'rgba(247,118,142,0.08)',
-          border: `1px solid ${tokens.danger}`,
-          color: tokens.danger,
-          borderRadius: 10,
-          fontSize: '0.85rem',
-          marginBottom: '0.5rem',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 8,
-        }}>
-          <span>Connection lost. Trying to reconnect…</span>
-          <button
-            onClick={() => navigate('/login')}
-            style={{
-              background: 'transparent', border: `1px solid ${tokens.danger}`,
-              borderRadius: 8, color: tokens.danger,
-              padding: '0.25rem 0.7rem', fontSize: '0.78rem', fontWeight: 600,
-            }}
-          >
-            Reconnect
-          </button>
-        </div>
-      )}
 
       {/* Messages */}
       <main style={{ flex: 1, overflow: 'auto', padding: '0.5rem 0 0.25rem' }}>
@@ -231,7 +240,7 @@ function ChatScreen() {
         margin: '0.5rem 0 0.75rem',
         padding: '0.6rem 0.7rem',
       }}>
-        {error && (
+        {chatError && (
           <div style={{
             padding: '0.4rem 0.7rem',
             background: 'rgba(247,118,142,0.10)',
@@ -241,7 +250,7 @@ function ChatScreen() {
             fontSize: '0.8rem',
             marginBottom: '0.5rem',
           }}>
-            {error}
+            {chatError}
           </div>
         )}
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>

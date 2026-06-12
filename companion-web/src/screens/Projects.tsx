@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import CompanionSocket, { socket } from '../api/socket';
+import { useDesktopVerification } from '../hooks/useDesktopVerification';
 import { tokens, glassCard, statusPillStyle } from '../ui/theme';
 
 interface CompanionProject {
@@ -20,21 +21,21 @@ interface CompanionThread {
 function ProjectsScreen() {
   const navigate = useNavigate();
   const isPaired = CompanionSocket.isPaired();
+  const { phase, error: verifyError, retry, goToLogin } = useDesktopVerification();
 
   const [projects, setProjects] = useState<CompanionProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [threads, setThreads] = useState<CompanionThread[]>([]);
   const [loadingThreads, setLoadingThreads] = useState(false);
-  const [error, setError] = useState('');
-  const [connected, setConnected] = useState(socket.connected);
+  const [projectError, setProjectError] = useState('');
 
+  // Early redirect for unpaired / missing desktop
   useEffect(() => {
     if (!isPaired) {
       navigate('/login', { replace: true });
       return;
     }
-
     const desktopId =
       sessionStorage.getItem('companion_desktop_id') ||
       CompanionSocket.getStoredSafeContext().desktop_id ||
@@ -43,12 +44,20 @@ function ProjectsScreen() {
       navigate('/login', { replace: true });
       return;
     }
+  }, [isPaired, navigate]);
 
-    if (!socket.connected && !socket.connecting) {
-      socket.connect(
-        localStorage.getItem('companion_relay_url') || 'ws://localhost:8765'
-      );
-    }
+  // Phase-gated project fetch — only send project.list_recent after verified
+  useEffect(() => {
+    if (phase !== 'connected') return;
+
+    setLoading(true);
+    setProjectError('');
+
+    const desktopId =
+      sessionStorage.getItem('companion_desktop_id') ||
+      CompanionSocket.getStoredSafeContext().desktop_id ||
+      '';
+    if (!desktopId) return;
 
     socket.send('project.list_recent', {}, desktopId);
 
@@ -72,7 +81,7 @@ function ProjectsScreen() {
       (msg: any) => {
         const payload = msg.payload || {};
         if (payload.error) {
-          setError(payload.error);
+          setProjectError(payload.error);
           return;
         }
         const safeCtx = {
@@ -85,21 +94,12 @@ function ProjectsScreen() {
       }
     );
 
-    const unsubWelcome = socket.on('welcome', () => setConnected(true));
-
-    const unsubAuthError = socket.on('auth.error', () => {
-      CompanionSocket.setStoredToken('');
-      navigate('/login', { replace: true });
-    });
-
     return () => {
       unsubProjectList();
       unsubConversationList();
       unsubConversationSelected();
-      unsubWelcome();
-      unsubAuthError();
     };
-  }, []);
+  }, [phase, navigate]);
 
   function handleSelectProject(project: CompanionProject) {
     if (selectedProjectId === project.id) {
@@ -110,7 +110,7 @@ function ProjectsScreen() {
     setSelectedProjectId(project.id);
     setThreads([]);
     setLoadingThreads(true);
-    setError('');
+    setProjectError('');
 
     const desktopId =
       sessionStorage.getItem('companion_desktop_id') ||
@@ -126,7 +126,7 @@ function ProjectsScreen() {
       '';
     if (!selectedProjectId || !desktopId) return;
 
-    setError('');
+    setProjectError('');
     socket.send(
       'conversation.select',
       { project_id: selectedProjectId, thread_id: thread.id },
@@ -152,6 +152,68 @@ function ProjectsScreen() {
     }
   }
 
+  // Connecting / verifying full-screen spinner
+  if (phase === 'connecting' || phase === 'verifying') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', padding: '0 0.75rem', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ ...glassCard, padding: '2rem 1.5rem', textAlign: 'center', maxWidth: 380 }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: '50%',
+            border: `3px solid ${tokens.border}`,
+            borderTopColor: tokens.accent,
+            animation: 'spin 0.9s linear infinite',
+            margin: '0 auto 1rem',
+          }} />
+          <div style={{ color: tokens.fgDim, fontSize: '0.9rem' }}>
+            {phase === 'connecting' ? 'Connecting to your Aura desktop…' : 'Verifying with your Aura desktop…'}
+          </div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      </div>
+    );
+  }
+
+  // Unavailable full-screen card
+  if (phase === 'unavailable') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', padding: '0 0.75rem', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ ...glassCard, padding: '1.5rem', textAlign: 'center', maxWidth: 380, width: '100%' }}>
+          <div style={{ fontSize: '1.1rem', fontWeight: 600, color: tokens.danger, marginBottom: 4 }}>
+            Previous desktop unavailable
+          </div>
+          <div style={{ color: tokens.fgDim, fontSize: '0.9rem', marginBottom: '1rem' }}>
+            {verifyError || 'Could not reach your Aura desktop.'}
+          </div>
+          <button
+            onClick={goToLogin}
+            style={{
+              width: '100%', padding: '0.75rem 1rem',
+              background: tokens.accent, color: '#0a0f1f',
+              border: 'none', borderRadius: 10,
+              fontSize: '0.9rem', fontWeight: 600,
+              marginBottom: '0.5rem', cursor: 'pointer',
+            }}
+          >
+            Go to Login
+          </button>
+          <button
+            onClick={retry}
+            style={{
+              width: '100%', padding: '0.75rem 1rem',
+              background: 'transparent', color: tokens.fg,
+              border: `1px solid ${tokens.borderStrong}`,
+              borderRadius: 10, fontSize: '0.9rem', fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Connected — normal project list UI
   return (
     <div
       style={{
@@ -188,13 +250,13 @@ function ProjectsScreen() {
         <div style={{ flex: 1, fontWeight: 600, fontSize: '0.95rem' }}>
           Projects
         </div>
-        <span style={statusPillStyle(connected ? 'connected' : 'disconnected')}>
-          ● {connected ? 'Online' : 'Offline'}
+        <span style={statusPillStyle('connected')}>
+          ● Online
         </span>
       </header>
 
       {/* Error banner */}
-      {error && (
+      {projectError && (
         <div
           style={{
             padding: '0.55rem 0.85rem',
@@ -206,7 +268,7 @@ function ProjectsScreen() {
             marginBottom: '0.5rem',
           }}
         >
-          {error}
+          {projectError}
         </div>
       )}
 
