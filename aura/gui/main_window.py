@@ -52,6 +52,7 @@ from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.drones.chain_editor import ChainEditor
 from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
+from aura.gui.drones.drone_workbay_window import DroneWorkbayWindow
 from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.drones.drone_summon_card import DroneSummonCard
 from aura.gui.drones.drone_workshop_dialog import DroneWorkshopDialog
@@ -265,7 +266,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._playground.set_aura_wrapper(self._playground_aura)
 
 
-        self._chain_editor: ChainEditor | None = None
+        self._drone_workbay_window: DroneWorkbayWindow | None = None
 
         # Floating Drone Reports window. Active run cards live here instead of
         # consuming space in the Worker/workspace area.
@@ -531,6 +532,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._settings.drone_reports_window_geometry = geometry
         save_settings(self._settings)
 
+    def _on_drone_workbay_geometry_saved(self, geometry: str) -> None:
+        if self._settings.drone_workbay_window_geometry == geometry:
+            return
+        self._settings.drone_workbay_window_geometry = geometry
+        save_settings(self._settings)
+
     def _dim_terminal_tab_after_success(self) -> None:
         if self._edge_rail.state == "success":
             self._edge_rail.set_state("dim")
@@ -584,10 +591,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._update_workspace_label()
         self._left_pane.refresh_projects(path)
         # Close chain editor when workspace root changes
-        if self._chain_editor is not None:
-            self._playground.hide_chain_editor()
-            self._chain_editor.deleteLater()
-            self._chain_editor = None
+        if self._drone_workbay_window is not None:
+            self._drone_workbay_window.hide()
+            self._drone_workbay_window.deleteLater()
+            self._drone_workbay_window = None
         self._refresh_status_bar()
         return str(path)
 
@@ -742,28 +749,39 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._position_edge_tabs()
 
     def _open_or_toggle_drone_workbay(self) -> None:
-        """Open the Drone Workbay (ChainEditor) or toggle it off."""
+        """Open the Drone Workbay as a standalone window or focus it."""
         if self._workspace_root is None:
             return
-        try:
-            if self._playground.is_chain_editor_open():
-                self._playground.hide_chain_editor()
+        if self._drone_workbay_window is not None:
+            if self._drone_workbay_window.is_open():
+                self._drone_workbay_window.raise_()
+                self._drone_workbay_window.activateWindow()
             else:
-                if self._chain_editor is None:
-                    self._on_new_workflow()
-                else:
-                    self._playground.toggle_chain_editor()
-        except Exception as exc:
-            logger.exception("Failed to open Drone Workbay")
-            QMessageBox.warning(
-                self,
-                "Workbay Error",
-                f"Failed to open the Drone Workbay:\n\n{type(exc).__name__}: {exc}",
-            )
+                self._drone_workbay_window.show_and_raise()
+            return
+
+        self._drone_workbay_window = DroneWorkbayWindow(
+            workspace_root=self._workspace_root,
+            chain_id=None,
+            provider_id=self._settings.planner_provider,
+            model=self.current_model(),
+            thinking=self.current_thinking(),
+            temperature=self._settings.temperature,
+            initial_geometry=self._settings.drone_workbay_window_geometry,
+            parent=self,
+        )
+        workbay = self._drone_workbay_window
+        editor = workbay.chain_editor
+        editor.goBackRequested.connect(workbay.hide)
+        editor.settle_draft_requested.connect(self._on_chain_editor_settle_draft)
+        editor.runChainRequested.connect(lambda cid: self._on_run_workflow(cid))
+        workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
+        workbay.show_and_raise()
 
     def _sync_drone_tab_checked(self) -> None:
         if self._edge_rail.drone_tab is not None:
-            is_open = self._playground.is_chain_editor_open() or self._drone_reports_window.is_open()
+            workbay_open = self._drone_workbay_window.is_open() if self._drone_workbay_window else False
+            is_open = workbay_open or self._drone_reports_window.is_open()
             self._edge_rail.drone_tab.setChecked(is_open)
 
     def _on_new_drone(self) -> None:
@@ -1205,27 +1223,31 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._open_chain_editor(chain_id=None)
 
     def _open_chain_editor(self, chain_id: str | None) -> None:
-        """Create and show the chain editor."""
-        editor = ChainEditor(
+        """Create and show the chain editor in a standalone window."""
+        if self._drone_workbay_window is not None and self._drone_workbay_window.is_open():
+            self._drone_workbay_window.hide()
+
+        self._drone_workbay_window = DroneWorkbayWindow(
             workspace_root=self._workspace_root,
             chain_id=chain_id,
             provider_id=self._settings.planner_provider,
             model=self.current_model(),
             thinking=self.current_thinking(),
             temperature=self._settings.temperature,
+            initial_geometry=self._settings.drone_workbay_window_geometry,
             parent=self,
         )
-        editor.goBackRequested.connect(self._playground.hide_chain_editor)
+        workbay = self._drone_workbay_window
+        editor = workbay.chain_editor
+        editor.goBackRequested.connect(workbay.hide)
         editor.settle_draft_requested.connect(self._on_chain_editor_settle_draft)
 
         def on_run(cid: str) -> None:
             self._on_run_workflow(cid)
 
         editor.runChainRequested.connect(on_run)
-
-        self._playground.set_chain_editor(editor)
-        self._playground.toggle_chain_editor()
-        self._chain_editor = editor
+        workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
+        workbay.show_and_raise()
 
     # ----- Drone Run lifecycle (Phase 2) --------------------------------
 
@@ -1836,7 +1858,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.set_streaming(True)
         # Switch from Drone Bay to workspace so the user sees the run —
         # but do NOT switch away from the Chain Editor (Workflow Studio).
-        if not self._playground.is_chain_editor_open():
+        if not (self._drone_workbay_window and self._drone_workbay_window.is_open()):
             self._playground.switch_to_workspace()
         self._sync_drone_tab_checked()
 
