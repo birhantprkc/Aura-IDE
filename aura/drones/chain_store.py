@@ -174,5 +174,3 @@ class ChainStore:
             )
         if not chain.name.strip():
             raise ValueError("Chain name is required")
-        if not chain.description.strip():
-            raise ValueError("Chain description is required")

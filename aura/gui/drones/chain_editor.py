@@ -1083,40 +1083,8 @@ class ChainEditor(QWidget):
                 self.set_status("No draft node selected", DANGER)
                 return
 
-        # Try to extract drone_id from the brief metadata
-        drone_id = None
-        if isinstance(brief, dict):
-            extras = brief.get("extras", {})
-            drone_id = extras.get("drone_id") or brief.get("drone_id")
-        elif hasattr(brief, 'extras'):
-            extras = getattr(brief, 'extras', None) or {}
-            drone_id = extras.get("drone_id")
-
-        # Fallback: search DroneStore by recently saved
-        drone_def = None
-        if drone_id:
-            drone_def = DroneStore.load_drone(self._workspace_root, drone_id)
-
-        if drone_def is None:
-            # Fallback: find the most recently created drone
-            all_drones = DroneStore.list_drones(self._workspace_root)
-            if all_drones:
-                drone_def = all_drones[-1]
-                logger.info("Settling draft with last drone: %s", drone_def.name)
-
-        if drone_def is None:
-            self.set_status("Could not find saved drone to settle draft", DANGER)
-            return
-
-        success = self.settle_draft_node(draft_node_id, drone_def)
-        if success:
-            self._dirty = True
-            self._palette.populate()
-            self._workflow_list_pane.refresh()
-            self.set_status(f"Drone '{drone_def.name}' settled on canvas", SUCCESS)
-            self._set_active_mode("Drones")
-        else:
-            self.set_status(f"Settle failed for drone '{drone_def.name}'", DANGER)
+        self.settle_draft_requested.emit({"brief": brief, "draft_node_id": draft_node_id})
+        self.set_status("Building drone…")
 
     def settle_draft_node(self, node_id: str, drone_def) -> bool:
         """Replace a draft node with the real saved DroneDefinition."""

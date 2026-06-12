@@ -737,10 +737,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     # ----- Drone Bay handlers --------------------------------------------
 
     def _on_drone_bay_requested(self) -> None:
-        if self._drone_runs:
-            self._drone_reports_window.toggle()
-        else:
-            self._open_or_toggle_drone_workbay()
+        self._open_or_toggle_drone_workbay()
         self._sync_drone_tab_checked()
         self._position_edge_tabs()
 
