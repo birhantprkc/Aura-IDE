@@ -174,3 +174,73 @@ class ChainStore:
             )
         if not chain.name.strip():
             raise ValueError("Chain name is required")
+
+
+# ---------------------------------------------------------------------------
+# Module-level convenience functions used by GUI components.
+# These operate on raw dicts so that extra fields (e.g. auto_route) survive
+# the round-trip without being filtered by ChainDefinition's field list.
+# ---------------------------------------------------------------------------
+
+def load_chain(workspace_root: Path, chain_id: str) -> dict | None:
+    """Load a chain as a raw dict. Returns None if not found."""
+    if not _is_safe_chain_id(chain_id):
+        return None
+    chain_file = ChainStore.chains_dir() / chain_id / "chain.json"
+    if not chain_file.exists():
+        return None
+    try:
+        return json.loads(chain_file.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("Failed to load chain %s", chain_id)
+        return None
+
+
+def save_chain(workspace_root: Path, chain_id: str | None, data: dict) -> str:
+    """Persist a chain dict to disk. Generates an id if chain_id is None.
+
+    Returns the chain id used (new or existing).
+    """
+    if chain_id is None:
+        chain_id = ChainStore.next_id(workspace_root, data.get("name", "chain"))
+    if not _is_safe_chain_id(chain_id):
+        raise ValueError(f"Invalid chain id: {chain_id!r}")
+    data = dict(data)
+    data["id"] = chain_id
+    if not data.get("name", "").strip():
+        data["name"] = chain_id
+    chains_dir = ChainStore._ensure_chains_dir()
+    chain_dir = chains_dir / chain_id
+    chain_dir.mkdir(parents=True, exist_ok=True)
+    p = chain_dir / "chain.json"
+    fd, tmp_path = tempfile.mkstemp(dir=str(chain_dir), suffix=".json")
+    with open(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    Path(tmp_path).replace(p)
+    return chain_id
+
+
+def delete_chain(workspace_root: Path, chain_id: str) -> bool:
+    """Remove a chain. Returns True if anything was deleted."""
+    return ChainStore.delete_chain(workspace_root, chain_id)
+
+
+def list_chains(workspace_root: Path) -> list[dict]:
+    """Return all saved chains as raw dicts, sorted by name."""
+    chains_dir = ChainStore.chains_dir()
+    if not chains_dir.exists():
+        return []
+    result: list[dict] = []
+    for subdir in sorted(chains_dir.iterdir()):
+        if not subdir.is_dir():
+            continue
+        chain_file = subdir / "chain.json"
+        if not chain_file.exists():
+            continue
+        try:
+            data = json.loads(chain_file.read_text(encoding="utf-8"))
+            result.append(data)
+        except Exception:
+            logger.warning("Skipping invalid chain: %s", subdir.name)
+    result.sort(key=lambda c: c.get("name", ""))
+    return result

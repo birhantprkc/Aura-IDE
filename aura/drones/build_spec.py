@@ -1,6 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+
+
+class BuildMode(Enum):
+    """Whether settle_draft_node is wiring up an existing drone or a freshly built one."""
+    NEW = "new"
+    EXISTING = "existing"
+
+
+@dataclass(frozen=True)
+class BuildSpec:
+    """Carries the result of a workshop build back to the chain editor."""
+    drone_id: str
+    goal_template: str = ""
+    build_mode: BuildMode = BuildMode.NEW
 
 
 @dataclass(frozen=True)

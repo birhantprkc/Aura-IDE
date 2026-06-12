@@ -24,16 +24,15 @@ from PySide6.QtWidgets import (
 )
 
 from aura.drones.build_spec import BuildMode, BuildSpec
-from aura.drones.chain_canvas import (
+from aura.gui.drones.chain_canvas import (
     ChainCanvas,
     ChainEdgeItem,
     ChainNodeItem,
 )
 from aura.drones.chain_store import load_chain, save_chain, delete_chain, list_chains
 from aura.drones.drone_registry import DroneRegistry
-from aura.drones.drone_workshop_panel import DroneWorkshopPanel
-from aura.drones.workflow_list_pane import WorkflowListPane
-from aura.drones.workshop_chat_handler import WorkshopChatHandler
+from aura.gui.drones.drone_workshop_panel import DroneWorkshopPanel
+from aura.gui.drones.workflow_list_pane import WorkflowListPane
 
 logger = logging.getLogger(__name__)
 
