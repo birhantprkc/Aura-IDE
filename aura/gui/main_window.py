@@ -7,7 +7,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from PySide6.QtCore import QByteArray, Qt, QThread, QTimer
+from PySide6.QtCore import QByteArray, QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
@@ -38,6 +38,8 @@ from aura.config import (
 )
 from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
 from aura.drones.build_prompt import build_drone_creation_prompt
+from aura.drones.chain_runner import classify_consequential_nodes, run_chain
+from aura.drones.chain_store import ChainStore
 from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.runner import DroneRunner
@@ -47,6 +49,7 @@ from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
+from aura.gui.drones.chain_editor import ChainEditor
 from aura.gui.drones.drone_bay_pane import DroneBayPane
 from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
@@ -71,6 +74,71 @@ from aura.prompts import SINGLE_SYSTEM_PROMPT
 from aura.updater import UpdateStatus
 
 MAX_PARALLEL_READ_ONLY_DRONES = 3
+
+
+class _ChainRunWorker(QObject):
+    """Background worker that executes a chain run in a separate thread."""
+
+    run_started = Signal()
+    run_finished = Signal(dict)
+    run_error = Signal(str)
+
+    def __init__(
+        self,
+        workspace_root: Path,
+        chain,
+        drone_lookup: dict[str, object],
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._workspace_root = workspace_root
+        self._chain = chain
+        self._drone_lookup = drone_lookup
+
+    def do_run(self) -> None:
+        """Execute the chain — called from the worker thread."""
+        try:
+            self.run_started.emit()
+            from dataclasses import asdict
+
+            result = run_chain(
+                self._workspace_root,
+                self._chain,
+                drone_lookup=self._drone_lookup,
+                approval_callback=lambda nodes: True,
+            )
+
+            # Convert ChainRun to a dict enriched with chain_name and elapsed.
+            d = asdict(result)
+            d["chain_name"] = self._chain.name
+
+            # Compute elapsed.
+            started = result.started_at
+            ended = result.ended_at
+            if started and ended:
+                try:
+                    import datetime as dt
+                    s = dt.datetime.fromisoformat(started)
+                    e = dt.datetime.fromisoformat(ended)
+                    delta = (e - s).total_seconds()
+                    d["elapsed"] = f"{delta:.1f}s"
+                except Exception:
+                    d["elapsed"] = ""
+            else:
+                d["elapsed"] = ""
+
+            # Find the failed node if applicable.
+            failed_at = ""
+            nodes = d.get("nodes", {})
+            for node_id, nr in nodes.items():
+                if nr.get("status") == "failed":
+                    failed_at = node_id
+                    break
+            d["failed_at"] = failed_at
+
+            self.run_finished.emit(d)
+        except Exception as exc:
+            self.run_error.emit(str(exc))
 
 
 class MainWindow(WindowChromeMixin, QMainWindow):
@@ -204,6 +272,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_bay.launchDroneRequested.connect(self._on_launch_drone)
         self._drone_bay.makeToolRequested.connect(self._on_make_drone_tool)
         self._drone_bay.viewRunReceiptRequested.connect(self._on_view_drone_receipt)
+
+        # Workflow signals (via drone bay's workflow list pane)
+        self._drone_bay._workflow_list.runWorkflowRequested.connect(self._on_run_workflow)
+        self._drone_bay._workflow_list.editWorkflowRequested.connect(self._on_edit_workflow)
+        self._drone_bay._workflow_list.deleteWorkflowRequested.connect(self._on_delete_workflow)
+        self._drone_bay._workflow_list.newWorkflowRequested.connect(self._on_new_workflow)
+
+        self._chain_editor: ChainEditor | None = None
 
         # Floating Drone Reports window. Active run cards live here instead of
         # consuming space in the Worker/workspace area.
@@ -524,6 +600,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if hasattr(self, '_drone_bay'):
             self._drone_bay.set_workspace_root(path)
             self._drone_bay.refresh()
+            if hasattr(self._drone_bay, '_workflow_list'):
+                self._drone_bay._workflow_list.set_workspace_root(path)
+                self._drone_bay._workflow_list.refresh()
+        # Close chain editor when workspace root changes
+        if self._chain_editor is not None:
+            self._playground.hide_chain_editor()
+            self._chain_editor.deleteLater()
+            self._chain_editor = None
         self._refresh_status_bar()
         return str(path)
 
@@ -633,6 +717,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if hasattr(self, '_drone_bay'):
             self._drone_bay.set_workspace_root(root_path)
             self._drone_bay.refresh()
+            if hasattr(self._drone_bay, '_workflow_list'):
+                self._drone_bay._workflow_list.set_workspace_root(root_path)
+                self._drone_bay._workflow_list.refresh()
         self._bridge.set_workspace_root(root_path)
         self._input.set_workspace_root(root_path)
         self._send_handler.set_workspace_root(root_path)
@@ -924,6 +1011,212 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             "Make Tool",
             f"Created or opened dynamic tool scaffold:\n{path.relative_to(self._workspace_root)}",
         )
+
+    # ----- Workflow handlers -----------------------------------------------
+
+    def _on_run_workflow(self, chain_id: str) -> None:
+        """Run a workflow chain with upfront approval and background execution."""
+        # ── Load and validate ──
+        chain = ChainStore.load_chain(self._workspace_root, chain_id)
+        if chain is None:
+            QMessageBox.warning(
+                self, "Workflow Not Found",
+                f"Chain '{chain_id}' could not be loaded."
+            )
+            return
+
+        drones = DroneStore.list_drones(self._workspace_root)
+        drone_lookup: dict[str, object] = {d.id: d for d in drones}
+
+        missing = [
+            n.drone_id for n in chain.nodes
+            if n.drone_id not in drone_lookup
+        ]
+        if missing:
+            QMessageBox.warning(
+                self,
+                "Missing Drones",
+                f"The following drones are not installed for workflow "
+                f"'{chain.name}': {', '.join(missing)}",
+            )
+            return
+
+        # ── Classify and approve (if needed) ──
+        consequential = classify_consequential_nodes(chain, drone_lookup)
+        if consequential:
+            lines = [
+                f"<b>{chain.name}</b> contains write-capable nodes:",
+                "<br>",
+            ]
+            for cn in consequential:
+                tools = cn.consequential_tools[:5]
+                tool_list = ", ".join(tools) if tools else "all tools"
+                drone_def = drone_lookup.get(cn.node.drone_id)
+                drone_name = (
+                    drone_def.name
+                    if drone_def
+                    else cn.node.drone_id
+                )
+                lines.append(
+                    f"• <b>{drone_name}</b> ({cn.node.drone_id})"
+                    f" — {cn.write_policy}: {tool_list}"
+                )
+            lines.append("<br>Run anyway?")
+            msg = "<br>".join(lines)
+
+            answer = QMessageBox.question(
+                self,
+                "Confirm Workflow Run",
+                msg,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        # ── Run in background ──
+        worker = _ChainRunWorker(
+            self._workspace_root, chain, drone_lookup
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+
+        worker.run_finished.connect(
+            lambda result: self._on_chain_run_finished(result, thread)
+        )
+        worker.run_error.connect(
+            lambda msg: self._on_chain_run_error(msg, thread)
+        )
+        thread.started.connect(worker.do_run)
+
+        # Keep references to prevent GC.
+        self._chain_thread = thread
+        self._chain_worker = worker
+
+        thread.start()
+
+    def _on_chain_run_finished(self, result: dict, thread: QThread) -> None:
+        """Post the chain run report and refresh the workflow list."""
+        thread.quit()
+        thread.wait()
+        self._chain_thread = None
+        self._chain_worker = None
+
+        chain_name = result.get("chain_name", "Unknown")
+        nodes_data = result.get("nodes", {})
+        status = result.get("status", "unknown")
+        elapsed = result.get("elapsed", "")
+        failed_at = result.get("failed_at", "")
+
+        # Build the run report.
+        lines = [
+            f"━━━ Workflow Complete: {chain_name} ━━━",
+            "",
+        ]
+        for node_id, nr in nodes_data.items():
+            node_status = nr.get("status", "unknown")
+            drone_id = nr.get("drone_id", node_id)
+            met = nr.get("met", "")
+            evidence = nr.get("evidence")
+
+            if node_status == "completed":
+                icon = "✓"
+                ev_type = "result"
+                if isinstance(evidence, dict):
+                    ev_type = evidence.get("type", "result")
+                lines.append(
+                    f"  {icon} {node_id} ({drone_id}) "
+                    f"— Produced valid {ev_type}"
+                )
+            elif node_status == "failed":
+                icon = "✗"
+                evidence_str = ""
+                if isinstance(evidence, dict):
+                    evidence_str = evidence.get("error", "")
+                elif isinstance(evidence, str):
+                    evidence_str = evidence
+                lines.append(
+                    f"  {icon} {node_id} ({drone_id}) "
+                    f"— Failed: {evidence_str}"
+                )
+            elif node_status == "skipped":
+                icon = "○"
+                reason = met or "upstream failed"
+                lines.append(
+                    f"  {icon} {node_id} ({drone_id}) "
+                    f"— Skipped ({reason})"
+                )
+            else:
+                icon = "·"
+                lines.append(
+                    f"  {icon} {node_id} ({drone_id}) "
+                    f"— {node_status}"
+                )
+
+        lines.append("")
+        if failed_at:
+            lines.append(f'Status: Failed at node "{failed_at}"')
+        else:
+            lines.append(f"Status: {status.capitalize()}")
+        if elapsed:
+            lines.append(f"Time: {elapsed}")
+
+        report = "\n".join(lines)
+        self._chat.begin_assistant()
+        self._chat.append_content(report)
+        self._chat.assistant_done()
+
+        # Refresh the workflow list so last-run info appears.
+        self._drone_bay._workflow_list.refresh()
+
+    def _on_chain_run_error(self, msg: str, thread: QThread) -> None:
+        """Handle chain run exception."""
+        thread.quit()
+        thread.wait()
+        self._chain_thread = None
+        self._chain_worker = None
+
+        QMessageBox.critical(
+            self, "Workflow Run Error",
+            f"Chain run failed: {msg}"
+        )
+
+    def _on_edit_workflow(self, chain_id: str) -> None:
+        """Open the chain editor for an existing workflow."""
+        if self._workspace_root is None:
+            return
+        self._open_chain_editor(chain_id=chain_id)
+
+    def _on_delete_workflow(self, chain_id: str) -> None:
+        """Delete a workflow chain."""
+        
+        ChainStore.delete_chain(self._workspace_root, chain_id)
+        self._drone_bay._workflow_list.refresh()
+        logger.info("Deleted workflow: %s", chain_id)
+
+    def _on_new_workflow(self) -> None:
+        """Create a new workflow and open the chain editor."""
+        if self._workspace_root is None:
+            return
+        self._open_chain_editor(chain_id=None)
+
+    def _open_chain_editor(self, chain_id: str | None) -> None:
+        """Create and show the chain editor."""
+        editor = ChainEditor(
+            workspace_root=self._workspace_root,
+            chain_id=chain_id,
+            parent=self,
+        )
+        editor.goBackRequested.connect(self._playground.hide_chain_editor)
+
+        def on_run(cid: str) -> None:
+            self._on_run_workflow(cid)
+
+        editor.runChainRequested.connect(on_run)
+
+        self._playground.set_chain_editor(editor)
+        self._playground.toggle_chain_editor()
+        self._chain_editor = editor
 
     # ----- Drone Run lifecycle (Phase 2) --------------------------------
 

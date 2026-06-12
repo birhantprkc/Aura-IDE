@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
+    QTabBar,
     QVBoxLayout,
     QWidget,
 )
@@ -109,6 +111,24 @@ class DroneBayPane(QWidget):
 
         layout.addWidget(header)
 
+        # -- Tab bar --
+        self._tab_bar = QTabBar()
+        self._tab_bar.addTab("Drones")
+        self._tab_bar.addTab("Workflows")
+        self._tab_bar.setStyleSheet(
+            f"QTabBar::tab {{"
+            f"  color: {FG_DIM}; background: transparent;"
+            f"  border: none; padding: 6px 20px; font-size: 13px;"
+            f"  font-weight: 600; margin-right: 2px;"
+            f"}}"
+            f"QTabBar::tab:selected {{"
+            f"  color: {FG}; border-bottom: 2px solid {ACCENT};"
+            f"}}"
+            f"QTabBar::tab:hover:!selected {{ color: {FG}; }}"
+        )
+        self._tab_bar.currentChanged.connect(self._on_tab_changed)
+        layout.addWidget(self._tab_bar)
+
         # -- Scrollable card area --
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
@@ -127,7 +147,18 @@ class DroneBayPane(QWidget):
         self._card_layout.addStretch(1)
 
         scroll.setWidget(self._card_container)
-        layout.addWidget(scroll, 1)
+
+        # -- Stacked widget: index 0 = drones, index 1 = workflows --
+        self._stack = QStackedWidget()
+        self._stack.addWidget(scroll)  # index 0
+
+        from aura.gui.drones.workflow_list_pane import WorkflowListPane
+        self._workflow_list = WorkflowListPane(
+            workspace_root=self._workspace_root, parent=self
+        )
+        self._stack.addWidget(self._workflow_list)  # index 1
+
+        layout.addWidget(self._stack, 1)
 
         self.refresh()
 
@@ -183,6 +214,14 @@ class DroneBayPane(QWidget):
     def has_active_run(self) -> bool:
         """Return True if there is an active Drone run."""
         return self._active_run is not None and self._active_run.is_active
+
+    # -- Tab switching --
+
+    def _on_tab_changed(self, index: int) -> None:
+        """Switch the stacked widget and refresh workflows if selected."""
+        self._stack.setCurrentIndex(index)
+        if index == 1:  # Workflows tab
+            self._workflow_list.refresh()
 
     # -- Internal helpers --
 
@@ -409,7 +448,7 @@ class DroneBayPane(QWidget):
         if drone.first_run_test:
             frt_card = QFrame()
             frt_card.setStyleSheet(
-                f"background: rgba(255,255,255,0.03); border-radius: 4px; padding: 6px;"
+                "background: rgba(255,255,255,0.03); border-radius: 4px; padding: 6px;"
             )
             frt_card_layout = QVBoxLayout(frt_card)
             frt_card_layout.setContentsMargins(8, 6, 8, 6)

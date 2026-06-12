@@ -20,6 +20,9 @@ class DroneReceipt:
     tool_calls: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     elapsed_seconds: float = 0.0
+    produced_artifact: dict | None = None
+    met: bool | None = None
+    evidence: str = ""
 
     def to_dict(self) -> dict:
         """Serializable dict for JSON persistence."""

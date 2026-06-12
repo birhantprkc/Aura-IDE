@@ -119,10 +119,11 @@ class AuraPlayground(QWidget):
         self._outer_splitter.setStretchFactor(1, 1)
         self._outer_splitter.setSizes([240, 800])
 
-        # Stacked widget: index 0 = workspace view, index 1 = Drone Bay
+        # Stacked widget: index 0 = workspace view, index 1 = Drone Bay, index 2 = Chain Editor
         self._stack = QStackedWidget(self)
         self._stack.addWidget(self._outer_splitter)  # index 0
         self._drone_bay: QWidget | None = None
+        self._chain_editor: QWidget | None = None
 
         layout.addWidget(self._stack, 1)
 
@@ -155,6 +156,25 @@ class AuraPlayground(QWidget):
     def set_drone_bay(self, drone_bay: QWidget) -> None:
         self._drone_bay = drone_bay
         self._stack.addWidget(drone_bay)  # index 1
+
+    def set_chain_editor(self, chain_editor: QWidget) -> None:
+        """Add or replace the chain editor at stack index 2."""
+        if self._chain_editor is not None:
+            self._stack.removeWidget(self._chain_editor)
+            self._chain_editor.deleteLater()
+        self._chain_editor = chain_editor
+        self._stack.addWidget(chain_editor)  # index 2
+
+    def toggle_chain_editor(self) -> None:
+        """Switch the stacked widget to the chain editor view (index 2)."""
+        if self._chain_editor is not None and self._stack.currentIndex() != 2:
+            self._stack.setCurrentIndex(2)
+            self.set_workspace_header("WORKFLOW EDITOR", show_close_all=False)
+
+    def hide_chain_editor(self) -> None:
+        """Switch back to workspace view from chain editor."""
+        if self._stack.currentIndex() == 2:
+            self.switch_to_workspace()
 
     def set_workspace_header(self, text: str, show_close_all: bool = True) -> None:
         """Update the header label and visibility of Close All button."""

@@ -12,6 +12,7 @@ from aura.drones.capabilities import CapabilityBinding, CapabilityRequirement
 from aura.drones.definition import DroneBudget, DroneDefinition, default_tools_for_policy, slugify
 from aura.drones.store import DroneStore, _drone_from_dict, _global_drones_root
 
+
 @pytest.fixture(autouse=True)
 def _patch_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point data_dir to a tmp_path subdirectory for test isolation."""
@@ -307,6 +308,24 @@ def test_drone_from_dict_old_json_backward_compat() -> None:
     assert drone.capability_bindings == ()
     assert drone.setup_steps == ()
     assert drone.first_run_test == ""
+    assert drone.accepts == ""
+    assert drone.produces == ""
+
+
+def test_drone_from_dict_old_json_accepts_produces_default() -> None:
+    """Old JSON without accepts/produces loads with both as empty string."""
+    old_data: dict = {
+        "id": "legacy-ap",
+        "name": "Legacy AP",
+        "description": "",
+        "instructions": "Do the thing",
+        "write_policy": "read_only",
+        "allowed_tools": ["read_file", "grep_search"],
+        "output_contract": "A summary",
+    }
+    drone = _drone_from_dict(old_data)
+    assert drone.accepts == ""
+    assert drone.produces == ""
 
 
 def test_drone_new_fields_roundtrip(tmp_path: Path) -> None:
@@ -391,6 +410,8 @@ def test_drone_new_field_defaults() -> None:
     assert drone.capability_bindings == ()
     assert drone.setup_steps == ()
     assert drone.first_run_test == ""
+    assert drone.accepts == ""
+    assert drone.produces == ""
 
 
 def test_editor_simulated_update_preserves_first_run_test(tmp_path: Path) -> None:

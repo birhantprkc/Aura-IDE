@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from aura.backends.api import APIAgentBackend
 from aura.client.events import (
@@ -20,15 +20,17 @@ from aura.client.events import (
     Usage,
 )
 from aura.config import get_provider
-from aura.settings import load_settings, resolve_role_default_model
 from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
+from aura.conversation.tools.consequential import is_consequential
 from aura.conversation.tools.registry import ToolRegistry
-from aura.drones.definition import DroneDefinition, WRITE_TOOLS, default_tools_for_policy
+from aura.drones.contracts import BUILTIN_TYPES, ArtifactType, is_compatible
+from aura.drones.definition import WRITE_TOOLS, DroneDefinition, default_tools_for_policy
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
+from aura.drones.store import RunHistoryStore
 from aura.project_env import build_project_command_rewrite
 from aura.sandbox import SandboxExecutor
-from aura.drones.store import RunHistoryStore
+from aura.settings import load_settings, resolve_role_default_model
 
 logger = logging.getLogger(__name__)
 
@@ -37,33 +39,101 @@ def _always_approve(_request: ApprovalRequest) -> ApprovalDecision:
     return ApprovalDecision(action="approve")
 
 
-def run_read_only_drone_sync(
+def _python_type_to_type_string(value: Any) -> str:
+    """Map a Python value to our type string vocabulary."""
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, dict):
+        return "object"
+    return "any"
+
+
+def _extract_last_json_block(text: str) -> str | None:
+    """Extract the last ```json ... ``` fenced block from *text*.
+
+    Returns the raw JSON string (without fences) or None if not found.
+    """
+    FENCE = "```json"
+    idx = text.rfind(FENCE)
+    if idx == -1:
+        return None
+    start = idx + len(FENCE)
+    end = text.find("```", start)
+    if end == -1:
+        return None
+    block = text[start:end].strip()
+    return block if block else None
+
+
+# ── Approval helpers ────────────────────────────────────────────────
+
+
+def _check_write_approval(
+    tool_name: str,
+    args: dict[str, Any],
+    approval_callback: Callable[[ApprovalRequest], ApprovalDecision],
+) -> tuple[bool, str | None]:
+    """Check whether a consequential tool call is approved.
+
+    Returns (approved, rejection_payload).
+    If approved, rejection_payload is None.
+    If rejected, rejection_payload is a JSON error string.
+    """
+    rel_path = str(args.get("path", "")) if isinstance(args.get("path"), (str, Path)) else ""
+    new_content = args.get("content", "") if isinstance(args.get("content"), str) else str(args)
+
+    req = ApprovalRequest(
+        tool_name=tool_name,
+        rel_path=rel_path,
+        old_content="",
+        new_content=new_content,
+        is_new_file=bool(rel_path),
+    )
+    decision = approval_callback(req)
+    if decision.action in ("approve", "approve_all"):
+        return True, None
+    payload = {
+        "ok": False,
+        "error": f"Tool '{tool_name}' was not approved.",
+        "action": decision.action,
+        "note": decision.note or "",
+    }
+    return False, json.dumps(payload, ensure_ascii=False)
+
+
+# ── Shared implementation ───────────────────────────────────────────
+
+
+def _run_drone_sync_impl(
     workspace_root: Path,
     drone_id: str,
     drone: DroneDefinition,
     goal: str,
+    *,
+    write_enabled: bool = False,
+    approval_callback: Callable[[ApprovalRequest], ApprovalDecision] | None = None,
     timeout_seconds: int = 120,
     max_tool_rounds: int = 8,
 ) -> dict[str, Any]:
-    """Run a read-only Drone synchronously and return a structured result dict.
+    """Shared sync-drone execution for read-only and write-capable runners.
 
-    Args:
-        workspace_root: Path to the workspace root.
-        drone_id: The drone's id.
-        drone: The DroneDefinition to execute.
-        goal: The user's goal for this drone run.
-        timeout_seconds: Maximum seconds before timing out.
-        max_tool_rounds: Maximum tool-call rounds (overrides drone budget).
-
-    Returns:
-        dict with keys: ok, run_id, drone_id, drone_name, status, summary,
-        tool_calls_made, tool_errors, elapsed_seconds.
+    Parameters
+    ----------
+    write_enabled:
+        If True, write tools are available (subject to per-call approval).
+    approval_callback:
+        Per-write-operation approval callback for consequential tools.
     """
     run = DroneRun(drone=drone)
     run.mark("running")
     start_time = time.time()
 
-    read_only = drone.write_policy == "read_only"
     registry = ToolRegistry(
         workspace_root=workspace_root,
         read_only=False,
@@ -71,7 +141,7 @@ def run_read_only_drone_sync(
     )
 
     allowed_set = set(drone.allowed_tools or default_tools_for_policy(drone.write_policy))
-    if read_only:
+    if not write_enabled:
         allowed_set.difference_update(WRITE_TOOLS)
 
     tool_defs = registry.tool_defs()
@@ -81,19 +151,42 @@ def run_read_only_drone_sync(
     ]
 
     budget_min = max(1, timeout_seconds // 60)
+    if not write_enabled:
+        mode_line = "- Read-only mode: you cannot write or modify any files.\n"
+    else:
+        mode_line = "- Write mode: you can create and modify files.\n"
+
     system_prompt = (
         f"You are a focused worker drone: \"{drone.name}\".\n\n"
         f"{drone.description}\n\n"
         f"## Instructions\n{drone.instructions}\n\n"
         f"## Goal\n{goal}\n\n"
         f"## Rules\n"
-        f"- Read-only mode: you cannot write or modify any files.\n"
-        f"- Execute the task using the available tools.\n"
-        f"- Provide a clear summary of what you found or accomplished.\n"
-        f"- Keep responses concise and relevant.\n"
-        f"- Budget: {max_tool_rounds} tool rounds, {budget_min} minute timeout.\n\n"
+        f"{mode_line}"
+        f"Execute the task using the available tools.\n"
+        f"Provide a clear summary of what you found or accomplished.\n"
+        f"Keep responses concise and relevant.\n"
+        f"Budget: {max_tool_rounds} tool rounds, {budget_min} minute timeout.\n\n"
         f"## Output contract\n{drone.output_contract}"
     )
+
+    # Artifact contract injection
+    if drone.produces and drone.produces in BUILTIN_TYPES:
+        art = BUILTIN_TYPES[drone.produces]
+        schema_lines = "\n".join(
+            f'  "{k}": "{v}"' for k, v in art.schema.items()
+        )
+        system_prompt += (
+            f"\n\n## Output contract (structured)\n"
+            f"You MUST end your response with a fenced JSON block conforming\n"
+            f"to the following schema.\n"
+            f"\nExpected type: **{art.name}**\n"
+            f"Schema:\n"
+            f"```\n{{\n{schema_lines}\n}}\n```\n"
+            f"\nThe JSON block MUST be the LAST thing in your response, fenced\n"
+            f"as ```json ... ```.  This is your sole output format for this run.\n"
+            f"Every field in the schema is required.\n"
+        )
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -107,20 +200,24 @@ def run_read_only_drone_sync(
     except Exception:
         provider_id_str = "deepseek"
 
-    provider_cfg = get_provider(provider_id_str)
-
     try:
         model = resolve_role_default_model(provider_id_str, "worker")
     except Exception:
         model = "deepseek-chat"
     if not model:
-        model = provider_cfg.models.get("worker", "deepseek-chat")
+        try:
+            provider_cfg = get_provider(provider_id_str)
+            model = provider_cfg.models.get("worker", "deepseek-chat")
+        except Exception:
+            model = "deepseek-chat"
 
     backend = APIAgentBackend(provider=provider_id_str)
     cancel_event = threading.Event()
 
     tool_calls_made = 0
     tool_errors = 0
+    approved_write_actions = 0
+    rejected_write_actions = 0
     content_parts: list[str] = []
     tool_call_records: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -196,6 +293,40 @@ def run_read_only_drone_sync(
                                 },
                                 ensure_ascii=False,
                             )
+                        elif write_enabled and is_consequential(name):
+                            if approval_callback is not None:
+                                approved, rejection_msg = _check_write_approval(
+                                    name, args, approval_callback,
+                                )
+                                if approved:
+                                    approved_write_actions += 1
+                                    if name == "run_terminal_command":
+                                        ok, result_str = _execute_terminal_command(
+                                            workspace_root, args, timeout_seconds, cancel_event,
+                                        )
+                                    else:
+                                        result = registry.execute(
+                                            name, args,
+                                            approval_cb=_always_approve,
+                                            reject_all=False,
+                                        )
+                                        ok = result.ok
+                                        result_str = result.to_tool_message_content()
+                                else:
+                                    rejected_write_actions += 1
+                                    ok = False
+                                    result_str = rejection_msg
+                            else:
+                                # No callback — auto-reject
+                                rejected_write_actions += 1
+                                ok = False
+                                result_str = json.dumps(
+                                    {
+                                        "ok": False,
+                                        "error": f"Tool '{name}' requires approval but no approval callback provided.",
+                                    },
+                                    ensure_ascii=False,
+                                )
                         elif name == "run_terminal_command":
                             ok, result_str = _execute_terminal_command(
                                 workspace_root, args, timeout_seconds, cancel_event,
@@ -253,6 +384,54 @@ def run_read_only_drone_sync(
 
     ended = dt.datetime.now(dt.timezone.utc).isoformat()
     summary = "".join(content_parts).strip()
+
+    # ── Artifact extraction ────────────────────────────────────────
+    produced_artifact: dict | None = None
+    met: bool | None = None
+    evidence: str = ""
+    if drone.produces and drone.produces in BUILTIN_TYPES:
+        declared_type = BUILTIN_TYPES[drone.produces]
+        fenced = _extract_last_json_block(summary)
+        if fenced is None:
+            met = False
+            evidence = "No ```json ... ``` block found in response."
+        else:
+            try:
+                parsed = json.loads(fenced)
+            except json.JSONDecodeError as exc:
+                met = False
+                evidence = f"JSON parse error: {exc}"
+            else:
+                # Build a runtime ArtifactType from the actual parsed data
+                runtime_schema = {
+                    k: _python_type_to_type_string(v)
+                    for k, v in parsed.items()
+                }
+                runtime_type = ArtifactType(name="_runtime", schema=runtime_schema)
+                if is_compatible(runtime_type, declared_type):
+                    produced_artifact = parsed
+                    met = True
+                    evidence = f"Produced valid {drone.produces} artifact."
+                else:
+                    missing = [
+                        f for f in declared_type.schema
+                        if f not in runtime_schema
+                    ]
+                    type_mismatches = [
+                        f for f in declared_type.schema
+                        if f in runtime_schema
+                        and declared_type.schema[f] != "any"
+                        and runtime_schema[f] != "any"
+                        and runtime_schema[f] != declared_type.schema[f]
+                    ]
+                    details = []
+                    if missing:
+                        details.append(f"Missing required field(s): {', '.join(missing)}")
+                    if type_mismatches:
+                        details.append(f"Type mismatch on field(s): {', '.join(type_mismatches)}")
+                    met = False
+                    evidence = "; ".join(details) if details else "Incompatible artifact schema."
+
     elapsed = run.elapsed_seconds
 
     receipt = DroneReceipt(
@@ -269,6 +448,9 @@ def run_read_only_drone_sync(
         tool_calls=tool_call_records,
         errors=errors,
         elapsed_seconds=elapsed,
+        produced_artifact=produced_artifact,
+        met=met,
+        evidence=evidence,
     )
 
     try:
@@ -287,7 +469,95 @@ def run_read_only_drone_sync(
         "tool_errors": tool_errors,
         "elapsed_seconds": elapsed,
         "receipt": receipt.to_dict(),
+        "approved_write_actions": approved_write_actions,
+        "rejected_write_actions": rejected_write_actions,
     }
+
+
+# ── Public API ──────────────────────────────────────────────────────
+
+
+def run_read_only_drone_sync(
+    workspace_root: Path,
+    drone_id: str,
+    drone: DroneDefinition,
+    goal: str,
+    timeout_seconds: int = 120,
+    max_tool_rounds: int = 8,
+) -> dict[str, Any]:
+    """Run a read-only Drone synchronously and return a structured result dict.
+
+    Args:
+        workspace_root: Path to the workspace root.
+        drone_id: The drone's id.
+        drone: The DroneDefinition to execute.
+        goal: The user's goal for this drone run.
+        timeout_seconds: Maximum seconds before timing out.
+        max_tool_rounds: Maximum tool-call rounds (overrides drone budget).
+
+    Returns:
+        dict with keys: ok, run_id, drone_id, drone_name, status, summary,
+        tool_calls_made, tool_errors, elapsed_seconds, receipt,
+        approved_write_actions, rejected_write_actions.
+    """
+    return _run_drone_sync_impl(
+        workspace_root, drone_id, drone, goal,
+        write_enabled=False,
+        timeout_seconds=timeout_seconds,
+        max_tool_rounds=max_tool_rounds,
+    )
+
+
+def run_write_capable_drone_sync(
+    workspace_root: Path,
+    drone_id: str,
+    drone: DroneDefinition,
+    goal: str,
+    *,
+    approval_callback: Callable[[ApprovalRequest], ApprovalDecision] | None = None,
+    timeout_seconds: int = 120,
+    max_tool_rounds: int = 8,
+) -> dict[str, Any]:
+    """Run a write-capable Drone synchronously with per-call approval.
+
+    Write tools are available (not filtered out).  Before each consequential
+    tool call, *approval_callback* is consulted.  If no callback is provided,
+    consequential tools are auto-rejected.
+
+    Parameters
+    ----------
+    workspace_root:
+        Path to the workspace root.
+    drone_id:
+        The drone's id.
+    drone:
+        The DroneDefinition to execute.
+    goal:
+        The user's goal for this drone run.
+    approval_callback:
+        Per-write-operation approval callback for consequential tools.
+        If *None*, consequential tools are auto-rejected.
+    timeout_seconds:
+        Maximum seconds before timing out.
+    max_tool_rounds:
+        Maximum tool-call rounds (overrides drone budget).
+
+    Returns
+    -------
+    dict with keys: ok, run_id, drone_id, drone_name, status, summary,
+    tool_calls_made, tool_errors, elapsed_seconds, receipt,
+    approved_write_actions, rejected_write_actions.
+    """
+    return _run_drone_sync_impl(
+        workspace_root, drone_id, drone, goal,
+        write_enabled=True,
+        approval_callback=approval_callback,
+        timeout_seconds=timeout_seconds,
+        max_tool_rounds=max_tool_rounds,
+    )
+
+
+# ── Tool execution helpers ──────────────────────────────────────────
 
 
 def _execute_terminal_command(
