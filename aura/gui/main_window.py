@@ -195,6 +195,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.maximize_requested.connect(self._toggle_maximize)
         self._toolbar.close_requested.connect(self.close)
 
+        # Draft settlement state (chain editor workshop → Planner/Worker → real Drone)
+        self._pending_draft_settle: tuple | None = None  # (editor: ChainEditor, draft_node_id: str)
+
         # ----- status bar -----
         self._status_bar = AuraStatusBar(self)
         self.setStatusBar(self._status_bar)
@@ -837,6 +840,27 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         payload = SendPayload(text=prompt, attachments=[])
         self._send_handler.handle_send(payload, self.current_model(), self.current_thinking())
 
+    def _on_chain_editor_settle_draft(self, payload: dict) -> None:
+        brief = payload["brief"]       # DroneBuildBrief
+        draft_node_id = payload["draft_node_id"]  # str
+
+        editor = self.sender()
+        if not isinstance(editor, ChainEditor):
+            logger.warning("settle_draft_requested from unexpected sender")
+            return
+
+        self._pending_draft_settle = (editor, draft_node_id)
+
+        # Read contract context from the draft node
+        draft_node = editor._canvas._nodes.get(draft_node_id)
+        accepts = draft_node.draft_accepts if draft_node and draft_node.is_draft else ""
+        produces = draft_node.draft_produces if draft_node and draft_node.is_draft else ""
+
+        prompt = build_drone_creation_prompt(brief, accepts=accepts, produces=produces)
+
+        payload = SendPayload(text=prompt, attachments=[])
+        self._send_handler.handle_send(payload, self.current_model(), self.current_thinking())
+
     def _on_save_as_drone(self, summary: str) -> None:
         """Open the Drone editor pre-filled from the last Worker run."""
         from PySide6.QtWidgets import QDialog
@@ -1206,9 +1230,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         editor = ChainEditor(
             workspace_root=self._workspace_root,
             chain_id=chain_id,
+            provider_id=self._settings.planner_provider,
+            model=self.current_model(),
+            thinking=self.current_thinking(),
+            temperature=self._settings.temperature,
             parent=self,
         )
         editor.goBackRequested.connect(self._playground.hide_chain_editor)
+        editor.settle_draft_requested.connect(self._on_chain_editor_settle_draft)
 
         def on_run(cid: str) -> None:
             self._on_run_workflow(cid)
@@ -1924,6 +1953,22 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             if hasattr(self, '_drone_bay') and self._drone_bay is not None:
                 self._drone_bay.refresh()
             self._refresh_drone_context()
+
+            # Draft settlement after save_drone_definition
+            drone_id = extras.get("drone_id")
+            if self._pending_draft_settle is not None and drone_id:
+                editor, draft_node_id = self._pending_draft_settle
+                self._pending_draft_settle = None
+                try:
+                    drone_def = DroneStore.load_drone(self._workspace_root, drone_id)
+                    if drone_def is None:
+                        logger.warning(f"Settle draft: drone {drone_id} not found in store")
+                    else:
+                        success = editor.settle_draft_node(draft_node_id, drone_def)
+                        if not success:
+                            logger.warning(f"Settle draft: settle_draft_node returned False for {draft_node_id}")
+                except Exception:
+                    logger.exception("Error settling draft node")
 
         if ok and name in ("read_file", "read_files"):
             try:

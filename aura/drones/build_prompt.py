@@ -34,7 +34,7 @@ def _generated_code_line(plan) -> str:
     )
 
 
-def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
+def build_drone_creation_prompt(brief: DroneBuildBrief, accepts: str = "", produces: str = "") -> str:
     """Return a Planner-facing prompt to build a Drone from an approved brief.
 
     Uses the deterministic build compiler to produce a compiled build plan,
@@ -55,6 +55,14 @@ def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
     lines.append("")
     lines.append("## Build Brief")
     lines.append(brief.build_brief)
+
+    if accepts or produces:
+        lines.append("")
+        lines.append("## Contract Context")
+        lines.append(f"- Accepts (input type): {accepts or 'any'}")
+        lines.append(f"- Produces (output type): {produces or 'any'}")
+        lines.append("- The DroneDefinition MUST set these exact accepts/produces values.")
+
     lines.append("")
     lines.append("## Compiled Build Plan")
     lines.append(f"- allowed_tools: {list(plan.allowed_tools)}")

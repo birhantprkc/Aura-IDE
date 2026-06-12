@@ -4,14 +4,17 @@ import math
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
     QFontMetrics,
+    QLinearGradient,
     QPainter,
     QPen,
+    QPixmap,
+    QRadialGradient,
 )
 from PySide6.QtWidgets import (
     QGraphicsItem,
@@ -96,6 +99,11 @@ class ChainNodeItem(QGraphicsObject):
         drone: DroneDefinition,
         goal_template: str,
         canvas: ChainCanvas,
+        is_draft: bool = False,
+        draft_name: str = "",
+        draft_accepts: str = "",
+        draft_produces: str = "",
+        draft_brief: str = "",
     ):
         super().__init__()
         self._node_id = node_id
@@ -103,6 +111,11 @@ class ChainNodeItem(QGraphicsObject):
         self._goal_template = goal_template
         self._canvas = canvas
         self._missing = False
+        self._is_draft = is_draft
+        self._draft_name = draft_name
+        self._draft_accepts = draft_accepts
+        self._draft_produces = draft_produces
+        self._draft_brief = draft_brief
 
         # Ports
         self.input_port = PortItem(self, is_input=True)
@@ -139,6 +152,31 @@ class ChainNodeItem(QGraphicsObject):
         self._goal_template = value
 
     @property
+    def is_draft(self) -> bool:
+        return self._is_draft
+
+    @property
+    def draft_name(self) -> str:
+        return self._draft_name
+
+    @draft_name.setter
+    def draft_name(self, value: str) -> None:
+        self._draft_name = value
+        self.update()
+
+    @property
+    def draft_accepts(self) -> str:
+        return self._draft_accepts
+
+    @property
+    def draft_produces(self) -> str:
+        return self._draft_produces
+
+    @property
+    def draft_brief(self) -> str:
+        return self._draft_brief
+
+    @property
     def missing(self) -> bool:
         return self._missing
 
@@ -149,6 +187,8 @@ class ChainNodeItem(QGraphicsObject):
 
     @property
     def border_color(self) -> QColor:
+        if self._is_draft:
+            return QColor("#9b8bb5")
         if self._missing:
             return DANGER
         policy = getattr(self._drone, "write_policy", "read_only")
@@ -174,6 +214,38 @@ class ChainNodeItem(QGraphicsObject):
             pen_w = 3
         painter.setPen(QPen(border, pen_w))
         painter.drawRoundedRect(rect, 6, 6)
+
+        if self._is_draft:
+            # Draft node: show draft name and inferred badges
+            painter.setPen(QPen(FG))
+            font = QFont()
+            font.setBold(True)
+            font.setPointSize(11)
+            painter.setFont(font)
+            name = self._draft_name or "Untitled Drone"
+            fm = QFontMetrics(font)
+            name = fm.elidedText(name, Qt.TextElideMode.ElideRight, NODE_WIDTH - 12)
+            painter.drawText(QRectF(6, 4, NODE_WIDTH - 12, 18),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
+
+            font_small = QFont()
+            font_small.setPointSize(8)
+            painter.setFont(font_small)
+            painter.setPen(QPen(FG_MUTED))
+            painter.drawText(QRectF(6, 22, NODE_WIDTH - 12, 14),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             "Draft Drone")
+            badge_y = 36
+            painter.drawText(QRectF(6, badge_y, NODE_WIDTH // 2 - 8, 14),
+                             Qt.AlignmentFlag.AlignLeft,
+                             f"in: {self._draft_accepts or '?'}")
+            painter.drawText(QRectF(NODE_WIDTH // 2 + 2, badge_y, NODE_WIDTH // 2 - 8, 14),
+                             Qt.AlignmentFlag.AlignLeft,
+                             f"out: {self._draft_produces or '?'}")
+            painter.drawText(QRectF(6, 48, NODE_WIDTH - 12, 10),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             "Save before run")
+            return
 
         # Drone name
         painter.setPen(QPen(FG))
@@ -293,10 +365,13 @@ class ChainEdgeItem(QGraphicsPathItem):
 
     def contextMenuEvent(self, event) -> None:
         menu = QMenu()
-        delete_action = menu.addAction("Delete Edge")
+        insert_action = menu.addAction("Insert Drone Between")
         menu.addSeparator()
+        delete_action = menu.addAction("Delete Edge")
         action = menu.exec(event.screenPos())
-        if action == delete_action:
+        if action == insert_action:
+            self._canvas._canvas_insert_draft_between(self._source_port.parent_node, self._target_port.parent_node)
+        elif action == delete_action:
             self._canvas._remove_edge(self)
 
     def hoverEnterEvent(self, event) -> None:
@@ -345,6 +420,16 @@ class ChainCanvas(QGraphicsView):
         self._empty_text: QGraphicsTextItem | None = None
         self._update_empty_text()
 
+        # Space background
+        self._space_bg_cache: QPixmap | None = None
+        self._stars: list[tuple[float, float, float, float]] = []
+        self._precompute_stars(400)
+        self._space_offset_x = 0.0
+        self._space_offset_y = 0.0
+        self._space_timer = QTimer(self)
+        self._space_timer.timeout.connect(self._on_space_tick)
+        self._space_timer.start(50)
+
     def _update_empty_text(self) -> None:
         if self._empty_text:
             self._scene.removeItem(self._empty_text)
@@ -374,8 +459,13 @@ class ChainCanvas(QGraphicsView):
                 drone=drone,
                 goal_template=node_data.goal_template,
                 canvas=self,
+                is_draft=node_data.is_draft,
+                draft_name=node_data.draft_name,
+                draft_accepts=node_data.draft_accepts,
+                draft_produces=node_data.draft_produces,
+                draft_brief=node_data.draft_brief,
             )
-            if drone is None:
+            if drone is None and not node_data.is_draft:
                 item.missing = True
             if node_data.position and len(node_data.position) == 2:
                 item.setPos(node_data.position[0], node_data.position[1])
@@ -417,6 +507,11 @@ class ChainCanvas(QGraphicsView):
                 "drone_id": item.drone_id,
                 "goal_template": item.goal_template,
                 "position": [pos.x(), pos.y()],
+                "is_draft": item.is_draft,
+                "draft_name": item.draft_name,
+                "draft_accepts": item.draft_accepts,
+                "draft_produces": item.draft_produces,
+                "draft_brief": item.draft_brief,
             })
 
         edges = []
@@ -587,6 +682,66 @@ class ChainCanvas(QGraphicsView):
         item.setPos(scene_pos - QPointF(NODE_WIDTH / 2, NODE_HEIGHT / 2))
         self._scene.addItem(item)
         self._nodes[node_id] = item
+        self._scene.clearSelection()
+        item.setSelected(True)
+        self._update_empty_text()
+        self.canvasChanged.emit()
+
+    def _canvas_insert_draft_between(self, source_node: ChainNodeItem, target_node: ChainNodeItem) -> None:
+        edge_to_remove = None
+        for edge in self._edges:
+            if edge.from_node_id == source_node.node_id and edge.to_node_id == target_node.node_id:
+                edge_to_remove = edge
+                break
+        if edge_to_remove is None:
+            return
+        self._remove_edge(edge_to_remove)
+
+        if source_node.drone is not None:
+            draft_accepts = getattr(source_node.drone, "produces", "") or ""
+        elif source_node.is_draft:
+            draft_accepts = source_node.draft_produces or ""
+        else:
+            draft_accepts = ""
+
+        if target_node.drone is not None:
+            draft_produces = getattr(target_node.drone, "accepts", "") or ""
+        elif target_node.is_draft:
+            draft_produces = target_node.draft_accepts or ""
+        else:
+            draft_produces = ""
+
+        src_center = source_node.pos() + QPointF(NODE_WIDTH / 2, NODE_HEIGHT / 2)
+        tgt_center = target_node.pos() + QPointF(NODE_WIDTH / 2, NODE_HEIGHT / 2)
+        center = QPointF((src_center.x() + tgt_center.x()) / 2, (src_center.y() + tgt_center.y()) / 2)
+        draft_pos = center - QPointF(NODE_WIDTH / 2, NODE_HEIGHT / 2)
+
+        node_id = f"draft-{uuid.uuid4().hex[:8]}"
+        item = ChainNodeItem(
+            node_id=node_id,
+            drone=None,
+            goal_template="",
+            canvas=self,
+            is_draft=True,
+            draft_name="Untitled Drone",
+            draft_accepts=draft_accepts,
+            draft_produces=draft_produces,
+        )
+        item.setPos(draft_pos)
+        self._scene.addItem(item)
+        self._nodes[node_id] = item
+
+        edge1 = ChainEdgeItem(source_port=source_node.output_port, target_port=item.input_port, canvas=self)
+        self._scene.addItem(edge1)
+        self._edges.append(edge1)
+
+        edge2 = ChainEdgeItem(source_port=item.output_port, target_port=target_node.input_port, canvas=self)
+        self._scene.addItem(edge2)
+        self._edges.append(edge2)
+
+        self._scene.clearSelection()
+        item.setSelected(True)
+
         self._update_empty_text()
         self.canvasChanged.emit()
 
@@ -642,3 +797,106 @@ class ChainCanvas(QGraphicsView):
         # Re-paint for selection state
         self.viewport().update()
         self.canvasChanged.emit()
+
+    def contextMenuEvent(self, event) -> None:
+        scene_pos = self.mapToScene(event.position().toPoint())
+        item_at_pos = self._scene.itemAt(scene_pos)
+        if item_at_pos is None or isinstance(item_at_pos, QGraphicsTextItem):
+            menu = QMenu()
+            add_draft_action = menu.addAction("Create Drone Here")
+            action = menu.exec(event.globalPos())
+            if action == add_draft_action:
+                self._canvas_add_draft_node(scene_pos)
+            return
+        super().contextMenuEvent(event)
+
+    def _canvas_add_draft_node(self, scene_pos: QPointF) -> None:
+        node_id = f"draft-{uuid.uuid4().hex[:8]}"
+        item = ChainNodeItem(
+            node_id=node_id,
+            drone=None,
+            goal_template="",
+            canvas=self,
+            is_draft=True,
+            draft_name="Untitled Drone",
+        )
+        item.setPos(scene_pos - QPointF(NODE_WIDTH / 2, NODE_HEIGHT / 2))
+        self._scene.addItem(item)
+        self._nodes[node_id] = item
+        self._update_empty_text()
+        self.canvasChanged.emit()
+
+    # ---- Space background ----
+
+    def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
+        painter.fillRect(rect, QColor("#0a0a10"))
+
+        viewport_rect = self.viewport().rect()
+        cache = self._space_bg_cache
+        if cache is None or cache.size() != viewport_rect.size():
+            cache = self._build_space_cache(viewport_rect.size())
+            self._space_bg_cache = cache
+        painter.drawPixmap(viewport_rect, cache)
+
+        visible_rect = self.mapToScene(viewport_rect).boundingRect()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        for sx, sy, size, brightness in self._stars:
+            wx = (sx + self._space_offset_x) % (visible_rect.width() + 200) + visible_rect.left() - 100
+            wy = (sy + self._space_offset_y) % (visible_rect.height() + 200) + visible_rect.top() - 100
+            if not visible_rect.contains(wx, wy):
+                continue
+            view_pos = self.mapFromScene(QPointF(wx, wy))
+            alpha = int(40 + brightness * 200)
+            painter.setBrush(QColor(200, 210, 255, alpha))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(view_pos, size, size)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    def _precompute_stars(self, count: int = 400) -> None:
+        import random
+        rng = random.Random(42)
+        for _ in range(count):
+            x = rng.uniform(-4000, 4000)
+            y = rng.uniform(-3000, 3000)
+            size = rng.uniform(0.6, 2.2)
+            brightness = rng.uniform(0.0, 1.0) ** 2
+            self._stars.append((x, y, size, brightness))
+
+    def _build_space_cache(self, size) -> QPixmap:
+        pixmap = QPixmap(size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pixmap)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w, h = size.width(), size.height()
+
+        center_x, center_y = w / 2, h / 2
+        max_dist = math.sqrt(center_x ** 2 + center_y ** 2)
+        vignette_gradient = QRadialGradient(QPointF(center_x, center_y), max_dist * 0.75)
+        vignette_gradient.setColorAt(0.0, QColor(0, 0, 0, 0))
+        vignette_gradient.setColorAt(0.6, QColor(0, 0, 0, 40))
+        vignette_gradient.setColorAt(1.0, QColor(0, 0, 0, 180))
+        p.fillRect(0, 0, w, h, vignette_gradient)
+
+        nebula_gradient = QLinearGradient(QPointF(0, h * 0.3), QPointF(w * 0.7, 0))
+        nebula_gradient.setColorAt(0.0, QColor(90, 70, 160, 0))
+        nebula_gradient.setColorAt(0.35, QColor(90, 70, 160, 15))
+        nebula_gradient.setColorAt(0.55, QColor(110, 80, 180, 18))
+        nebula_gradient.setColorAt(0.75, QColor(70, 60, 140, 8))
+        nebula_gradient.setColorAt(1.0, QColor(50, 45, 120, 0))
+        p.fillRect(0, 0, w, h, nebula_gradient)
+
+        nebula2 = QLinearGradient(QPointF(w * 0.6, h * 0.7), QPointF(w * 0.2, h))
+        nebula2.setColorAt(0.0, QColor(80, 60, 150, 0))
+        nebula2.setColorAt(0.5, QColor(100, 75, 170, 10))
+        nebula2.setColorAt(1.0, QColor(60, 50, 130, 0))
+        p.fillRect(0, 0, w, h, nebula2)
+
+        p.end()
+        return pixmap
+
+    def _on_space_tick(self) -> None:
+        self._space_offset_x += 0.15
+        self._space_offset_y += 0.08
+        if self._stars:
+            self._scene.invalidate(self._scene.sceneRect(), QGraphicsScene.SceneLayer.BackgroundLayer)

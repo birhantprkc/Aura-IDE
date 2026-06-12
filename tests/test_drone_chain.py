@@ -723,3 +723,86 @@ def test_validate_message_no_produces_type() -> None:
     match = [e for e in result.errors if "no produces type" in e]
     assert len(match) >= 1
     assert "OpportunityBatch" in match[0]
+
+
+# ── Draft nodes ────────────────────────────────────────────────────
+
+
+def test_draft_fields_default() -> None:
+    """ChainNode defaults is_draft=False, draft fields empty."""
+    node = ChainNode(id="n1", drone_id="drone-a")
+    assert node.is_draft is False
+    assert node.draft_name == ""
+    assert node.draft_accepts == ""
+    assert node.draft_produces == ""
+    assert node.draft_brief == ""
+
+
+def test_roundtrip_with_draft_node() -> None:
+    """Chain with a draft node saves and reloads preserving draft fields."""
+    chain = ChainDefinition(
+        id="draft-chain", name="Draft Chain", description="Has draft",
+        nodes=(
+            ChainNode(id="d1", drone_id="drone-a"),
+            ChainNode(id="d2", drone_id="__draft__", is_draft=True,
+                      draft_name="My Draft", draft_accepts="text",
+                      draft_produces="json", draft_brief="Does stuff"),
+        ),
+        edges=(ChainEdge(from_node="d1", to_node="d2"),),
+    )
+    data = asdict(chain)
+    reconstructed = _chain_from_dict(data)
+    assert reconstructed == chain
+    draft = [n for n in reconstructed.nodes if n.is_draft][0]
+    assert draft.draft_name == "My Draft"
+    assert draft.draft_accepts == "text"
+    assert draft.draft_produces == "json"
+    assert draft.draft_brief == "Does stuff"
+
+
+def test_validate_fails_for_draft_node() -> None:
+    """validate() fails when any node is_draft."""
+    drone_a = _make_drone("drone-a")
+    lookup = {"drone-a": drone_a}
+    chain = ChainDefinition(
+        id="draft-run", name="Draft Run", description="",
+        nodes=(
+            ChainNode(id="n1", drone_id="drone-a"),
+            ChainNode(id="n2", drone_id="__draft__", is_draft=True,
+                      draft_name="WIP"),
+        ),
+        edges=(ChainEdge(from_node="n1", to_node="n2"),),
+    )
+    result = validate(chain, lookup)
+    assert result.ok is False
+    assert any("draft" in e.lower() for e in result.errors)
+    assert any("n2" in e for e in result.errors)
+    assert any("save it before running" in e for e in result.errors)
+
+
+def test_validate_draft_error_message_exact() -> None:
+    """Error message for draft node is human-readable."""
+    chain = ChainDefinition(
+        id="draft-msg", name="Draft Msg", description="",
+        nodes=(ChainNode(id="n1", drone_id="__draft__", is_draft=True,
+                         draft_name="My Draft"),),
+    )
+    result = validate(chain, {})
+    assert result.ok is False
+    match = [e for e in result.errors if "draft" in e.lower()]
+    assert len(match) >= 1
+    assert "n1" in match[0]
+    assert "save it before running" in match[0]
+
+
+def test_old_chain_loads_without_draft_fields() -> None:
+    """A chain JSON without draft fields loads with defaults."""
+    data = {
+        "id": "old-chain", "name": "Old", "description": "Old chain",
+        "nodes": [{"id": "n1", "drone_id": "drone-a", "position": [10, 20]}],
+        "edges": [],
+    }
+    chain = _chain_from_dict(data)
+    node = chain.nodes[0]
+    assert node.is_draft is False
+    assert node.draft_name == ""

@@ -12,6 +12,11 @@ class ChainNode:
     drone_id: str
     goal_template: str = ""
     position: tuple[float, float] = (0.0, 0.0)
+    is_draft: bool = False
+    draft_name: str = ""
+    draft_accepts: str = ""
+    draft_produces: str = ""
+    draft_brief: str = ""
 
 
 @dataclass(frozen=True)
@@ -79,10 +84,18 @@ def validate(
 ) -> ChainValidation:
     """Validate a chain definition against a set of available drones.
 
-    Checks in order: start nodes, drone existence, drone enabled,
+    Checks in order: draft nodes, start nodes, drone existence, drone enabled,
     cycles, and type compatibility on every edge.
     """
     errors: list[str] = []
+
+    # 0. Draft nodes must be saved as real drones before running
+    for node in chain.nodes:
+        if node.is_draft:
+            errors.append(
+                f"Node '{node.id}' is a draft Drone"
+                f" — save it before running."
+            )
 
     # 1. At least one start node (no inbound edges)
     all_node_ids = {n.id for n in chain.nodes}
@@ -93,16 +106,20 @@ def validate(
 
     node_map = {n.id: n for n in chain.nodes}
 
-    # 2. Every referenced drone_id exists
+    # 2. Every referenced drone_id exists (skip draft nodes; already caught)
     for node in chain.nodes:
+        if node.is_draft:
+            continue
         if node.drone_id not in drone_lookup:
             errors.append(
                 f"Node '{node.id}' references unknown drone_id "
                 f"'{node.drone_id}'."
             )
 
-    # 3. Every referenced drone is enabled
+    # 3. Every referenced drone is enabled (skip draft nodes)
     for node in chain.nodes:
+        if node.is_draft:
+            continue
         drone = drone_lookup.get(node.drone_id)
         if drone is not None and not drone.enabled:
             errors.append(
@@ -116,11 +133,13 @@ def validate(
     except ValueError as exc:
         errors.append(str(exc))
 
-    # 5. Type compatibility on every edge
+    # 5. Type compatibility on every edge (skip draft endpoints)
     for edge in chain.edges:
         producer_node = node_map.get(edge.from_node)
         consumer_node = node_map.get(edge.to_node)
         if not producer_node or not consumer_node:
+            continue
+        if producer_node.is_draft or consumer_node.is_draft:
             continue
 
         producer_drone = drone_lookup.get(producer_node.drone_id)

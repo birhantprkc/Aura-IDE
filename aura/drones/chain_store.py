@@ -34,9 +34,14 @@ def _chain_from_dict(data: dict) -> ChainDefinition:
         nodes_list.append(
             ChainNode(
                 id=n["id"],
-                drone_id=n["drone_id"],
+                drone_id=n.get("drone_id", "__draft__"),
                 goal_template=n.get("goal_template", ""),
                 position=pos,
+                is_draft=n.get("is_draft", False),
+                draft_name=n.get("draft_name", ""),
+                draft_accepts=n.get("draft_accepts", ""),
+                draft_produces=n.get("draft_produces", ""),
+                draft_brief=n.get("draft_brief", ""),
             )
         )
 
