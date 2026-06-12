@@ -45,6 +45,16 @@ PORT_RADIUS = 4
 PORT_DIAMETER = PORT_RADIUS * 2
 
 
+def _qt_color(value, fallback="#ffffff"):
+    """Return a QColor from a string token or QColor, falling back on invalid."""
+    if isinstance(value, QColor):
+        return value
+    color = QColor(str(value))
+    if not color.isValid():
+        color = QColor(fallback)
+    return color
+
+
 class PortItem(QGraphicsItem):
     """Small circular port attached to a ChainNodeItem — input or output."""
 
@@ -60,9 +70,9 @@ class PortItem(QGraphicsItem):
         return QRectF(-PORT_RADIUS, -PORT_RADIUS, PORT_DIAMETER, PORT_DIAMETER)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
-        color = self._parent_node.border_color
+        color = _qt_color(self._parent_node.border_color)
         if self._hovered:
-            color = ACCENT
+            color = _qt_color(ACCENT)
         painter.setBrush(QBrush(color))
         painter.setPen(QPen(color.darker(130), 1))
         painter.drawEllipse(self.boundingRect())
@@ -190,9 +200,9 @@ class ChainNodeItem(QGraphicsObject):
         if self._is_draft:
             return QColor("#9b8bb5")
         if self._missing:
-            return DANGER
+            return _qt_color(DANGER)
         policy = getattr(self._drone, "write_policy", "read_only")
-        return SUCCESS if policy == "read_only" else WARN
+        return _qt_color(SUCCESS) if policy == "read_only" else _qt_color(WARN)
 
     def _position_ports(self) -> None:
         """Place input/output ports on left and right edges."""
@@ -206,18 +216,18 @@ class ChainNodeItem(QGraphicsObject):
         rect = self.boundingRect().adjusted(1, 1, -1, -1)
 
         # Body
-        painter.setBrush(QBrush(BG_ALT))
+        painter.setBrush(QBrush(_qt_color(BG_ALT)))
         border = self.border_color
         pen_w = 2
         if self.isSelected():
-            border = ACCENT
+            border = _qt_color(ACCENT)
             pen_w = 3
         painter.setPen(QPen(border, pen_w))
         painter.drawRoundedRect(rect, 6, 6)
 
         if self._is_draft:
             # Draft node: show draft name and inferred badges
-            painter.setPen(QPen(FG))
+            painter.setPen(QPen(_qt_color(FG)))
             font = QFont()
             font.setBold(True)
             font.setPointSize(11)
@@ -231,7 +241,7 @@ class ChainNodeItem(QGraphicsObject):
             font_small = QFont()
             font_small.setPointSize(8)
             painter.setFont(font_small)
-            painter.setPen(QPen(FG_MUTED))
+            painter.setPen(QPen(_qt_color(FG_MUTED)))
             painter.drawText(QRectF(6, 22, NODE_WIDTH - 12, 14),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                              "Draft Drone")
@@ -248,7 +258,7 @@ class ChainNodeItem(QGraphicsObject):
             return
 
         # Drone name
-        painter.setPen(QPen(FG))
+        painter.setPen(QPen(_qt_color(FG)))
         font = QFont()
         font.setBold(True)
         font.setPointSize(11)
@@ -265,7 +275,7 @@ class ChainNodeItem(QGraphicsObject):
         font_small = QFont()
         font_small.setPointSize(8)
         painter.setFont(font_small)
-        painter.setPen(QPen(FG_MUTED))
+        painter.setPen(QPen(_qt_color(FG_MUTED)))
         accepts = getattr(self._drone, "accepts", None) or "any"
         produces = getattr(self._drone, "produces", None) or "any"
         badge_y = 24
@@ -280,7 +290,7 @@ class ChainNodeItem(QGraphicsObject):
             font_goal.setPointSize(9)
             font_goal.setItalic(True)
             painter.setFont(font_goal)
-            painter.setPen(QPen(FG_MUTED))
+            painter.setPen(QPen(_qt_color(FG_MUTED)))
             preview = self._goal_template[:40]
             if len(self._goal_template) > 40:
                 preview += "…"
@@ -334,11 +344,11 @@ class ChainEdgeItem(QGraphicsPathItem):
         self.setPath(path)
 
         # Update pen
-        color = FG_MUTED
+        color = _qt_color(FG_MUTED)
         if self.isSelected():
-            color = ACCENT
+            color = _qt_color(ACCENT)
         if self._hovered:
-            color = ACCENT
+            color = _qt_color(ACCENT)
         self.setPen(QPen(color, 2, Qt.PenStyle.SolidLine))
 
     def _build_bezier_path(self, p1, p2, p3, p4):
@@ -441,7 +451,7 @@ class ChainCanvas(QGraphicsView):
                 "Drag drones here to build your workflow.",
                 QFont("Segoe UI", 14),
             )
-            text.setDefaultTextColor(FG_MUTED)
+            text.setDefaultTextColor(_qt_color(FG_MUTED))
             text.setPos(-180, 0)
             self._empty_text = text
 
@@ -533,7 +543,7 @@ class ChainCanvas(QGraphicsView):
         scene_pos = port.center_scene()
         self._rubber_band = self._scene.addLine(
             QLineF(scene_pos, scene_pos),
-            QPen(ACCENT, 2, Qt.PenStyle.DashLine),
+            QPen(_qt_color(ACCENT), 2, Qt.PenStyle.DashLine),
         )
         # Set mouse tracking so we get move events
         self.setMouseTracking(True)
