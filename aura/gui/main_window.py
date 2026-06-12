@@ -745,13 +745,21 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         """Open the Drone Workbay (ChainEditor) or toggle it off."""
         if self._workspace_root is None:
             return
-        if self._playground.is_chain_editor_open():
-            self._playground.hide_chain_editor()
-        else:
-            if self._chain_editor is None:
-                self._on_new_workflow()
+        try:
+            if self._playground.is_chain_editor_open():
+                self._playground.hide_chain_editor()
             else:
-                self._playground.toggle_chain_editor()
+                if self._chain_editor is None:
+                    self._on_new_workflow()
+                else:
+                    self._playground.toggle_chain_editor()
+        except Exception:
+            logger.exception("Failed to open Drone Workbay")
+            QMessageBox.warning(
+                self,
+                "Workbay Error",
+                "Failed to open the Drone Workbay.\n\nCheck the logs for details.",
+            )
 
     def _sync_drone_tab_checked(self) -> None:
         if self._edge_rail.drone_tab is not None:

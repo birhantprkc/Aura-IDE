@@ -416,9 +416,8 @@ class ChainCanvas(QGraphicsView):
         self._rubber_band: QGraphicsLineItem | None = None
         self._drawing_cancelled = False
 
-        # Empty state text
+        # Empty state text (created lazily by load_chain / _update_empty_text)
         self._empty_text: QGraphicsTextItem | None = None
-        self._update_empty_text()
 
         # Space background
         self._space_bg_cache: QPixmap | None = None
@@ -431,8 +430,11 @@ class ChainCanvas(QGraphicsView):
         self._space_timer.start(100)
 
     def _update_empty_text(self) -> None:
-        if self._empty_text:
-            self._scene.removeItem(self._empty_text)
+        if self._empty_text is not None:
+            try:
+                self._scene.removeItem(self._empty_text)
+            except RuntimeError:
+                pass  # C++ object already deleted
             self._empty_text = None
         if not self._nodes:
             text = self._scene.addText(
@@ -446,6 +448,7 @@ class ChainCanvas(QGraphicsView):
     def load_chain(self, chain: ChainDefinition, drone_lookup: dict[str, DroneDefinition]) -> None:
         """Populate canvas from a ChainDefinition."""
         self._scene.clear()
+        self._empty_text = None  # scene.clear() deleted the C++ object
         self._nodes.clear()
         self._edges.clear()
         self._drawing_source_port = None

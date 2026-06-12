@@ -119,10 +119,11 @@ class AuraPlayground(QWidget):
         self._outer_splitter.setStretchFactor(1, 1)
         self._outer_splitter.setSizes([240, 800])
 
-        # Stacked widget: index 0 = workspace view, index 1 = Drone Bay, index 2 = Chain Editor
+        # Stacked widget: index 0 = workspace view; Chain Editor uses a dynamic index
         self._stack = QStackedWidget(self)
         self._stack.addWidget(self._outer_splitter)  # index 0
         self._chain_editor: QWidget | None = None
+        self._chain_editor_index: int | None = None
 
         layout.addWidget(self._stack, 1)
 
@@ -153,22 +154,22 @@ class AuraPlayground(QWidget):
         self._aura_wrapper: AuraWidget | None = None
 
     def set_chain_editor(self, chain_editor: QWidget) -> None:
-        """Add or replace the chain editor at stack index 2."""
+        """Add or replace the chain editor at a dynamic stack index."""
         if self._chain_editor is not None:
             self._stack.removeWidget(self._chain_editor)
             self._chain_editor.deleteLater()
         self._chain_editor = chain_editor
-        self._stack.addWidget(chain_editor)  # index 2
+        self._chain_editor_index = self._stack.addWidget(chain_editor)
 
     def toggle_chain_editor(self) -> None:
-        """Switch the stacked widget to the chain editor view (index 2)."""
-        if self._chain_editor is not None and self._stack.currentIndex() != 2:
-            self._stack.setCurrentIndex(2)
+        """Switch the stacked widget to the chain editor view."""
+        if self._chain_editor is not None and self._stack.currentIndex() != self._chain_editor_index:
+            self._stack.setCurrentIndex(self._chain_editor_index)
             self.set_workspace_header("WORKFLOW EDITOR", show_close_all=False)
 
     def hide_chain_editor(self) -> None:
         """Switch back to workspace from chain editor."""
-        if self._stack.currentIndex() == 2:
+        if self._stack.currentIndex() == self._chain_editor_index:
             self.switch_to_workspace()
 
     def set_workspace_header(self, text: str, show_close_all: bool = True) -> None:
@@ -184,7 +185,7 @@ class AuraPlayground(QWidget):
 
     def is_chain_editor_open(self) -> bool:
         """Return True if the chain editor is currently displayed in the stack."""
-        return self._chain_editor is not None and self._stack.currentIndex() == 2
+        return self._chain_editor is not None and self._stack.currentIndex() == self._chain_editor_index
 
     def refresh_drone_bay(self) -> None:
         if hasattr(self, '_drone_bay') and self._drone_bay is not None and hasattr(self._drone_bay, 'refresh'):
