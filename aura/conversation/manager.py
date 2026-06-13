@@ -151,6 +151,33 @@ def _normalize_worker_path(path: str) -> str:
     return normalized
 
 
+def _unique_worker_paths(paths: list[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        normalized = _normalize_worker_path(path).strip()
+        if not normalized or normalized in seen:
+            continue
+        unique.append(normalized)
+        seen.add(normalized)
+    return unique
+
+
+def _planner_stale_read_notice(modified_files: list[str]) -> str:
+    files = _unique_worker_paths(modified_files)
+    bullet_list = "\n".join(f"- {path}" for path in files)
+    return (
+        "Planner stale-read invalidation:\n"
+        "The Worker modified these files:\n"
+        f"{bullet_list}\n\n"
+        "Any prior Planner reads of those paths are stale. "
+        "Re-read the modified files before planning, dispatching, or reasoning "
+        "about further edits involving them. "
+        "If the Worker completed successfully, summarize or finish normally; "
+        "do not redispatch because of this notice unless the user asks for more."
+    )
+
+
 def _is_validation_scratch_path(path: str) -> bool:
     normalized = _normalize_worker_path(path)
     name = normalized.rsplit("/", 1)[-1]
@@ -597,11 +624,19 @@ class ConversationManager:
                                     "blocker": True,
                                     "result": result,
                                     "blocker_reason": blocker_reason,
+                                    "planner_stale_read_files": (
+                                        list(result.modified_files)
+                                        if result.modified_files
+                                        else []
+                                    ),
                                 }
                     return {
                         "id": tool_call_id,
                         "skip": True,
                         "completed_dispatch_for_final": self._is_completed_worker_result(result),
+                        "planner_stale_read_files": (
+                            list(result.modified_files) if result and result.modified_files else []
+                        ),
                     }
 
                 if name == "run_research":
@@ -760,6 +795,7 @@ class ConversationManager:
 
             completed_dispatch_for_final = False
             completed_tool_result_for_final = False
+            planner_stale_read_files: list[str] = []
             for task in tasks:
                 if cancel_event.is_set():
                     self._cleanup_cancelled(on_event)
@@ -769,7 +805,14 @@ class ConversationManager:
                 if not res:
                     continue
 
+                planner_stale_read_files.extend(
+                    str(path) for path in res.get("planner_stale_read_files", [])
+                )
                 if res.get("blocker"):
+                    if planner_stale_read_files:
+                        self._history.append_user_text(
+                            _planner_stale_read_notice(planner_stale_read_files)
+                        )
                     self._append_dispatch_blocker_message(
                         res["result"], str(res.get("blocker_reason", "")), on_event
                     )
@@ -784,6 +827,11 @@ class ConversationManager:
                 if "result_payload" in res:
                     self._history.append_tool_result(task["id"], res["result_payload"])
                     on_event(res["event"])
+
+            if planner_stale_read_files:
+                self._history.append_user_text(
+                    _planner_stale_read_notice(planner_stale_read_files)
+                )
 
             if _worker_phase_boundary_info is not None:
                 worker_phase_boundary_info = _worker_phase_boundary_info

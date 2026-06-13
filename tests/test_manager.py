@@ -691,6 +691,66 @@ def test_completed_worker_result_accepts_one_final_message(
     )
 
 
+def test_worker_modified_files_adds_planner_stale_read_notice(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc])]),
+        iter([
+            ContentDelta(text="All set. Worker finished."),
+            _make_done(content="All set. Worker finished."),
+        ]),
+    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
+        ok=True,
+        summary="done",
+        needs_followup=False,
+        status="completed",
+        modified_files=["aura/foo.py"],
+    ))
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    notices = [
+        message for message in history.messages
+        if message["role"] == "user"
+        and "Planner stale-read invalidation" in message["content"]
+    ]
+    assert len(notices) == 1
+    notice = notices[0]["content"]
+    assert "- aura/foo.py" in notice
+    assert "Any prior Planner reads of those paths are stale." in notice
+    assert "Re-read the modified files before planning, dispatching, or reasoning" in notice
+    assert "do not redispatch because of this notice" in notice
+
+    tool_index = next(
+        index for index, message in enumerate(history.messages)
+        if message["role"] == "tool" and message["tool_call_id"] == "dispatch1"
+    )
+    notice_index = history.messages.index(notices[0])
+    final_index = next(
+        index for index, message in enumerate(history.messages)
+        if message["role"] == "assistant" and message.get("content") == "All set. Worker finished."
+    )
+    assert tool_index < notice_index < final_index
+
+    second_round_messages = mock_client.call_args_list[1].kwargs["messages"]
+    assert any(
+        message["role"] == "user"
+        and "Any prior Planner reads of those paths are stale." in message["content"]
+        for message in second_round_messages
+    )
+
+
 def test_completed_worker_result_stops_before_second_repetitive_final(
     manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
 ):
