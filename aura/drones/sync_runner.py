@@ -71,6 +71,52 @@ def _extract_last_json_block(text: str) -> str | None:
     return block if block else None
 
 
+def _extract_and_validate_artifact(
+    text: str,
+    declared_type: ArtifactType,
+) -> tuple[dict | None, bool, str]:
+    """Extract a fenced JSON block from *text*, parse it, and validate
+    against *declared_type*.
+
+    Returns (parsed_dict, is_valid, evidence_string).
+    """
+    fenced = _extract_last_json_block(text)
+    if fenced is None:
+        return None, False, "No ```json ... ``` block found in response."
+
+    try:
+        parsed = json.loads(fenced)
+    except json.JSONDecodeError as exc:
+        return None, False, f"JSON parse error: {exc}"
+
+    runtime_schema = {
+        k: _python_type_to_type_string(v)
+        for k, v in parsed.items()
+    }
+    runtime_type = ArtifactType(name="_runtime", schema=runtime_schema)
+    if is_compatible(runtime_type, declared_type):
+        return parsed, True, f"Produced valid {declared_type.name} artifact."
+
+    missing = [
+        f for f in declared_type.schema
+        if f not in runtime_schema
+    ]
+    type_mismatches = [
+        f for f in declared_type.schema
+        if f in runtime_schema
+        and declared_type.schema[f] != "any"
+        and runtime_schema[f] != "any"
+        and runtime_schema[f] != declared_type.schema[f]
+    ]
+    details = []
+    if missing:
+        details.append(f"Missing required field(s): {', '.join(missing)}")
+    if type_mismatches:
+        details.append(f"Type mismatch on field(s): {', '.join(type_mismatches)}")
+    evidence = "; ".join(details) if details else "Incompatible artifact schema."
+    return None, False, evidence
+
+
 # ── Approval helpers ────────────────────────────────────────────────
 
 
@@ -391,46 +437,92 @@ def _run_drone_sync_impl(
     evidence: str = ""
     if drone.produces and drone.produces in BUILTIN_TYPES:
         declared_type = BUILTIN_TYPES[drone.produces]
-        fenced = _extract_last_json_block(summary)
-        if fenced is None:
-            met = False
-            evidence = "No ```json ... ``` block found in response."
-        else:
+
+        produced_artifact, met, evidence = _extract_and_validate_artifact(
+            summary, declared_type
+        )
+
+        # ── Bounded repair loop ────────────────────────────
+        MAX_REPAIRS = 2
+        repair_attempt = 0
+        while (
+            met is False
+            and repair_attempt < MAX_REPAIRS
+            and run.status == "completed"
+            and not cancel_event.is_set()
+        ):
+            repair_attempt += 1
+            logger.info(
+                "Artifact repair attempt %d/%d for drone '%s': %s",
+                repair_attempt, MAX_REPAIRS, drone.id, evidence,
+            )
+
+            # Build correction prompt
+            schema_lines = "\n".join(
+                f'  "{k}": "{v}"' for k, v in declared_type.schema.items()
+            )
+            correction = (
+                f"Your previous response had a problem with the structured output:\n\n"
+                f"**Error:** {evidence}\n\n"
+                f"**Expected artifact type:** {declared_type.name}\n"
+                f"**Expected schema:**\n"
+                f"```\n{{\n{schema_lines}\n}}\n```\n\n"
+                f"Return ONLY the corrected final fenced ```json block "
+                f"matching this schema exactly."
+            )
+            messages.append({"role": "user", "content": correction})
+
             try:
-                parsed = json.loads(fenced)
-            except json.JSONDecodeError as exc:
-                met = False
-                evidence = f"JSON parse error: {exc}"
-            else:
-                # Build a runtime ArtifactType from the actual parsed data
-                runtime_schema = {
-                    k: _python_type_to_type_string(v)
-                    for k, v in parsed.items()
-                }
-                runtime_type = ArtifactType(name="_runtime", schema=runtime_schema)
-                if is_compatible(runtime_type, declared_type):
-                    produced_artifact = parsed
-                    met = True
-                    evidence = f"Produced valid {drone.produces} artifact."
+                repair_parts: list[str] = []
+                stream = backend.stream(
+                    messages=messages,
+                    tools=None,           # No tools — output repair only
+                    model=model,
+                    thinking="off",
+                    cancel_event=cancel_event,
+                    temperature=0.7,
+                )
+                for event in stream:
+                    if isinstance(event, ContentDelta):
+                        repair_parts.append(event.text)
+                    elif isinstance(event, ApiError):
+                        errors.append(event.message)
+                        break
+                    # Done/Usage/ToolCallStart/ToolCallEnd — ignore, generator exhausts
+
+                repair_text = "".join(repair_parts).strip()
+                if repair_text:
+                    # Try extraction on just the repair response
+                    repaired_artifact, repaired_met, repaired_evidence = (
+                        _extract_and_validate_artifact(repair_text, declared_type)
+                    )
+                    if repaired_met:
+                        produced_artifact = repaired_artifact
+                        met = True
+                        evidence = (
+                            f"Produced valid {drone.produces} artifact "
+                            f"(repaired on attempt {repair_attempt})."
+                        )
+                        # Append repair to summary for receipts
+                        content_parts.append(
+                            f"\n\n[Repair attempt {repair_attempt}]\n{repair_text}"
+                        )
+                        break
+                    else:
+                        # Update evidence for the next attempt
+                        evidence = repaired_evidence
+                        content_parts.append(
+                            f"\n\n[Repair attempt {repair_attempt}]\n{repair_text}"
+                        )
                 else:
-                    missing = [
-                        f for f in declared_type.schema
-                        if f not in runtime_schema
-                    ]
-                    type_mismatches = [
-                        f for f in declared_type.schema
-                        if f in runtime_schema
-                        and declared_type.schema[f] != "any"
-                        and runtime_schema[f] != "any"
-                        and runtime_schema[f] != declared_type.schema[f]
-                    ]
-                    details = []
-                    if missing:
-                        details.append(f"Missing required field(s): {', '.join(missing)}")
-                    if type_mismatches:
-                        details.append(f"Type mismatch on field(s): {', '.join(type_mismatches)}")
-                    met = False
-                    evidence = "; ".join(details) if details else "Incompatible artifact schema."
+                    evidence = f"Repair attempt {repair_attempt}: empty response from model."
+            except Exception as exc:
+                logger.exception("Artifact repair attempt %d crashed", repair_attempt)
+                evidence = f"Repair attempt {repair_attempt} crashed: {exc}"
+                # Don't break — next attempt may still work if within budget
+
+    # Recompute summary for receipt (includes any repair text)
+    summary = "".join(content_parts).strip()
 
     elapsed = run.elapsed_seconds
 
