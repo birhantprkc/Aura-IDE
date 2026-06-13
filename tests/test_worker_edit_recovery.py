@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import threading
@@ -702,7 +703,8 @@ def test_dogfood_worker_read_patch_validate_completes_successfully(
 ):
     monkeypatch.setattr(subprocess, "run", block_real_subprocess)
     target = tmp_workspace / "a.py"
-    target.write_text("value = 1\n", encoding="utf-8")
+    target.write_text("value = 1\n", encoding="utf-8", newline="\n")
+    expected_hash = hashlib.sha256(target.read_bytes()).hexdigest()
     req = WorkerDispatchRequest(
         goal="Update value",
         files=["a.py"],
@@ -731,6 +733,7 @@ def test_dogfood_worker_read_patch_validate_completes_successfully(
                             {
                                 "path": "a.py",
                                 "edits": [{"old": "value = 1\n", "new": "value = 2\n"}],
+                                "expected_file_hash": expected_hash,
                             },
                         )
                     ]

@@ -38,7 +38,7 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                 "Batched version of read_file — read multiple files in a single call. "
                 "Each file is capped at 200KB. Combined output is capped at 500KB total; "
                 "paths beyond the limit will return an error. Returns per-file results "
-                "with ok/error or ok/content for each path. "
+                "with ok/error or ok/content/content_hash/file_size/truncated/path for each path. "
                 "All paths must be relative to the workspace root."
             ),
             "parameters": {
@@ -131,6 +131,8 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                 "Also use this to recover when a previous read_file result was truncated: "
                 "the truncation marker tells you the original length so you can calculate "
                 "which line ranges remain unread. "
+                "Returns the selected lines plus the whole-file content_hash and file_size "
+                "for the exact file version the range came from. "
                 "The path argument MUST be relative to the workspace root."
             ),
             "parameters": {
@@ -986,10 +988,12 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "description": (
                 "Apply multiple exact-text replacement hunks to one existing workspace file as a single "
                 "atomic, approval-gated transaction. Use this for normal existing-file edits after "
-                "reading the file. Every hunk is applied to an in-memory copy first; "
+                "reading the file. In Worker mode, after reading an existing file, pass the "
+                "content_hash returned by read_file, read_files, or read_file_range as "
+                "expected_file_hash. Every hunk is applied to an in-memory copy first; "
                 "if any hunk is missing or ambiguous, nothing is written. Craft reviews the full proposed "
-                "file once and the user sees one approval diff. If a patch fails, re-read the file before "
-                "retrying; do not switch between edit tools trying random tactics."
+                "file once and the user sees one approval diff. If a hash mismatch or hunk failure occurs, "
+                "re-read and retry patch_file once with the new expected_file_hash. Do not switch tools or improvise."
             ),
             "parameters": {
                 "type": "object",
@@ -1029,7 +1033,10 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                     },
                     "expected_file_hash": {
                         "type": "string",
-                        "description": "Optional SHA-256 hex digest of the current whole file.",
+                        "description": (
+                            "SHA-256 hex digest of the current whole file from read_file, "
+                            "read_files, or read_file_range. Required by Worker mode for existing files."
+                        ),
                     },
                     "description": {
                         "type": "string",

@@ -58,6 +58,16 @@ def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
     }
 
 
+def _stream_file_version(target: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    file_size = 0
+    with target.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            file_size += len(chunk)
+            digest.update(chunk)
+    return digest.hexdigest(), file_size
+
+
 def read_file_range(
     workspace_root: Path,
     target: Path,
@@ -82,6 +92,7 @@ def read_file_range(
     selected: list[str] = []
     total_lines = 0
     try:
+        content_hash, file_size = _stream_file_version(target)
         with open(target, encoding="utf-8", errors="replace") as fh:
             for lineno, line in enumerate(fh, start=1):
                 total_lines = lineno
@@ -117,6 +128,8 @@ def read_file_range(
         "end_line": actual_end,
         "total_lines": total_lines,
         "content": "".join(selected),
+        "content_hash": content_hash,
+        "file_size": file_size,
     }
     if clamped:
         result["clamped"] = True

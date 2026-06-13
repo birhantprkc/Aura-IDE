@@ -80,6 +80,44 @@ def test_patch_file_craft_block_is_not_touched() -> None:
     assert relay.touched_files == set()
 
 
+def test_read_files_tracks_successful_files_mapping_entries() -> None:
+    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
+    payload = {
+        "ok": True,
+        "files": {
+            "a.py": {
+                "ok": True,
+                "path": "a.py",
+                "content": "a = 1\n",
+                "content_hash": "hash-a",
+                "file_size": 6,
+                "truncated": False,
+            },
+            "missing.py": {"ok": False, "error": "file not found"},
+            "large.py": {
+                "ok": True,
+                "path": "large.py",
+                "content": "x",
+                "content_hash": "hash-large",
+                "file_size": 300000,
+                "truncated": True,
+            },
+        },
+    }
+
+    relay.relay(
+        "dispatch-1",
+        ToolResult(
+            tool_call_id="worker-tool-1",
+            name="read_files",
+            ok=True,
+            result=json.dumps(payload),
+        ),
+    )
+
+    assert relay.read_files == {"a.py"}
+
+
 def test_craft_metadata_is_preserved_on_not_applied_write() -> None:
     relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
     payload = {

@@ -77,7 +77,7 @@ class FsReadHandler:
                     files[path_key] = {"ok": False, "error": "exceeded total size limit"}
                     accumulated = TOTAL_SIZE_CAP
                 else:
-                    files[path_key] = {"ok": True, "content": content}
+                    files[path_key] = dict(result)
                     accumulated += len(content)
             else:
                 files[path_key] = {"ok": False, "error": result.get("error", "unknown error")}

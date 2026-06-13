@@ -235,6 +235,8 @@ class ConversationManager:
         edit_fallback_required: dict[str, dict[str, Any]] = {}
         recovery_block_counts: dict[str, int] = {}
         line_range_reread_required: dict[str, dict[str, Any]] = {}
+        worker_file_state: dict[str, dict[str, Any]] = {}
+        patch_failed_cycles: dict[str, int] = {}
         syntax_repair_required: dict[str, dict[str, Any]] = {}
         syntax_validation_required: set[str] = set()
         write_attempts_by_path: dict[str, int] = {}
@@ -555,6 +557,8 @@ class ConversationManager:
                         edit_fallback_required=edit_fallback_required,
                         recovery_block_counts=recovery_block_counts,
                         line_range_reread_required=line_range_reread_required,
+                        worker_file_state=worker_file_state,
+                        patch_failed_cycles=patch_failed_cycles,
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
                         write_attempts_by_path=write_attempts_by_path,
@@ -679,6 +683,8 @@ class ConversationManager:
                         edit_failed_shapes=edit_failed_shapes,
                         edit_fallback_required=edit_fallback_required,
                         line_range_reread_required=line_range_reread_required,
+                        worker_file_state=worker_file_state,
+                        patch_failed_cycles=patch_failed_cycles,
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
                         write_attempts_by_path=write_attempts_by_path,
@@ -1075,9 +1081,13 @@ class ConversationManager:
         syntax_repair_required: dict[str, dict[str, Any]],
         syntax_validation_required: set[str],
         write_attempts_by_path: dict[str, int],
+        worker_file_state: dict[str, dict[str, Any]] | None = None,
+        patch_failed_cycles: dict[str, int] | None = None,
     ) -> dict[str, Any] | None:
         raw_path = self._tool_path(name, args)
         path = _normalize_worker_path(raw_path) if raw_path else ""
+        worker_file_state = worker_file_state if worker_file_state is not None else {}
+        patch_failed_cycles = patch_failed_cycles if patch_failed_cycles is not None else {}
         syntax_paths = self._syntax_repair_paths(syntax_repair_required)
         if syntax_paths and not self._syntax_repair_tool_allowed(name, args, syntax_paths):
             target = sorted(syntax_paths)[0]
@@ -1169,14 +1179,42 @@ class ConversationManager:
             self._record_recovery_block(payload, f"line-range-reread:{path}", recovery_block_counts)
             return self._blocked_tool_result(tool_call_id, name, payload)
 
-        if name == "patch_file" and path in edit_fallback_required:
-            prior = edit_fallback_required[path]
+        if name == "patch_file" and path and patch_failed_cycles.get(path, 0) >= 2:
             payload = self._recovery_payload(
                 path=path,
-                failure_class=str(prior.get("failure_class") or "patch_hunk_not_found"),
+                failure_class="patch_file_repeated_failure",
+                error=(
+                    "patch_file failed twice on the same file after fresh reads. "
+                    "Stop editing this file and report the structured blocker instead of retrying."
+                ),
+                suggested_next_tool="read_file",
+                suggested_next_action=(
+                    "Do not retry patch_file for this path in this Worker run. "
+                    "Report the repeated patch blocker to the Planner."
+                ),
+                recoverable=False,
+            )
+            payload["applied"] = False
+            payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
+            payload["patch_failed_cycles"] = patch_failed_cycles.get(path, 0)
+            return self._blocked_tool_result(tool_call_id, name, payload)
+
+        if name == "patch_file" and path in edit_fallback_required:
+            prior = edit_fallback_required[path]
+            failure_class = str(prior.get("failure_class") or "patch_hunk_not_found")
+            if failure_class == "patch_file_hash_mismatch":
+                suggested_next_action = (
+                    "Re-read the file with read_file or read_file_range, then retry patch_file once "
+                    "with expected_file_hash set to the new content_hash."
+                )
+            else:
+                suggested_next_action = "Re-read the file, then retry patch_file once with current exact text."
+            payload = self._recovery_payload(
+                path=path,
+                failure_class=failure_class,
                 error="Previous patch_file failed. Re-read the file before retrying the patch.",
                 suggested_next_tool="read_file",
-                suggested_next_action="Re-read the file, then retry patch_file once with current exact text.",
+                suggested_next_action=suggested_next_action,
             )
             payload["previous_error"] = prior.get("error", "")
             self._record_recovery_block(payload, f"patch-reread:{path}", recovery_block_counts)
@@ -1187,6 +1225,17 @@ class ConversationManager:
                     "Stop editing this file and report the structured blocker instead of retrying."
                 )
             return self._blocked_tool_result(tool_call_id, name, payload)
+
+        if name == "patch_file" and path:
+            blocked = self._worker_patch_file_state_block(
+                tool_call_id=tool_call_id,
+                name=name,
+                path=path,
+                args=args,
+                worker_file_state=worker_file_state,
+            )
+            if blocked is not None:
+                return blocked
 
         if name in ("edit_file", "edit_symbol") and path in edit_fallback_required:
             prior = edit_fallback_required[path]
@@ -1217,6 +1266,96 @@ class ConversationManager:
 
         return None
 
+    def _worker_patch_file_state_block(
+        self,
+        *,
+        tool_call_id: str,
+        name: str,
+        path: str,
+        args: dict[str, Any],
+        worker_file_state: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        if not self._worker_path_is_existing_file(path):
+            return None
+
+        expected_hash = args.get("expected_file_hash")
+        if not isinstance(expected_hash, str) or not expected_hash:
+            payload = self._recovery_payload(
+                path=path,
+                failure_class="patch_file_missing_expected_hash",
+                error=(
+                    "Worker patch_file on an existing file requires expected_file_hash "
+                    "from the latest successful read."
+                ),
+                suggested_next_tool="read_file",
+                suggested_next_action=(
+                    "Read the file, then retry patch_file with expected_file_hash "
+                    "set to the returned content_hash."
+                ),
+            )
+            payload["applied"] = False
+            payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
+            return self._blocked_tool_result(tool_call_id, name, payload)
+
+        state = self._worker_file_state_for_path(worker_file_state, path)
+        known_hash = str(state.get("content_hash") or "") if state else ""
+        if not state or known_hash != expected_hash or not state.get("fresh_for_patch"):
+            payload = self._recovery_payload(
+                path=path,
+                failure_class="patch_file_hash_mismatch",
+                error=(
+                    "patch_file expected_file_hash does not match the Worker's "
+                    "latest successful read for this file."
+                ),
+                suggested_next_tool="read_file",
+                suggested_next_action=(
+                    "Re-read the file with read_file or read_file_range, then retry patch_file once "
+                    "with expected_file_hash set to the new content_hash."
+                ),
+            )
+            payload["applied"] = False
+            payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
+            payload["recoverable"] = True
+            payload["stale"] = True
+            payload["expected_file_hash"] = expected_hash
+            if known_hash:
+                payload["latest_read_content_hash"] = known_hash
+            if state and state.get("last_read_tool"):
+                payload["last_read_tool"] = state.get("last_read_tool")
+            return self._blocked_tool_result(tool_call_id, name, payload)
+
+        return None
+
+    def _worker_path_is_existing_file(self, path: str) -> bool:
+        try:
+            root = Path(self._tools.workspace_root).resolve()
+            candidate = Path(str(path).lstrip("/\\"))
+            if not candidate.is_absolute():
+                candidate = root / candidate
+            resolved = candidate.resolve()
+            resolved.relative_to(root)
+            return resolved.is_file()
+        except (OSError, ValueError):
+            return False
+
+    @staticmethod
+    def _worker_file_state_for_path(
+        worker_file_state: dict[str, dict[str, Any]],
+        path: str,
+    ) -> dict[str, Any] | None:
+        normalized_candidates = {
+            _normalize_worker_path(path),
+            _normalize_worker_path(str(path).lstrip("/\\")),
+        }
+        for normalized in normalized_candidates:
+            state = worker_file_state.get(normalized)
+            if state is not None:
+                return state
+        for existing_path, existing_state in worker_file_state.items():
+            if _normalize_worker_path(existing_path) in normalized_candidates:
+                return existing_state
+        return None
+
     def _update_worker_recovery_state(
         self,
         *,
@@ -1230,7 +1369,11 @@ class ConversationManager:
         syntax_repair_required: dict[str, dict[str, Any]],
         syntax_validation_required: set[str],
         write_attempts_by_path: dict[str, int],
+        worker_file_state: dict[str, dict[str, Any]] | None = None,
+        patch_failed_cycles: dict[str, int] | None = None,
     ) -> str:
+        worker_file_state = worker_file_state if worker_file_state is not None else {}
+        patch_failed_cycles = patch_failed_cycles if patch_failed_cycles is not None else {}
         parsed = self._parse_tool_payload(content)
         self._record_reads_for_recovery(
             name,
@@ -1238,6 +1381,7 @@ class ConversationManager:
             parsed,
             line_range_reread_required,
             edit_fallback_required,
+            worker_file_state,
         )
         raw_path = self._tool_path(name, args, parsed)
         path = _normalize_worker_path(raw_path) if raw_path else ""
@@ -1255,6 +1399,8 @@ class ConversationManager:
             if name in WRITE_TOOLS and path:
                 self._pop_normalized_recovery_key(edit_fallback_required, path)
                 self._pop_normalized_recovery_key(line_range_reread_required, path)
+                self._pop_normalized_key(worker_file_state, path)
+                self._pop_normalized_key(patch_failed_cycles, path)
                 if self._is_python_path(path) and not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
                 state = self._syntax_repair_state_for_path(syntax_repair_required, path)
@@ -1295,7 +1441,7 @@ class ConversationManager:
                     "and report this typed blocker if the operation is still not applicable."
                 )
             content = json.dumps(parsed, ensure_ascii=False)
-        elif path and failure_class in EDIT_MECHANICS_FAILURE_CLASSES:
+        elif path and name != "patch_file" and failure_class in EDIT_MECHANICS_FAILURE_CLASSES:
             parsed.setdefault("applied", False)
             parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
             parsed.setdefault("tool", name)
@@ -1313,17 +1459,36 @@ class ConversationManager:
             parsed["suggested_next_tool"] = "read_file"
             parsed["suggested_next_action"] = "Re-read the file before retrying an edit."
             content = json.dumps(parsed, ensure_ascii=False)
-        elif path and failure_class in {"patch_hunk_not_found", "patch_hunk_ambiguous", "patch_file_hash_mismatch"}:
+        elif path and name == "patch_file" and failure_class in {"patch_hunk_not_found", "patch_hunk_ambiguous", "patch_file_hash_mismatch"}:
             parsed.setdefault("applied", False)
             parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
             parsed.setdefault("tool", name)
-            edit_fallback_required[path] = parsed
-            parsed["recoverable"] = True
-            parsed["suggested_next_tool"] = "patch_file"
-            parsed["suggested_next_action"] = str(
-                parsed.get("suggested_next_action")
-                or "Re-read the file and submit one patch_file."
-            )
+            failed_cycles = patch_failed_cycles.get(path, 0) + 1
+            patch_failed_cycles[path] = failed_cycles
+            parsed["patch_failed_cycles"] = failed_cycles
+            parsed["stale"] = True
+            parsed["suggested_next_tool"] = "read_file"
+            if failure_class == "patch_file_hash_mismatch":
+                parsed["suggested_next_action"] = (
+                    "Re-read the file with read_file or read_file_range, then retry patch_file once "
+                    "with expected_file_hash set to the returned content_hash."
+                )
+            else:
+                parsed["suggested_next_action"] = (
+                    "Re-read the file, then retry patch_file once with current exact text "
+                    "and expected_file_hash set to the returned content_hash."
+                )
+            if failed_cycles >= 2:
+                parsed["recoverable"] = False
+                parsed["failure_class"] = "patch_file_repeated_failure"
+                parsed["error"] = (
+                    "patch_file failed twice on the same file after a fresh read. "
+                    "Stop editing this file and report the structured blocker instead of retrying."
+                )
+                self._pop_normalized_recovery_key(edit_fallback_required, path)
+            else:
+                edit_fallback_required[path] = parsed
+                parsed["recoverable"] = True
             content = json.dumps(parsed, ensure_ascii=False)
         elif path and failure_class == "syntax_invalid":
             parsed.setdefault("applied", False)
@@ -1440,6 +1605,7 @@ class ConversationManager:
         parsed: Any,
         line_range_reread_required: dict[str, dict[str, Any]],
         edit_fallback_required: dict[str, dict[str, Any]],
+        worker_file_state: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         if name == "read_file":
             path = str(args.get("path") or (parsed.get("path") if isinstance(parsed, dict) else ""))
@@ -1451,16 +1617,91 @@ class ConversationManager:
             ):
                 ConversationManager._pop_normalized_recovery_key(line_range_reread_required, path)
                 ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
+                ConversationManager._record_worker_file_state(
+                    worker_file_state,
+                    path,
+                    parsed,
+                    "read_file",
+                )
         elif name == "read_files":
-            paths = args.get("paths")
-            if isinstance(paths, list):
-                for item in paths:
-                    ConversationManager._pop_normalized_recovery_key(line_range_reread_required, str(item))
-                    ConversationManager._pop_normalized_recovery_key(edit_fallback_required, str(item))
+            files = parsed.get("files") if isinstance(parsed, dict) else None
+            if isinstance(files, dict):
+                for path_key, result in files.items():
+                    if not isinstance(result, dict):
+                        continue
+                    path = str(result.get("path") or path_key)
+                    if result.get("ok") is True and result.get("truncated") is not True:
+                        ConversationManager._pop_normalized_recovery_key(line_range_reread_required, path)
+                        ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
+                        ConversationManager._record_worker_file_state(
+                            worker_file_state,
+                            path,
+                            result,
+                            "read_files",
+                        )
+        elif name == "read_file_range":
+            path = str(args.get("path") or (parsed.get("path") if isinstance(parsed, dict) else ""))
+            if path and isinstance(parsed, dict) and parsed.get("ok") is True:
+                ConversationManager._record_worker_file_state(
+                    worker_file_state,
+                    path,
+                    parsed,
+                    "read_file_range",
+                )
+                prior = ConversationManager._normalized_state_value(edit_fallback_required, path)
+                if (
+                    isinstance(prior, dict)
+                    and prior.get("failure_class") == "patch_file_hash_mismatch"
+                ):
+                    ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
+
+    @staticmethod
+    def _record_worker_file_state(
+        worker_file_state: dict[str, dict[str, Any]] | None,
+        path: str,
+        result: dict[str, Any],
+        tool_name: str,
+    ) -> None:
+        if worker_file_state is None:
+            return
+        content_hash = result.get("content_hash")
+        file_size = result.get("file_size")
+        if not isinstance(content_hash, str) or not content_hash:
+            return
+        if not isinstance(file_size, int):
+            return
+        normalized = _normalize_worker_path(str(result.get("path") or path))
+        worker_file_state[normalized] = {
+            "content_hash": content_hash,
+            "file_size": file_size,
+            "truncated": bool(result.get("truncated", False)),
+            "last_read_tool": tool_name,
+            "fresh_for_patch": result.get("truncated") is not True,
+        }
 
     @staticmethod
     def _pop_normalized_recovery_key(
         state: dict[str, dict[str, Any]],
+        path: str,
+    ) -> None:
+        ConversationManager._pop_normalized_key(state, path)
+
+    @staticmethod
+    def _normalized_state_value(
+        state: dict[str, Any],
+        path: str,
+    ) -> Any:
+        normalized = _normalize_worker_path(path)
+        if normalized in state:
+            return state[normalized]
+        for existing_path, value in state.items():
+            if _normalize_worker_path(existing_path) == normalized:
+                return value
+        return None
+
+    @staticmethod
+    def _pop_normalized_key(
+        state: dict[str, Any],
         path: str,
     ) -> None:
         normalized = _normalize_worker_path(path)

@@ -217,14 +217,36 @@ class WorkerEventRelay(QObject):
             # Track reads for read-before-edit enforcement
             if ev.ok and ev.name == "read_file" and isinstance(parsed, dict):
                 path = parsed.get("path")
-                if isinstance(path, str) and path:
+                if (
+                    parsed.get("ok") is True
+                    and parsed.get("truncated") is not True
+                    and isinstance(path, str)
+                    and path
+                ):
                     self.read_files.add(path)
             if ev.ok and ev.name == "read_files" and isinstance(parsed, dict):
-                paths = parsed.get("paths")
-                if isinstance(paths, list):
-                    for p in paths:
-                        if isinstance(p, str) and p:
-                            self.read_files.add(p)
+                files = parsed.get("files")
+                if isinstance(files, dict):
+                    for path_key, result in files.items():
+                        if not isinstance(result, dict):
+                            continue
+                        path = result.get("path") or path_key
+                        if (
+                            result.get("ok") is True
+                            and result.get("truncated") is not True
+                            and isinstance(path, str)
+                            and path
+                        ):
+                            self.read_files.add(path)
+            if ev.ok and ev.name == "read_file_range" and isinstance(parsed, dict):
+                path = parsed.get("path")
+                if (
+                    parsed.get("ok") is True
+                    and isinstance(parsed.get("content_hash"), str)
+                    and isinstance(path, str)
+                    and path
+                ):
+                    self.read_files.add(path)
             if ev.ok and ev.name == "read_file_outline" and isinstance(parsed, dict):
                 path = parsed.get("path")
                 if isinstance(path, str) and path:
