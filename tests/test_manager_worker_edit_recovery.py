@@ -303,9 +303,16 @@ def test_patch_file_failure_requires_reread_before_retry(tmp_workspace):
     manager._record_reads_for_recovery(
         "read_file",
         {"path": "sample.py"},
-        {"ok": True, "path": "sample.py", "truncated": False},
+        {
+            "ok": True,
+            "path": "sample.py",
+            "truncated": False,
+            "content_hash": "hash-sample",
+            "file_size": 10,
+        },
         {},
         fallback_required,
+        {},
     )
 
     assert fallback_required == {}
@@ -342,16 +349,30 @@ def test_patch_file_failure_reread_clears_normalized_path(tmp_workspace):
     manager._record_reads_for_recovery(
         "read_file",
         {"path": r".\pkg\sample.py"},
-        {"ok": True, "path": r".\pkg\sample.py", "truncated": False},
+        {
+            "ok": True,
+            "path": r".\pkg\sample.py",
+            "truncated": False,
+            "content_hash": "hash-sample",
+            "file_size": 10,
+        },
         line_range_required,
         fallback_required,
+        {},
     )
     manager._record_reads_for_recovery(
         "read_file",
         {"path": "./pkg/lines.py"},
-        {"ok": True, "path": "./pkg/lines.py", "truncated": False},
+        {
+            "ok": True,
+            "path": "./pkg/lines.py",
+            "truncated": False,
+            "content_hash": "hash-lines",
+            "file_size": 10,
+        },
         line_range_required,
         fallback_required,
+        {},
     )
 
     assert fallback_required == {}
@@ -661,6 +682,7 @@ def test_worker_patch_file_with_unknown_or_stale_hash_is_blocked(tmp_workspace):
 def test_recovery_state_not_cleared_by_failed_or_truncated_read(tmp_workspace):
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
     edit_fallback_required = {"x.py": {"failure_class": "patch_hunk_not_found"}}
+    worker_file_state: dict = {}
 
     # Failed read — state NOT cleared
     manager._record_reads_for_recovery(
@@ -669,6 +691,7 @@ def test_recovery_state_not_cleared_by_failed_or_truncated_read(tmp_workspace):
         {"ok": False, "path": "x.py", "truncated": False},
         {},
         edit_fallback_required,
+        worker_file_state,
     )
     assert edit_fallback_required != {}
 
@@ -676,21 +699,86 @@ def test_recovery_state_not_cleared_by_failed_or_truncated_read(tmp_workspace):
     manager._record_reads_for_recovery(
         "read_file",
         {"path": "x.py"},
-        {"ok": True, "path": "x.py", "truncated": True},
+        {
+            "ok": True,
+            "path": "x.py",
+            "truncated": True,
+            "content_hash": "hash-x",
+            "file_size": 250000,
+        },
         {},
         edit_fallback_required,
+        worker_file_state,
     )
     assert edit_fallback_required != {}
 
-    # Successful non-truncated read — state IS cleared
+    # Metadata-free successful read — state NOT cleared
     manager._record_reads_for_recovery(
         "read_file",
         {"path": "x.py"},
         {"ok": True, "path": "x.py", "truncated": False},
         {},
         edit_fallback_required,
+        worker_file_state,
+    )
+    assert edit_fallback_required != {}
+
+    # Successful non-truncated read with version metadata — state IS cleared
+    manager._record_reads_for_recovery(
+        "read_file",
+        {"path": "x.py"},
+        {
+            "ok": True,
+            "path": "x.py",
+            "truncated": False,
+            "content_hash": "hash-x",
+            "file_size": 10,
+        },
+        {},
+        edit_fallback_required,
+        worker_file_state,
     )
     assert edit_fallback_required == {}
+    assert worker_file_state["x.py"]["content_hash"] == "hash-x"
+
+
+def test_read_file_missing_hash_or_size_does_not_clear_recovery(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    edit_fallback_required = {
+        "missing_hash.py": {"failure_class": "patch_hunk_not_found"},
+        "missing_size.py": {"failure_class": "patch_hunk_not_found"},
+    }
+    worker_file_state: dict = {}
+
+    manager._record_reads_for_recovery(
+        "read_file",
+        {"path": "missing_hash.py"},
+        {
+            "ok": True,
+            "path": "missing_hash.py",
+            "truncated": False,
+            "file_size": 10,
+        },
+        {},
+        edit_fallback_required,
+        worker_file_state,
+    )
+    manager._record_reads_for_recovery(
+        "read_file",
+        {"path": "missing_size.py"},
+        {
+            "ok": True,
+            "path": "missing_size.py",
+            "truncated": False,
+            "content_hash": "hash-size",
+        },
+        {},
+        edit_fallback_required,
+        worker_file_state,
+    )
+
+    assert set(edit_fallback_required) == {"missing_hash.py", "missing_size.py"}
+    assert worker_file_state == {}
 
 
 def test_read_files_only_clears_recovery_for_successful_non_truncated_entries(tmp_workspace):
@@ -699,6 +787,8 @@ def test_read_files_only_clears_recovery_for_successful_non_truncated_entries(tm
         "a.py": {"failure_class": "patch_hunk_not_found"},
         "b.py": {"failure_class": "patch_hunk_not_found"},
         "c.py": {"failure_class": "patch_hunk_not_found"},
+        "d.py": {"failure_class": "patch_hunk_not_found"},
+        "e.py": {"failure_class": "patch_hunk_not_found"},
     }
     line_range_required = {"a.py": {"failure_class": "edit_mechanics_stale_line_range"}}
     worker_file_state: dict = {}
@@ -726,6 +816,20 @@ def test_read_files_only_clears_recovery_for_successful_non_truncated_entries(tm
                     "truncated": True,
                 },
                 "c.py": {"ok": False, "error": "file not found"},
+                "d.py": {
+                    "ok": True,
+                    "path": "d.py",
+                    "content": "d = 1\n",
+                    "file_size": 6,
+                    "truncated": False,
+                },
+                "e.py": {
+                    "ok": True,
+                    "path": "e.py",
+                    "content": "e = 1\n",
+                    "content_hash": "hash-e",
+                    "truncated": False,
+                },
             },
         },
         line_range_required,
@@ -736,6 +840,8 @@ def test_read_files_only_clears_recovery_for_successful_non_truncated_entries(tm
     assert edit_fallback_required == {
         "b.py": {"failure_class": "patch_hunk_not_found"},
         "c.py": {"failure_class": "patch_hunk_not_found"},
+        "d.py": {"failure_class": "patch_hunk_not_found"},
+        "e.py": {"failure_class": "patch_hunk_not_found"},
     }
     assert line_range_required == {}
     assert set(worker_file_state) == {"a.py"}
@@ -748,6 +854,8 @@ def test_read_file_range_clears_only_hash_mismatch_recovery(tmp_workspace):
     edit_fallback_required = {
         "hash.py": {"failure_class": "patch_file_hash_mismatch"},
         "hunk.py": {"failure_class": "patch_hunk_not_found"},
+        "missing_hash.py": {"failure_class": "patch_file_hash_mismatch"},
+        "missing_size.py": {"failure_class": "patch_file_hash_mismatch"},
     }
     worker_file_state: dict = {}
 
@@ -779,8 +887,38 @@ def test_read_file_range_clears_only_hash_mismatch_recovery(tmp_workspace):
         edit_fallback_required,
         worker_file_state,
     )
+    manager._record_reads_for_recovery(
+        "read_file_range",
+        {"path": "missing_hash.py", "start_line": 1, "end_line": 1},
+        {
+            "ok": True,
+            "path": "missing_hash.py",
+            "content": "value = 1\n",
+            "file_size": 10,
+        },
+        {},
+        edit_fallback_required,
+        worker_file_state,
+    )
+    manager._record_reads_for_recovery(
+        "read_file_range",
+        {"path": "missing_size.py", "start_line": 1, "end_line": 1},
+        {
+            "ok": True,
+            "path": "missing_size.py",
+            "content": "value = 1\n",
+            "content_hash": "missing-size-current",
+        },
+        {},
+        edit_fallback_required,
+        worker_file_state,
+    )
 
-    assert edit_fallback_required == {"hunk.py": {"failure_class": "patch_hunk_not_found"}}
+    assert edit_fallback_required == {
+        "hunk.py": {"failure_class": "patch_hunk_not_found"},
+        "missing_hash.py": {"failure_class": "patch_file_hash_mismatch"},
+        "missing_size.py": {"failure_class": "patch_file_hash_mismatch"},
+    }
     assert set(worker_file_state) == {"hash.py", "hunk.py"}
     assert worker_file_state["hash.py"]["last_read_tool"] == "read_file_range"
 
@@ -788,16 +926,25 @@ def test_read_file_range_clears_only_hash_mismatch_recovery(tmp_workspace):
 def test_successful_read_clears_patch_recovery_state(tmp_workspace):
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
     edit_fallback_required = {"sample.py": {"failure_class": "patch_hunk_not_found"}}
+    worker_file_state: dict = {}
 
     manager._record_reads_for_recovery(
         "read_file",
         {"path": "sample.py"},
-        {"ok": True, "path": "sample.py", "truncated": False},
+        {
+            "ok": True,
+            "path": "sample.py",
+            "truncated": False,
+            "content_hash": "hash-sample",
+            "file_size": 10,
+        },
         {},
         edit_fallback_required,
+        worker_file_state,
     )
 
     assert edit_fallback_required == {}
+    assert worker_file_state["sample.py"]["content_hash"] == "hash-sample"
 
 
 def test_second_failed_patch_cycle_after_fresh_read_is_nonrecoverable(tmp_workspace):

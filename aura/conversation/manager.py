@@ -1615,14 +1615,15 @@ class ConversationManager:
                 and parsed.get("ok") is True
                 and parsed.get("truncated") is not True
             ):
-                ConversationManager._pop_normalized_recovery_key(line_range_reread_required, path)
-                ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
-                ConversationManager._record_worker_file_state(
+                recorded = ConversationManager._record_worker_file_state(
                     worker_file_state,
                     path,
                     parsed,
                     "read_file",
                 )
+                if recorded:
+                    ConversationManager._pop_normalized_recovery_key(line_range_reread_required, path)
+                    ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
         elif name == "read_files":
             files = parsed.get("files") if isinstance(parsed, dict) else None
             if isinstance(files, dict):
@@ -1631,29 +1632,31 @@ class ConversationManager:
                         continue
                     path = str(result.get("path") or path_key)
                     if result.get("ok") is True and result.get("truncated") is not True:
-                        ConversationManager._pop_normalized_recovery_key(line_range_reread_required, path)
-                        ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
-                        ConversationManager._record_worker_file_state(
+                        recorded = ConversationManager._record_worker_file_state(
                             worker_file_state,
                             path,
                             result,
                             "read_files",
                         )
+                        if recorded:
+                            ConversationManager._pop_normalized_recovery_key(line_range_reread_required, path)
+                            ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
         elif name == "read_file_range":
             path = str(args.get("path") or (parsed.get("path") if isinstance(parsed, dict) else ""))
             if path and isinstance(parsed, dict) and parsed.get("ok") is True:
-                ConversationManager._record_worker_file_state(
+                recorded = ConversationManager._record_worker_file_state(
                     worker_file_state,
                     path,
                     parsed,
                     "read_file_range",
                 )
-                prior = ConversationManager._normalized_state_value(edit_fallback_required, path)
-                if (
-                    isinstance(prior, dict)
-                    and prior.get("failure_class") == "patch_file_hash_mismatch"
-                ):
-                    ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
+                if recorded:
+                    prior = ConversationManager._normalized_state_value(edit_fallback_required, path)
+                    if (
+                        isinstance(prior, dict)
+                        and prior.get("failure_class") == "patch_file_hash_mismatch"
+                    ):
+                        ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
 
     @staticmethod
     def _record_worker_file_state(
@@ -1661,15 +1664,15 @@ class ConversationManager:
         path: str,
         result: dict[str, Any],
         tool_name: str,
-    ) -> None:
+    ) -> bool:
         if worker_file_state is None:
-            return
+            return False
         content_hash = result.get("content_hash")
         file_size = result.get("file_size")
         if not isinstance(content_hash, str) or not content_hash:
-            return
+            return False
         if not isinstance(file_size, int):
-            return
+            return False
         normalized = _normalize_worker_path(str(result.get("path") or path))
         worker_file_state[normalized] = {
             "content_hash": content_hash,
@@ -1678,6 +1681,7 @@ class ConversationManager:
             "last_read_tool": tool_name,
             "fresh_for_patch": result.get("truncated") is not True,
         }
+        return True
 
     @staticmethod
     def _pop_normalized_recovery_key(

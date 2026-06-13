@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
+from unittest.mock import patch
 
 from aura.conversation.tools.fs_handler import FsReadHandler
 from aura.conversation.tools.fs_read import read_file, read_file_range
@@ -16,6 +18,21 @@ def test_read_file_returns_content_hash_and_file_size(tmp_workspace):
     assert result["content_hash"] == hashlib.sha256(f.read_bytes()).hexdigest()
     assert result["file_size"] == f.stat().st_size
     assert result["truncated"] is False
+
+
+def test_read_file_hash_does_not_use_read_bytes(tmp_workspace):
+    f = tmp_workspace / "large.txt"
+    content = (b"0123456789abcdef\n" * 20000)
+    f.write_bytes(content)
+    expected_hash = hashlib.sha256(content).hexdigest()
+
+    with patch.object(Path, "read_bytes", side_effect=AssertionError("read_bytes should not be used")):
+        result = read_file(tmp_workspace, f)
+
+    assert result["ok"] is True
+    assert result["content_hash"] == expected_hash
+    assert result["file_size"] == len(content)
+    assert result["truncated"] is True
 
 
 def test_read_files_preserves_per_file_metadata(tmp_workspace):

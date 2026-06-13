@@ -31,14 +31,12 @@ def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
     
     truncated = False
     try:
-        file_size = target.stat().st_size
+        content_hash, file_size = _stream_file_version(target)
         if file_size > MAX_READ_BYTES:
             truncated = True
 
-        full_bytes = target.read_bytes()
-        content_hash = hashlib.sha256(full_bytes).hexdigest()
-
-        raw = full_bytes[:MAX_READ_BYTES]
+        with target.open("rb") as fh:
+            raw = fh.read(MAX_READ_BYTES)
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         return {"ok": False, "error": f"file cannot be decoded as UTF-8: {safe_relative_to(target, workspace_root)}"}
