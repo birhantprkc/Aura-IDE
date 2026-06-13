@@ -966,6 +966,7 @@ class ChainEditor(QWidget):
         self._canvas.setStyleSheet(f"background: {_qss_color(BG)}; border: none;")
         self._canvas.canvasChanged.connect(self._on_canvas_changed)
         self._canvas.runMissionRequested.connect(self._on_run_clicked)
+        self._canvas.statusMessage.connect(self.set_status)
         self._canvas._scene.selectionChanged.connect(self._on_selection_changed)
         self._splitter.addWidget(self._canvas)
 

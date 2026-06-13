@@ -1530,6 +1530,7 @@ def test_run_chain_fails_blank_goal_id_multigoal(
             chain=chain,
             drone_lookup={"drone-a": drone},
         )
+    mock_runner.assert_not_called()
 
 
 @patch("aura.drones.chain_runner.run_read_only_drone_sync")
@@ -1563,3 +1564,4 @@ def test_run_chain_fails_unknown_goal_id_multigoal(
             chain=chain,
             drone_lookup={"drone-a": drone},
         )
+    mock_runner.assert_not_called()

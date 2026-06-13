@@ -178,6 +178,9 @@ class ChainStore:
         chain_dir.mkdir(parents=True, exist_ok=True)
         p = chain_dir / "chain.json"
         data = asdict(chain)
+        # Strip deprecated keys before writing
+        data.pop("mission_goal", None)
+        data.pop("goal_planet", None)
         fd, tmp_path = tempfile.mkstemp(dir=str(chain_dir), suffix=".json")
         with open(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -312,7 +315,10 @@ def save_chain(workspace_root: Path, chain_id: str | None, data: dict) -> str:
         goals = []
         data["goals"] = goals
 
-    # Strip deprecated keys before writing
+    # Normalize goal entries to canonical shape before writing
+    data = _normalize_chain_data(data)
+
+    # Strip deprecated keys after normalization
     data.pop("mission_goal", None)
     data.pop("goal_planet", None)
 

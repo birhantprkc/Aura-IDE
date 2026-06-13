@@ -1206,6 +1206,7 @@ class ChainCanvas(QGraphicsView):
 
     canvasChanged = Signal()
     runMissionRequested = Signal()
+    statusMessage = Signal(str, str)  # (text, level)
 
     def __init__(self, parent=None):
         # Set all attributes before super().__init__() because Qt paint events
@@ -1725,9 +1726,9 @@ class ChainCanvas(QGraphicsView):
 
         # In multi-goal context, blank goal_id is invalid
         if goal_id == "" and len(self._goal_planets) > 1:
-            logger.warning(
-                "Drop on Mission Core ignored: multiple goals exist but none is selected. "
-                "Drop on a specific Goal Planet instead."
+            self.statusMessage.emit(
+                "Select a Goal Planet or drop the Drone on a specific Goal Planet.",
+                "warning",
             )
             return
 

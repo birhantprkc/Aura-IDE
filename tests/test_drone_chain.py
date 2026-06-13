@@ -1280,3 +1280,56 @@ def test_validate_multigoal_unknown_goal_id() -> None:
     result = validate(chain, lookup)
     assert result.ok is False
     assert any("unknown goal_id" in e.lower() for e in result.errors)
+
+
+# ── ChainStore.save_chain strips deprecated keys ───────────────────
+
+
+def test_chainstore_save_strips_mission_goal(tmp_path: Path) -> None:
+    """ChainStore.save_chain strips mission_goal from serialized output."""
+    from aura.paths import data_dir
+
+    chain = ChainDefinition(
+        id="test-strip",
+        name="Test Strip",
+        description="A test chain",
+        mission_goal="Mission objective",
+    )
+    ChainStore.save_chain(tmp_path, chain)
+
+    raw_path = data_dir() / "chains" / "test-strip" / "chain.json"
+    assert raw_path.exists()
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    assert "mission_goal" not in raw
+    assert "goal_planet" not in raw
+
+
+def test_dict_save_writes_canonical_goal_keys(tmp_path: Path) -> None:
+    """Module-level save_chain normalizes legacy goal keys to canonical."""
+    from aura.drones.chain_store import save_chain as dict_save
+    from aura.paths import data_dir
+
+    data = {
+        "id": "legacy-save",
+        "name": "Legacy Save",
+        "description": "",
+        "goals": [
+            {"goal_id": "g1", "goal": "Old style goal", "title": "G1"},
+            {"goal_id": "g2", "goal": "Another old goal", "title": "G2"},
+        ],
+    }
+    chain_id = dict_save(tmp_path, "legacy-save", data)
+    assert chain_id == "legacy-save"
+
+    raw_path = data_dir() / "chains" / "legacy-save" / "chain.json"
+    assert raw_path.exists()
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    for g in raw.get("goals", []):
+        assert "id" in g
+        assert "objective" in g
+        assert "goal_id" not in g
+        assert "goal" not in g
+    # Verify values preserved in canonical keys
+    goal_map = {g["id"]: g["objective"] for g in raw["goals"]}
+    assert goal_map["g1"] == "Old style goal"
+    assert goal_map["g2"] == "Another old goal"
