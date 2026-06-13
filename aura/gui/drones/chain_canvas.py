@@ -36,8 +36,8 @@ from aura.gui.theme import (
     FG_MUTED,
 )
 
-NODE_WIDTH = 320
-NODE_HEIGHT = 92
+NODE_WIDTH = 252
+NODE_HEIGHT = 76
 PORT_RADIUS = 3
 PORT_DIAMETER = PORT_RADIUS * 2
 NODE_RADIUS = 12
@@ -247,7 +247,7 @@ class ChainNodeItem(QGraphicsObject):
         dot_color.setAlpha(220)
         painter.setBrush(QBrush(dot_color))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(QPointF(18, 26), 5, 5)
+        painter.drawEllipse(QPointF(18, 22), 5, 5)
 
         painter.setPen(QPen(QColor("#eaecef")))
         font = QFont()
@@ -267,13 +267,13 @@ class ChainNodeItem(QGraphicsObject):
         fm = QFontMetrics(font)
         avail_w = NODE_WIDTH - 34 - 14
         name = fm.elidedText(name, Qt.TextElideMode.ElideRight, avail_w)
-        painter.drawText(QRectF(34, 15, avail_w, 22),
+        painter.drawText(QRectF(34, 11, avail_w, 20),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
 
         # --- Row 2: status pill + preview ---
         pill_x = 34
-        pill_y = 50
-        pill_h = 16
+        pill_y = 42
+        pill_h = 14
 
         if self._is_draft:
             pill_text = "draft"
@@ -569,11 +569,17 @@ class ChainCanvas(QGraphicsView):
         QTimer.singleShot(100, self._fit_view)
 
     def _fit_view(self) -> None:
-        if self._nodes:
+        node_count = len(self._nodes)
+        if node_count == 0:
+            self.resetTransform()
+            self.fitInView(QRectF(-300, -100, 600, 200))
+        elif node_count == 1:
+            self.resetTransform()
+            node = next(iter(self._nodes.values()))
+            self.centerOn(node.sceneBoundingRect().center())
+        else:
             items_rect = self._scene.itemsBoundingRect()
             self.fitInView(items_rect.adjusted(-40, -40, 40, 40), Qt.AspectRatioMode.KeepAspectRatio)
-        else:
-            self.fitInView(QRectF(-300, -100, 600, 200))
 
     def to_chain_nodes_and_edges(self) -> tuple[list[dict], list[dict]]:
         """Snapshot current canvas state to serializable dicts."""
