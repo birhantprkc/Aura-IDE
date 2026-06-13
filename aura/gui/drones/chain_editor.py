@@ -41,17 +41,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Galaxy palette
 # ---------------------------------------------------------------------------
-BG = "#0d0d12"
-SURFACE = "#14141c"
-SURFACE_RAISED = "#1a1a25"
-BORDER = "#282838"
-FG = "#e0ddf0"
-FG_MUTED = "#8f8ca0"
-FG_DIM = "#5f5d70"
+BG = "#141418"
+SURFACE = "#1c1c22"
+SURFACE_RAISED = "#222228"
+BORDER = "#252830"
+FG = "#eaecef"
+FG_MUTED = "#6e7382"
+FG_DIM = "#a8aebb"
 ACCENT = "#c4b5fd"
 ACCENT_DIM = "#7c6bb0"
 DRONE_PURPLE = "#8b5cf6"
-SEPARATOR = "#282838"
+SEPARATOR = "#252830"
 
 
 def _widget_valid(w: object) -> bool:
