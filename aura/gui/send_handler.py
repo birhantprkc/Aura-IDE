@@ -16,6 +16,8 @@ from PySide6.QtWidgets import QMessageBox
 from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode
 from aura.conversation.task_router import TaskLane, classify_user_request
 from aura.gui.input_panel import SendPayload
+from aura.drones.build_spec import DroneBuildBrief
+from aura.drones.build_prompt import build_drone_creation_prompt
 from aura.git_ops import (
     recent_commit_log,
     restore_to_snapshot,
@@ -23,7 +25,6 @@ from aura.git_ops import (
     working_tree_diff,
     working_tree_status,
 )
-
 
 class SendHandler(QObject):
     """Handles send/stop/undo logic extracted from MainWindow.
@@ -89,6 +90,10 @@ class SendHandler(QObject):
     def handle_send(self, payload: SendPayload, model: str, thinking: ThinkingMode) -> None:
         """Process a send payload: route built-ins, queue if busy, or send."""
         route = classify_user_request(payload.text)
+        if route.action == "drone_make":
+            self._handle_drone_make(payload, model, thinking)
+            return
+
         if route.lane == TaskLane.built_in_action:
             self._chat.add_user(payload.text)
             self._handle_built_in_action(route.action)
@@ -98,7 +103,6 @@ class SendHandler(QObject):
             self._message_queue.append(payload)
             self._input.set_queued_messages(len(self._message_queue))
             return
-
         # Check if the current model supports native vision
         m_info = self._get_current_model_info(model)
         native_vision = m_info.supports_vision if m_info else False
@@ -193,8 +197,51 @@ class SendHandler(QObject):
         )
         return True
 
-    # ---- undo --------------------------------------------------------------
+    # ---- drone make -------------------------------------------------------
 
+    def _handle_drone_make(
+        self, payload: SendPayload, model: str, thinking: ThinkingMode
+    ) -> None:
+        """Handle /drone make|create|build commands."""
+        if self._bridge.is_running():
+            self._message_queue.append(payload)
+            self._input.set_queued_messages(len(self._message_queue))
+            return
+
+        match = re.match(
+            r"/drone\s+(?:make|create|build)\s+(.+)",
+            payload.text.strip(),
+            re.IGNORECASE,
+        )
+        brief = match.group(1).strip() if match else ""
+
+        if not brief:
+            self._chat.add_user(payload.text)
+            self._chat.add_info(
+                "Drone Creation",
+                "Tell Aura what kind of reusable drone to make. "
+                "Example: /drone make a docs checker that compares "
+                "README against the code.",
+            )
+            return
+
+        brief_obj = DroneBuildBrief(
+            response_type="brief",
+            message="",
+            ready_to_build=True,
+            build_brief=brief,
+        )
+        compiled_prompt = build_drone_creation_prompt(brief_obj)
+        self._bridge.history.append_user_text(compiled_prompt)
+        self._chat.add_user(payload.text)
+        self._chat.begin_assistant()
+        self._bridge.send(
+            model=model,
+            thinking=thinking,
+            max_tool_rounds=self._settings.max_tool_rounds,
+        )
+
+    # ---- undo --------------------------------------------------------------
     def _handle_built_in_action(self, action: str) -> None:
         """Run deterministic built-in actions without model or Worker dispatch."""
         if action == "undo":
