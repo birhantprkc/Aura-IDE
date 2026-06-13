@@ -69,6 +69,7 @@ RECOVERABLE_WORKER_WRITE_FAILURE_CLASSES = {
     "edit_mechanics_multi_edit_spin",
     "patch_hunk_not_found",
     "patch_hunk_ambiguous",
+    "patch_file_hash_mismatch",
     "syntax_invalid",
 }
 

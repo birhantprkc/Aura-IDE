@@ -1,6 +1,7 @@
 """Read-only filesystem tools: read_file, list_directory, glob, read_file_outline."""
 from __future__ import annotations
 
+import hashlib
 import ast
 import re
 from pathlib import Path
@@ -33,10 +34,11 @@ def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
         file_size = target.stat().st_size
         if file_size > MAX_READ_BYTES:
             truncated = True
-        
-        with open(target, "rb") as f:
-            raw = f.read(MAX_READ_BYTES)
-            
+
+        full_bytes = target.read_bytes()
+        content_hash = hashlib.sha256(full_bytes).hexdigest()
+
+        raw = full_bytes[:MAX_READ_BYTES]
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         return {"ok": False, "error": f"file cannot be decoded as UTF-8: {safe_relative_to(target, workspace_root)}"}
@@ -46,7 +48,14 @@ def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
     if truncated:
         text += f"\n\n[... truncated at {MAX_READ_BYTES} bytes ...]"
     rel = safe_relative_to(target, workspace_root).as_posix()
-    return {"ok": True, "path": rel, "content": text, "truncated": truncated}
+    return {
+        "ok": True,
+        "path": rel,
+        "content": text,
+        "truncated": truncated,
+        "content_hash": content_hash,
+        "file_size": file_size,
+    }
 
 
 def read_file_range(

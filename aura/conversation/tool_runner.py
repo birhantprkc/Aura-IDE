@@ -61,6 +61,9 @@ class ToolRunner:
         self._workspace_root = workspace_root
         self._loop_detector = loop_detector
 
+    def set_workspace_root(self, root: Path) -> None:
+        self._workspace_root = root
+
     # ------------------------------------------------------------------
     # dispatch_to_worker
     # ------------------------------------------------------------------

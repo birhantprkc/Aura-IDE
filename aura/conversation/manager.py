@@ -71,6 +71,7 @@ EDIT_MECHANICS_FAILURE_CLASSES = {
     "edit_mechanics_ambiguous_match",
     "patch_hunk_not_found",
     "patch_hunk_ambiguous",
+    "patch_file_hash_mismatch",
 }
 
 EDIT_TRANSACTION_FAILURE_CLASSES = {
@@ -191,6 +192,9 @@ class ConversationManager:
     @property
     def tools(self) -> ToolRegistry:
         return self._tools
+
+    def set_workspace_root(self, root: Path) -> None:
+        self._tool_runner.set_workspace_root(root)
 
     def send(
         self,
@@ -1176,6 +1180,12 @@ class ConversationManager:
             )
             payload["previous_error"] = prior.get("error", "")
             self._record_recovery_block(payload, f"patch-reread:{path}", recovery_block_counts)
+            if recovery_block_counts.get(f"patch-reread:{path}", 0) >= 2:
+                payload["recoverable"] = False
+                payload["error"] = (
+                    "patch_file failed repeatedly on the same file after re-reading. "
+                    "Stop editing this file and report the structured blocker instead of retrying."
+                )
             return self._blocked_tool_result(tool_call_id, name, payload)
 
         if name in ("edit_file", "edit_symbol") and path in edit_fallback_required:
@@ -1303,7 +1313,7 @@ class ConversationManager:
             parsed["suggested_next_tool"] = "read_file"
             parsed["suggested_next_action"] = "Re-read the file before retrying an edit."
             content = json.dumps(parsed, ensure_ascii=False)
-        elif path and failure_class in {"patch_hunk_not_found", "patch_hunk_ambiguous"}:
+        elif path and failure_class in {"patch_hunk_not_found", "patch_hunk_ambiguous", "patch_file_hash_mismatch"}:
             parsed.setdefault("applied", False)
             parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
             parsed.setdefault("tool", name)
@@ -1433,7 +1443,12 @@ class ConversationManager:
     ) -> None:
         if name == "read_file":
             path = str(args.get("path") or (parsed.get("path") if isinstance(parsed, dict) else ""))
-            if path:
+            if (
+                path
+                and isinstance(parsed, dict)
+                and parsed.get("ok") is True
+                and parsed.get("truncated") is not True
+            ):
                 ConversationManager._pop_normalized_recovery_key(line_range_reread_required, path)
                 ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
         elif name == "read_files":

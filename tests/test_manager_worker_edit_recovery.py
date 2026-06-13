@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager
@@ -301,7 +302,7 @@ def test_patch_file_failure_requires_reread_before_retry(tmp_workspace):
     manager._record_reads_for_recovery(
         "read_file",
         {"path": "sample.py"},
-        {"path": "sample.py"},
+        {"ok": True, "path": "sample.py", "truncated": False},
         {},
         fallback_required,
     )
@@ -340,14 +341,14 @@ def test_patch_file_failure_reread_clears_normalized_path(tmp_workspace):
     manager._record_reads_for_recovery(
         "read_file",
         {"path": r".\pkg\sample.py"},
-        {"path": r".\pkg\sample.py"},
+        {"ok": True, "path": r".\pkg\sample.py", "truncated": False},
         line_range_required,
         fallback_required,
     )
     manager._record_reads_for_recovery(
         "read_file",
         {"path": "./pkg/lines.py"},
-        {"path": "./pkg/lines.py"},
+        {"ok": True, "path": "./pkg/lines.py", "truncated": False},
         line_range_required,
         fallback_required,
     )
@@ -521,3 +522,122 @@ def test_py_compile_allowed_for_broken_file_after_syntax_failure(tmp_workspace):
         {"command": "echo hello"},
         {"broken.py"},
     )
+
+
+def test_workspace_root_updates_propagate_to_tool_runner(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    assert manager._tool_runner._workspace_root == tmp_workspace
+
+    new_root = Path("/different/path")
+    manager.set_workspace_root(new_root)
+    assert manager._tool_runner._workspace_root == new_root
+
+
+def test_patch_file_hash_mismatch_is_recoverable_fallback(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    edit_fallback_required: dict = {}
+    line_range_reread_required: dict = {}
+    content = json.dumps({
+        "ok": False,
+        "path": "sample.py",
+        "failure_class": "patch_file_hash_mismatch",
+        "error": "patch_file hash mismatch — re-read and retry",
+    })
+
+    updated = manager._update_worker_recovery_state(
+        name="patch_file",
+        args={"path": "sample.py", "edits": [{"old": "x", "new": "y"}]},
+        ok=False,
+        content=content,
+        edit_failed_shapes=set(),
+        edit_fallback_required=edit_fallback_required,
+        line_range_reread_required=line_range_reread_required,
+        syntax_repair_required={},
+        syntax_validation_required=set(),
+        write_attempts_by_path={},
+    )
+
+    payload = json.loads(updated)
+    assert payload["failure_class"] == "patch_file_hash_mismatch"
+    assert payload["recoverable"] is True
+    assert payload["suggested_next_tool"] == "patch_file"
+    assert "sample.py" in edit_fallback_required
+    assert "sample.py" not in line_range_reread_required
+
+
+def test_recovery_state_not_cleared_by_failed_or_truncated_read(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    edit_fallback_required = {"x.py": {"failure_class": "patch_hunk_not_found"}}
+
+    # Failed read — state NOT cleared
+    manager._record_reads_for_recovery(
+        "read_file",
+        {"path": "x.py"},
+        {"ok": False, "path": "x.py", "truncated": False},
+        {},
+        edit_fallback_required,
+    )
+    assert edit_fallback_required != {}
+
+    # Truncated read — state NOT cleared
+    manager._record_reads_for_recovery(
+        "read_file",
+        {"path": "x.py"},
+        {"ok": True, "path": "x.py", "truncated": True},
+        {},
+        edit_fallback_required,
+    )
+    assert edit_fallback_required != {}
+
+    # Successful non-truncated read — state IS cleared
+    manager._record_reads_for_recovery(
+        "read_file",
+        {"path": "x.py"},
+        {"ok": True, "path": "x.py", "truncated": False},
+        {},
+        edit_fallback_required,
+    )
+    assert edit_fallback_required == {}
+
+
+def test_successful_read_clears_patch_recovery_state(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    edit_fallback_required = {"sample.py": {"failure_class": "patch_hunk_not_found"}}
+
+    manager._record_reads_for_recovery(
+        "read_file",
+        {"path": "sample.py"},
+        {"ok": True, "path": "sample.py", "truncated": False},
+        {},
+        edit_fallback_required,
+    )
+
+    assert edit_fallback_required == {}
+
+
+def test_repeated_patch_file_block_becomes_nonrecoverable(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    edit_fallback_required = {
+        "f.py": {
+            "failure_class": "patch_hunk_not_found",
+            "error": "patch_file hunk old block was not found.",
+        }
+    }
+    recovery_block_counts = {"patch-reread:f.py": 2}
+
+    blocked = manager._worker_recovery_block(
+        tool_call_id="tc1",
+        name="patch_file",
+        args={"path": "f.py", "edits": [{"old": "x", "new": "y"}]},
+        edit_failed_shapes=set(),
+        edit_fallback_required=edit_fallback_required,
+        recovery_block_counts=recovery_block_counts,
+        line_range_reread_required={},
+        syntax_repair_required={},
+        syntax_validation_required=set(),
+        write_attempts_by_path={},
+    )
+
+    assert blocked is not None
+    payload = json.loads(blocked["result_payload"])
+    assert payload["recoverable"] is False
