@@ -58,22 +58,29 @@ def build_drone_creation_prompt(brief: DroneBuildBrief, accepts: str = "", produ
         "how it does it, whether it needs write access, and what it produces."
     )
     lines.append("")
-    lines.append(
-        "If the brief is too vague (missing any of those required details):"
-    )
-    lines.append(
-        "- Output exactly one short clarifying question to the user asking "
-        "for the missing specifics."
-    )
+    lines.append("### Readiness Checklist")
+    lines.append("Before building, verify the brief makes the following fields clear:")
+    lines.append("- **name** \u2014 a clear, inferable name for the drone")
+    lines.append("- **purpose** \u2014 what the drone does and when the user would use it")
+    lines.append("- **what it should read or inspect** \u2014 the input or surface it works on")
+    lines.append("- **write access** \u2014 whether it is read-only or may write files / make changes")
+    lines.append("- **expected output** \u2014 what it produces")
+    lines.append("- **required surface or tool family** \u2014 e.g. repo, GitHub, docs, tests, browser, release notes, local files")
+    lines.append("")
+    lines.append("### Clarification Loop")
+    lines.append("If any of those details are missing or unclear:")
+    lines.append("- Ask the smallest useful clarifying question (or multiple fields when that is clearer).")
     lines.append("- Do NOT dispatch a Worker.")
     lines.append("- Do NOT call `save_drone_definition`.")
-    lines.append("- Stop there.")
+    lines.append("- After the user responds, re-evaluate. If the brief is still not complete enough, ask follow-up clarification questions across multiple turns.")
+    lines.append("- Stop only when the brief is complete enough to build.")
     lines.append("")
-    lines.append(
-        "If the brief is specific enough (name, purpose, instructions, "
-        "write_policy, and expected output are all inferable):"
-    )
+    lines.append("If the brief is specific enough (all readiness checklist fields are inferable):")
     lines.append("- Proceed with the build instructions below.")
+    lines.append("")
+    lines.append("### Examples")
+    lines.append("- **Vague:** `/drone make a GitHub helper` \u2192 Ask what GitHub task it should handle, and whether it should report only or make changes.")
+    lines.append("- **Specific:** `/drone make a docs checker that compares README claims against the repo and reports stale sections` \u2192 Proceed to build.")
     lines.append("")
     lines.append("## Build Brief")
     lines.append(brief.build_brief)

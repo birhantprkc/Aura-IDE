@@ -314,7 +314,7 @@ def _execute_node(
                 cargo_entry["summary"] = summary
             if evidence:
                 cargo_entry["evidence"] = evidence
-            for k in ("result", "output", "findings", "data"):
+            for k in ("result", "output", "findings", "data", "artifact"):
                 if k in data:
                     cargo_entry[k] = data[k]
             warehouse_cargo.append(cargo_entry)
