@@ -129,12 +129,6 @@ class _DroneCard(QFrame):
         title_row.addWidget(title, 1)
         layout.addLayout(title_row)
 
-        if description:
-            desc = QLabel(description)
-            desc.setWordWrap(True)
-            desc.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; background: transparent; border: none;")
-            layout.addWidget(desc)
-
         # Pill row: status pill + truncated description preview
         pill_row = QHBoxLayout()
         pill_row.setContentsMargins(0, 0, 0, 0)
@@ -159,6 +153,7 @@ class _DroneCard(QFrame):
         preview.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 10px; background: transparent; border: none;")
         preview.setTextFormat(Qt.TextFormat.PlainText)
         preview.setWordWrap(False)
+        preview.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         pill_row.addWidget(preview, 1)
         layout.addLayout(pill_row)
 

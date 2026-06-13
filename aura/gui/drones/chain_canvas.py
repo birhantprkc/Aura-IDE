@@ -36,9 +36,9 @@ from aura.gui.theme import (
     FG_MUTED,
 )
 
-NODE_WIDTH = 260
-NODE_HEIGHT = 72
-PORT_RADIUS = 4
+NODE_WIDTH = 320
+NODE_HEIGHT = 92
+PORT_RADIUS = 3
 PORT_DIAMETER = PORT_RADIUS * 2
 NODE_RADIUS = 12
 
@@ -68,11 +68,13 @@ class PortItem(QGraphicsItem):
         return QRectF(-PORT_RADIUS, -PORT_RADIUS, PORT_DIAMETER, PORT_DIAMETER)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
-        color = _qt_color(self._parent_node.border_color)
+        color = QColor(self._parent_node.border_color)
         if self._hovered:
             color = _qt_color(ACCENT)
+        else:
+            color.setAlpha(130)
         painter.setBrush(QBrush(color))
-        painter.setPen(QPen(color.darker(130), 1))
+        painter.setPen(QPen(color.darker(150), 0.5))
         painter.drawEllipse(self.boundingRect())
 
     def hoverEnterEvent(self, event) -> None:
@@ -245,12 +247,12 @@ class ChainNodeItem(QGraphicsObject):
         dot_color.setAlpha(220)
         painter.setBrush(QBrush(dot_color))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(QPointF(18, 22), 4, 4)
+        painter.drawEllipse(QPointF(18, 26), 5, 5)
 
         painter.setPen(QPen(QColor("#eaecef")))
         font = QFont()
+        font.setPixelSize(13)
         font.setBold(True)
-        font.setPointSize(9)
         painter.setFont(font)
 
         if self._is_draft:
@@ -263,15 +265,15 @@ class ChainNodeItem(QGraphicsObject):
             name = "Missing Drone"
 
         fm = QFontMetrics(font)
-        avail_w = NODE_WIDTH - 34 - 12
+        avail_w = NODE_WIDTH - 34 - 14
         name = fm.elidedText(name, Qt.TextElideMode.ElideRight, avail_w)
-        painter.drawText(QRectF(34, 13, avail_w, 14),
+        painter.drawText(QRectF(34, 15, avail_w, 22),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
 
         # --- Row 2: status pill + preview ---
         pill_x = 34
-        pill_y = 37
-        pill_h = 14
+        pill_y = 50
+        pill_h = 16
 
         if self._is_draft:
             pill_text = "draft"
@@ -289,11 +291,11 @@ class ChainNodeItem(QGraphicsObject):
                 pill_color = QColor("#e0af68")
 
         font_pill = QFont()
-        font_pill.setPointSize(7)
+        font_pill.setPixelSize(10)
         painter.setFont(font_pill)
         fm_pill = QFontMetrics(font_pill)
-        pill_text_w = fm_pill.horizontalAdvance(pill_text) + 8
-        pill_w = max(pill_text_w, 36)
+        pill_text_w = fm_pill.horizontalAdvance(pill_text) + 10
+        pill_w = max(pill_text_w, 40)
 
         pill_bg = QColor(255, 255, 255, 13)
         painter.setBrush(QBrush(pill_bg))
@@ -317,10 +319,10 @@ class ChainNodeItem(QGraphicsObject):
 
         if preview:
             preview_x = pill_x + pill_w + 6
-            preview_w_avail = NODE_WIDTH - preview_x - 12
+            preview_w_avail = NODE_WIDTH - preview_x - 14
             if preview_w_avail > 20:
                 font_pv = QFont()
-                font_pv.setPointSize(7)
+                font_pv.setPixelSize(11)
                 painter.setFont(font_pv)
                 fm_pv = QFontMetrics(font_pv)
                 preview = fm_pv.elidedText(preview, Qt.TextElideMode.ElideRight, int(preview_w_avail))
