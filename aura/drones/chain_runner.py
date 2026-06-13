@@ -15,6 +15,7 @@ from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.consequential import is_consequential
 from aura.drones.chain import (
     ChainDefinition,
+    ChainNode,
     topological_order,
     validate,
 )
@@ -195,6 +196,176 @@ def classify_consequential_nodes(
     return consequential_nodes
 
 
+def _execute_node(
+    workspace_root: Path,
+    chain_run: ChainRun,
+    chain: ChainDefinition,
+    node_id: str,
+    node: ChainNode,
+    drone: DroneDefinition,
+    node_map: dict[str, ChainNode],
+    drone_lookup: dict[str, DroneDefinition],
+    timeout_seconds: int,
+    max_tool_rounds: int,
+    writes_approved: bool,
+) -> dict:
+    """Execute a single chain node and return its node_run dict.
+
+    Resolves inbound artifacts, builds goal text, dispatches the drone,
+    normalizes results, persists output.json, and returns the node_run dict.
+    Does NOT set chain_run.status/ended_at or call _save_run_state.
+    """
+    # ── Resolve inbound artifact ─────────────────────────
+    inbound_artifacts: dict[str, Any] = {}
+    inbound_summaries: dict[str, str] = {}
+    for edge in chain.edges:
+        if edge.to_node == node_id:
+            upstream_output = (
+                _node_output_dir(
+                    workspace_root, chain_run.run_id, edge.from_node
+                )
+                / "output.json"
+            )
+            if not upstream_output.exists():
+                continue
+            try:
+                data = json.loads(
+                    upstream_output.read_text(encoding="utf-8")
+                )
+                upstream_node = node_map.get(edge.from_node)
+                upstream_drone = (
+                    drone_lookup.get(upstream_node.drone_id)
+                    if upstream_node
+                    else None
+                )
+                if upstream_drone and upstream_drone.produces:
+                    # Structured artifact
+                    inbound_artifacts[edge.from_node] = data
+                else:
+                    # Free-form — extract summary
+                    summary = data.get("summary", "")
+                    if summary:
+                        inbound_summaries[edge.from_node] = summary
+            except Exception as exc:
+                logger.warning(
+                    "Failed to read artifact from %s: %s",
+                    upstream_output,
+                    exc,
+                )
+
+    # ── Build goal text ────────────────────────────────
+    goal_text = node.goal_template.strip()
+    if not goal_text:
+        goal_text = f"Execute the {drone.name} step."
+
+    if inbound_artifacts:
+        goal_text += "\n\n## Input Artifact\n```json\n"
+        if len(inbound_artifacts) == 1:
+            goal_text += json.dumps(
+                next(iter(inbound_artifacts.values())), indent=2
+            )
+        else:
+            goal_text += json.dumps(inbound_artifacts, indent=2)
+        goal_text += "\n```"
+
+    for upstream_nid, summary in inbound_summaries.items():
+        if summary:
+            goal_text += (
+                f"\n\n## Input from {upstream_nid}\n{summary}"
+            )
+
+    # ── Execute ────────────────────────────────────────
+    try:
+        if drone.write_policy == "read_only":
+            result = run_read_only_drone_sync(
+                workspace_root=workspace_root,
+                drone_id=node.drone_id,
+                drone=drone,
+                goal=goal_text,
+                timeout_seconds=timeout_seconds,
+                max_tool_rounds=max_tool_rounds,
+            )
+        else:
+            node_approval_cb = (
+                (lambda req: ApprovalDecision(
+                    action="approve",
+                    note="Chain approved upfront",
+                ))
+                if writes_approved
+                else None
+            )
+            result = run_write_capable_drone_sync(
+                workspace_root=workspace_root,
+                drone_id=node.drone_id,
+                drone=drone,
+                goal=goal_text,
+                approval_callback=node_approval_cb,
+                timeout_seconds=timeout_seconds,
+                max_tool_rounds=max_tool_rounds,
+            )
+    except Exception as exc:
+        logger.exception("Chain node '%s' crashed", node_id)
+        return {
+            "node_id": node_id,
+            "drone_id": node.drone_id,
+            "status": "failed",
+            "receipt": None,
+            "artifact_path": "",
+            "met": None,
+            "evidence": "",
+            "error": str(exc),
+        }
+
+    receipt_dict = result.get("receipt", {})
+    run_status = result.get("status", "failed")
+    met = receipt_dict.get("met")
+    evidence = receipt_dict.get("evidence", "")
+    produced_artifact = receipt_dict.get("produced_artifact")
+    rejected_write_actions = result.get("rejected_write_actions", 0)
+
+    # If write-capable node had rejected writes, mark met as ambivalent
+    if rejected_write_actions > 0:
+        met = None
+        if evidence:
+            evidence += "; "
+        evidence += f"{rejected_write_actions} write action(s) rejected."
+    error: str | None = None
+
+    # ── Persist node output ───────────────────────────
+    node_dir = _node_output_dir(
+        workspace_root, chain_run.run_id, node_id
+    )
+    node_dir.mkdir(parents=True, exist_ok=True)
+    output_path = node_dir / "output.json"
+
+    if drone.produces and produced_artifact is not None:
+        output_data = produced_artifact
+    else:
+        # Free-form or unmet: save the full receipt dict
+        output_data = receipt_dict
+
+    # Atomic write (tempfile → replace)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(node_dir), suffix=".json"
+    )
+    with open(fd, "w", encoding="utf-8") as f:
+        json.dump(output_data, f, indent=2, ensure_ascii=False)
+    Path(tmp_path).replace(output_path)
+
+    return {
+        "node_id": node_id,
+        "drone_id": node.drone_id,
+        "status": run_status,
+        "receipt": receipt_dict,
+        "artifact_path": str(
+            output_path.relative_to(workspace_root)
+        ),
+        "met": met,
+        "evidence": evidence,
+        "error": error,
+    }
+
+
 # ── Main entry point ──────────────────────────────────────────────
 
 
@@ -332,167 +503,28 @@ def run_chain(
             "error": None,
         }
 
-        # ── Resolve input artifact ─────────────────────────
-        inbound_artifacts: dict[str, Any] = {}
-        inbound_summaries: dict[str, str] = {}
-        for edge in chain.edges:
-            if edge.to_node == node_id:
-                upstream_output = (
-                    _node_output_dir(
-                        workspace_root, chain_run.run_id, edge.from_node
-                    )
-                    / "output.json"
-                )
-                if not upstream_output.exists():
-                    continue
-                try:
-                    data = json.loads(
-                        upstream_output.read_text(encoding="utf-8")
-                    )
-                    upstream_node = node_map.get(edge.from_node)
-                    upstream_drone = (
-                        drone_lookup.get(upstream_node.drone_id)
-                        if upstream_node
-                        else None
-                    )
-                    if upstream_drone and upstream_drone.produces:
-                        # Structured artifact
-                        inbound_artifacts[edge.from_node] = data
-                    else:
-                        # Free-form — extract summary
-                        summary = data.get("summary", "")
-                        if summary:
-                            inbound_summaries[edge.from_node] = summary
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to read artifact from %s: %s",
-                        upstream_output,
-                        exc,
-                    )
-
-        # ── Build goal text ────────────────────────────────
-        goal_text = node.goal_template.strip()
-        if not goal_text:
-            goal_text = f"Execute the {drone.name} step."
-
-        if inbound_artifacts:
-            goal_text += "\n\n## Input Artifact\n```json\n"
-            if len(inbound_artifacts) == 1:
-                goal_text += json.dumps(
-                    next(iter(inbound_artifacts.values())), indent=2
-                )
-            else:
-                goal_text += json.dumps(inbound_artifacts, indent=2)
-            goal_text += "\n```"
-
-        for upstream_nid, summary in inbound_summaries.items():
-            if summary:
-                goal_text += (
-                    f"\n\n## Input from {upstream_nid}\n{summary}"
-                )
-
-        # ── Execute ────────────────────────────────────────
-        try:
-            if drone.write_policy == "read_only":
-                result = run_read_only_drone_sync(
-                    workspace_root=workspace_root,
-                    drone_id=node.drone_id,
-                    drone=drone,
-                    goal=goal_text,
-                    timeout_seconds=timeout_seconds,
-                    max_tool_rounds=max_tool_rounds,
-                )
-            else:
-                node_approval_cb = (
-                    (lambda req: ApprovalDecision(
-                        action="approve",
-                        note="Chain approved upfront",
-                    ))
-                    if approval_callback is not None
-                    else None
-                )
-                result = run_write_capable_drone_sync(
-                    workspace_root=workspace_root,
-                    drone_id=node.drone_id,
-                    drone=drone,
-                    goal=goal_text,
-                    approval_callback=node_approval_cb,
-                    timeout_seconds=timeout_seconds,
-                    max_tool_rounds=max_tool_rounds,
-                )
-        except Exception as exc:
-            logger.exception("Chain node '%s' crashed", node_id)
-            chain_run.node_runs[node_id]["status"] = "failed"
-            chain_run.node_runs[node_id]["error"] = str(exc)
-            chain_run.status = "failed"
-            chain_run.ended_at = dt.datetime.now(
-                dt.timezone.utc
-            ).isoformat()
-            _save_run_state(workspace_root, chain_run)
-            break
-
-        receipt_dict = result.get("receipt", {})
-        run_status = result.get("status", "failed")
-        met = receipt_dict.get("met")
-        evidence = receipt_dict.get("evidence", "")
-        produced_artifact = receipt_dict.get("produced_artifact")
-        rejected_write_actions = result.get("rejected_write_actions", 0)
-        # If write-capable node had rejected writes, mark met as ambivalent
-        if rejected_write_actions > 0:
-            met = None
-            if evidence:
-                evidence += "; "
-            evidence += f"{rejected_write_actions} write action(s) rejected."
-        error: str | None = None
-
-        # ── Persist node output ───────────────────────────
-        node_dir = _node_output_dir(
-            workspace_root, chain_run.run_id, node_id
+        node_run = _execute_node(
+            workspace_root=workspace_root,
+            chain_run=chain_run,
+            chain=chain,
+            node_id=node_id,
+            node=node,
+            drone=drone,
+            node_map=node_map,
+            drone_lookup=drone_lookup,
+            timeout_seconds=timeout_seconds,
+            max_tool_rounds=max_tool_rounds,
+            writes_approved=(approval_callback is not None),
         )
-        node_dir.mkdir(parents=True, exist_ok=True)
-        output_path = node_dir / "output.json"
-
-        if drone.produces and produced_artifact is not None:
-            output_data = produced_artifact
-        else:
-            # Free-form or unmet: save the full receipt dict
-            output_data = receipt_dict
-
-        # Atomic write (tempfile → replace)
-        fd, tmp_path = tempfile.mkstemp(
-            dir=str(node_dir), suffix=".json"
-        )
-        with open(fd, "w", encoding="utf-8") as f:
-            json.dump(output_data, f, indent=2, ensure_ascii=False)
-        Path(tmp_path).replace(output_path)
-
-        # ── Record in ChainRun ───────────────────────────
-        chain_run.node_runs[node_id] = {
-            "node_id": node_id,
-            "drone_id": node.drone_id,
-            "status": run_status,
-            "receipt": receipt_dict,
-            "artifact_path": str(
-                output_path.relative_to(workspace_root)
-            ),
-            "met": met,
-            "evidence": evidence,
-            "error": error,
-        }
+        chain_run.node_runs[node_id] = node_run
 
         # ── Check for failure ────────────────────────────
-        failure = False
-        if run_status != "completed":
-            failure = True
-            error = f"Node status: {run_status}"
-        elif met is False:
-            failure = True
-            error = f"Node unmet: {evidence}"
-
-        if failure:
-            entry = chain_run.node_runs[node_id]
-            entry["status"] = run_status
-            entry["error"] = error
+        if node_run["status"] != "completed" or node_run.get("met") is False:
+            if not node_run.get("error"):
+                if node_run["status"] != "completed":
+                    node_run["error"] = f"Node status: {node_run['status']}"
+                elif node_run["met"] is False:
+                    node_run["error"] = f"Node unmet: {node_run['evidence']}"
             chain_run.status = "failed"
             chain_run.ended_at = dt.datetime.now(
                 dt.timezone.utc
