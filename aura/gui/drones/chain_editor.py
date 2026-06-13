@@ -34,6 +34,7 @@ from aura.gui.drones.chain_canvas import (
     ChainCanvas,
     ChainEdgeItem,
     ChainNodeItem,
+    GoalPlanetItem,
     MissionCoreItem,
 )
 from aura.gui.drones.drone_workshop_panel import DroneWorkshopPanel
@@ -466,12 +467,6 @@ class _PropertyPanel(QScrollArea):
             lambda text, item=mission_item: self._on_mission_core_name_changed(item, text)
         )
 
-        goal_edit = self._add_text_edit("Goal", mission_item.goal, "Describe the mission goal\u2026")
-        goal_edit.setMaximumHeight(100)
-        goal_edit.textChanged.connect(
-            lambda: self._on_mission_core_goal_changed(mission_item, goal_edit)
-        )
-
         self._add_label(f"Assigned Drones: {len(mission_item.assigned_drone_ids)}", color=FG_DIM)
 
         cargo_items, run_status = _read_cargo_for_chain(
@@ -500,6 +495,35 @@ class _PropertyPanel(QScrollArea):
 
     def _on_mission_core_goal_changed(self, item: MissionCoreItem, edit: QTextEdit) -> None:
         item.goal = edit.toPlainText()
+        self._editor._dirty = True
+        self._editor._auto_save_timer.start()
+
+    def _rebuild_goal_planet_form(self, planet: GoalPlanetItem) -> None:
+        self._add_label("Goal Planet", bold=True)
+        self._add_separator()
+        self._add_label("Mission Goal", color=FG_MUTED)
+        goal_edit = QTextEdit()
+        goal_edit.setPlainText(planet.goal)
+        goal_edit.setPlaceholderText("Describe the mission goal\u2026")
+        goal_edit.setMaximumHeight(120)
+        goal_edit.setStyleSheet(
+            f"QTextEdit {{"
+            f"  background: {_qss_color(SURFACE)};"
+            f"  border: 1px solid {_qss_color(BORDER)};"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color(FG)};"
+            f"  font-size: 11px;"
+            f"  padding: 4px;"
+            f"}}"
+        )
+        goal_edit.textChanged.connect(
+            lambda: self._on_goal_planet_goal_changed(planet, goal_edit)
+        )
+        self._layout.insertWidget(self._layout.count() - 1, goal_edit)
+        self._add_label(f"Drone assignments orbit around this planet.", color=FG_MUTED)
+
+    def _on_goal_planet_goal_changed(self, planet: GoalPlanetItem, edit: QTextEdit) -> None:
+        planet.goal = edit.toPlainText()
         self._editor._dirty = True
         self._editor._auto_save_timer.start()
 
@@ -665,11 +689,14 @@ class _PropertyPanel(QScrollArea):
         self._clear()
         items = self._editor._canvas._scene.selectedItems()
         mission_items = [i for i in items if isinstance(i, MissionCoreItem)]
+        goal_planet_items = [i for i in items if isinstance(i, GoalPlanetItem)]
         nodes = [i for i in items if isinstance(i, ChainNodeItem)]
         edges = [i for i in items if isinstance(i, ChainEdgeItem)]
 
         if mission_items:
             self._rebuild_mission_core_form(mission_items[0])
+        elif goal_planet_items:
+            self._rebuild_goal_planet_form(goal_planet_items[0])
         elif nodes:
             node = nodes[0]
             if node.is_assignment:
@@ -968,7 +995,7 @@ class ChainEditor(QWidget):
 
         # Run
         self._run_btn = QPushButton("Run")
-        run_btn.setStyleSheet(
+        self._run_btn.setStyleSheet(
             f"QPushButton {{"
             f"  background: {_qss_color(ACCENT_DIM)};"
             f"  border: 1px solid {_qss_color(ACCENT_DIM)};"
@@ -1040,7 +1067,8 @@ class ChainEditor(QWidget):
                 chain_def = _chain_from_dict(data)
                 drone_lookup = self._build_drone_lookup()
                 mission_core_data = data.get("mission_core")
-                self._canvas.load_chain(chain_def, drone_lookup, mission_core_data)
+                goal_planet_data = data.get("goal_planet")
+                self._canvas.load_chain(chain_def, drone_lookup, mission_core_data, goal_planet_data)
                 self._dirty = False
                 self._update_title_label()
                 self._property_panel.rebuild()
@@ -1088,6 +1116,7 @@ class ChainEditor(QWidget):
     def _snapshot_chain(self) -> dict:
         self._sync_chain_from_form()
         nodes, edges, mission_core = self._canvas.to_chain_nodes_and_edges()
+        goal_planet = self._canvas.goal_planet_data
         result = {
             "nodes": nodes,
             "edges": edges,
@@ -1097,6 +1126,8 @@ class ChainEditor(QWidget):
         }
         if mission_core:
             result["mission_core"] = mission_core
+        if goal_planet:
+            result["goal_planet"] = goal_planet
         return result
 
     def _save_chain(self) -> None:
@@ -1218,12 +1249,21 @@ class ChainEditor(QWidget):
         node_items = [i for i in selection if isinstance(i, ChainNodeItem)]
         edge_items = [i for i in selection if isinstance(i, ChainEdgeItem)]
         mission_items = [i for i in selection if isinstance(i, MissionCoreItem)]
+        goal_planet_items = [i for i in selection if isinstance(i, GoalPlanetItem)]
 
-        if not node_items and not edge_items and not mission_items:
+        if not node_items and not edge_items and not mission_items and not goal_planet_items:
             # Nothing selected: hide right panel
             sizes = self._splitter.sizes()
             if len(sizes) >= 3:
                 self._splitter.setSizes([sizes[0], sizes[0] + sizes[1] + sizes[2], 0])
+            return
+
+        if goal_planet_items:
+            # Show property panel for goal planet
+            self._right_stack.setCurrentIndex(0)
+            self._property_panel.rebuild()
+            w = max(300, self.width() - 500)
+            self._splitter.setSizes([220, w, 280])
             return
 
         if mission_items:
@@ -1460,11 +1500,13 @@ class ChainEditor(QWidget):
         if self._roster is not None:
             self._roster.set_workspace_root(self._workspace_root)
             self._roster.populate()
-        if self._canvas._nodes:
+        if self._canvas._nodes or self._canvas._mission_core is not None or self._canvas._goal_planet is not None:
             data = self._snapshot_chain()
             chain_def = _chain_from_dict(data)
             drone_lookup = self._build_drone_lookup()
-            self._canvas.load_chain(chain_def, drone_lookup)
+            mission_core_data = data.get("mission_core")
+            goal_planet_data = data.get("goal_planet")
+            self._canvas.load_chain(chain_def, drone_lookup, mission_core_data, goal_planet_data)
 
     def refresh_run_state(self) -> None:
         """Refresh mission core stats and assignment run status after a chain run."""
