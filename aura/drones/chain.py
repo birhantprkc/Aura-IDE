@@ -17,6 +17,7 @@ class ChainNode:
     draft_accepts: str = ""
     draft_produces: str = ""
     draft_brief: str = ""
+    is_assignment: bool = False
 
 
 @dataclass(frozen=True)

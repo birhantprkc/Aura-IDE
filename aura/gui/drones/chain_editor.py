@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -28,10 +29,12 @@ from aura.drones.chain import ChainDefinition
 from aura.drones.chain_store import _chain_from_dict, delete_chain, load_chain, save_chain
 from aura.drones.definition import DroneDefinition
 from aura.drones.store import DroneStore
+from aura.drones.chain_runner import get_last_chain_run
 from aura.gui.drones.chain_canvas import (
     ChainCanvas,
     ChainEdgeItem,
     ChainNodeItem,
+    MissionCoreItem,
 )
 from aura.gui.drones.drone_workshop_panel import DroneWorkshopPanel
 from aura.gui.drones.workflow_list_pane import WorkflowListPane
@@ -70,6 +73,51 @@ def _qss_darker(hex_str: str, factor: float = 0.6) -> str:
     """Darken a hex color by factor (0-1)."""
     c = QColor(hex_str)
     return f"rgba({int(c.red() * factor)},{int(c.green() * factor)},{int(c.blue() * factor)},{c.alpha() / 255:.2f})"
+
+
+def _read_cargo_for_chain(workspace_root: Path, chain_id: str) -> tuple[list[dict], str]:
+    """Read the latest ChainRun node outputs as cargo items.
+
+    Returns (cargo_items, run_status).
+    """
+    if not chain_id:
+        return [], "idle"
+
+    chain_run = get_last_chain_run(workspace_root, chain_id)
+    if chain_run is None:
+        return [], "idle"
+
+    cargo_items: list[dict] = []
+    for node_run in chain_run.node_runs.values():
+        if node_run.get("status") != "completed":
+            continue
+
+        artifact_path = node_run.get("artifact_path", "")
+        drone_id = node_run.get("drone_id", "?")
+
+        label = f"Output from {drone_id}"
+        if artifact_path:
+            output_path = workspace_root / artifact_path
+            if output_path.exists():
+                try:
+                    data = json.loads(output_path.read_text(encoding="utf-8"))
+                    label = data.get("summary", label)
+                except (json.JSONDecodeError, OSError):
+                    label = "(unreadable output)"
+            else:
+                label = "(missing output)"
+
+        cargo_items.append({
+            "node_id": node_run.get("node_id", ""),
+            "drone_id": drone_id,
+            "status": node_run.get("status", "unknown"),
+            "artifact_path": artifact_path,
+            "met": node_run.get("met", False),
+            "error": node_run.get("error", ""),
+            "label": label,
+        })
+
+    return cargo_items, chain_run.status
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +360,7 @@ class _PropertyPanel(QScrollArea):
         self._chain_name_input: QLineEdit | None = None
         self._chain_desc_input: QTextEdit | None = None
         self._auto_route_cb: QCheckBox | None = None
+        self._current_mission_item: MissionCoreItem | None = None
 
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -407,15 +456,226 @@ class _PropertyPanel(QScrollArea):
         self._layout.insertWidget(self._layout.count() - 1, cb)
         return cb
 
+    def _rebuild_mission_core_form(self, mission_item: MissionCoreItem) -> None:
+        self._current_mission_item = mission_item
+        self._add_label("Mission Core", bold=True)
+        self._add_separator()
+
+        name_input = self._add_text_input("Name", mission_item.title, "Mission Core name")
+        name_input.textChanged.connect(
+            lambda text, item=mission_item: self._on_mission_core_name_changed(item, text)
+        )
+
+        goal_edit = self._add_text_edit("Goal", mission_item.goal, "Describe the mission goal\u2026")
+        goal_edit.setMaximumHeight(100)
+        goal_edit.textChanged.connect(
+            lambda: self._on_mission_core_goal_changed(mission_item, goal_edit)
+        )
+
+        self._add_label(f"Assigned Drones: {len(mission_item.assigned_drone_ids)}", color=FG_DIM)
+
+        cargo_items, run_status = _read_cargo_for_chain(
+            self._editor._workspace_root, self._editor._current_chain_id or ""
+        )
+        mission_item._cargo_count = len(cargo_items)
+        mission_item._output_status = run_status
+        mission_item.update()
+
+        self._add_label(f"Cargo Bay: {len(cargo_items)} items", color=FG_DIM)
+        self._add_label(f"Status: {run_status}", color=FG_DIM)
+
+        self._add_separator()
+        self._add_label("Cargo Bay", bold=True)
+
+        if not cargo_items:
+            self._add_label("No cargo yet. Run the mission to collect output.", color=FG_MUTED)
+        else:
+            for cargo_item in cargo_items:
+                self._add_cargo_row(cargo_item)
+
+    def _on_mission_core_name_changed(self, item: MissionCoreItem, text: str) -> None:
+        item.title = text
+        self._editor._dirty = True
+        self._editor._auto_save_timer.start()
+
+    def _on_mission_core_goal_changed(self, item: MissionCoreItem, edit: QTextEdit) -> None:
+        item.goal = edit.toPlainText()
+        self._editor._dirty = True
+        self._editor._auto_save_timer.start()
+
+    def _add_cargo_row(self, cargo_item: dict) -> None:
+        label = cargo_item.get("label", f"Output from {cargo_item.get('drone_id', '?')}")
+        elided = label[:40] + "\u2026" if len(label) > 40 else label
+        drone_id = cargo_item.get("drone_id", "?")
+        status = cargo_item.get("status", "unknown")
+        status_dot = "\u25cf"
+        text = f"{elided}  {status_dot}  {drone_id}"
+
+        btn = QPushButton(text)
+        btn.setFlat(True)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  text-align: left;"
+            f"  color: {_qss_color(FG)};"
+            f"  font-size: 10px;"
+            f"  padding: 4px 6px;"
+            f"  border: 1px solid rgba(255,255,255,0.06);"
+            f"  border-radius: 4px;"
+            f"  background: rgba(255,255,255,0.03);"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background: rgba(255,255,255,0.06);"
+            f"  border-color: rgba(196, 181, 253, 0.25);"
+            f"}}"
+        )
+        btn.clicked.connect(lambda checked, item=cargo_item: self._show_cargo_detail(item))
+        self._layout.insertWidget(self._layout.count() - 1, btn)
+
+    def _show_cargo_detail(self, cargo_item: dict) -> None:
+        self._clear()
+
+        self._add_label("Cargo Detail", bold=True)
+        self._add_separator()
+        self._add_label(f"Source: {cargo_item.get('drone_id', '?')}")
+        self._add_label(f"Status: {cargo_item.get('status', 'unknown')}")
+
+        error = cargo_item.get("error", "")
+        if error:
+            self._add_label(f"Error: {error}", color="#f7768e")
+
+        self._add_separator()
+
+        artifact_path = cargo_item.get("artifact_path", "")
+        if artifact_path:
+            path = self._editor._workspace_root / artifact_path
+            content = path.read_text(encoding="utf-8") if path.exists() else "(file missing)"
+        else:
+            content = "(no artifact path)"
+
+        try:
+            parsed = json.loads(content)
+            content = json.dumps(parsed, indent=2)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        text_edit = QTextEdit(content)
+        text_edit.setReadOnly(True)
+        text_edit.setMaximumHeight(300)
+        mono_font = QFont("Courier New")
+        mono_font.setStyleHint(QFont.Monospace)
+        mono_font.setPixelSize(11)
+        text_edit.setFont(mono_font)
+        text_edit.setStyleSheet(
+            f"QTextEdit {{"
+            f"  background: {_qss_color(SURFACE)};"
+            f"  border: 1px solid {_qss_color(BORDER)};"
+            f"  border-radius: 4px;"
+            f"  padding: 4px;"
+            f"  color: {_qss_color(FG)};"
+            f"}}"
+        )
+        self._layout.insertWidget(self._layout.count() - 1, text_edit)
+
+        back_btn = QPushButton("\u2190 Back to Cargo Bay")
+        back_btn.setFlat(True)
+        back_btn.setCursor(Qt.PointingHandCursor)
+        back_btn.setStyleSheet(
+            f"QPushButton {{ color: {_qss_color(ACCENT)}; font-size: 11px; padding: 4px 6px; text-align: left; border: none; }}"
+            f"QPushButton:hover {{ color: {_qss_color(FG)}; }}"
+        )
+        back_btn.clicked.connect(
+            lambda: self._rebuild_mission_core_form(self._current_mission_item)
+        )
+        self._layout.insertWidget(self._layout.count() - 1, back_btn)
+
+    # -- assignment form --------------------------------------------------
+    def _rebuild_assignment_form(self, node: ChainNodeItem) -> None:
+        self._add_label("Assignment", bold=True)
+        self._add_separator()
+
+        drone_name = node.drone.name if node.drone else "Unknown Drone"
+        self._add_label(drone_name, bold=True)
+
+        if node.drone and node.drone.description:
+            self._add_label(node.drone.description, color=FG_MUTED)
+
+        accepts = node.drone.accepts if node.drone and node.drone.accepts else "any"
+        self._add_label(f"Takes: {accepts}", color=FG_DIM)
+
+        produces = node.drone.produces if node.drone and node.drone.produces else "Summary"
+        self._add_label(f"Brings back: {produces}", color=FG_DIM)
+
+        policy = node.drone.write_policy if node.drone else "read_only"
+        if policy == "read_only":
+            self._add_label("Read Only", color="#7dcfff")
+        else:
+            self._add_label("Can Write", color="#e0af68")
+
+        self._add_separator()
+
+        self._add_label("Task", color=FG_MUTED)
+        task_edit = QTextEdit(node.goal_template)
+        task_edit.setPlaceholderText("What should this drone do for this mission?")
+        task_edit.setMaximumHeight(80)
+        task_edit.setStyleSheet(
+            f"QTextEdit {{"
+            f"  background: {_qss_color(SURFACE)};"
+            f"  border: 1px solid {_qss_color(BORDER)};"
+            f"  border-radius: 4px;"
+            f"  padding: 4px 6px;"
+            f"  color: {_qss_color(FG)};"
+            f"}}"
+            f"QTextEdit:focus {{ border-color: {_qss_color(ACCENT_DIM)}; }}"
+        )
+        task_edit.textChanged.connect(
+            lambda: self._on_assignment_task_changed(node, task_edit)
+        )
+        self._layout.insertWidget(self._layout.count() - 1, task_edit)
+
+        self._add_separator()
+        delete_btn = QPushButton("Delete Assignment")
+        delete_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: transparent;"
+            f"  border: 1px solid {_qss_color('#f7768e')};"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color('#f7768e')};"
+            f"  padding: 4px 10px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background: rgba(247, 118, 142, 0.10);"
+            f"}}"
+        )
+        delete_btn.clicked.connect(lambda: self._on_delete_assignment(node))
+        self._layout.insertWidget(self._layout.count() - 1, delete_btn)
+
+    def _on_assignment_task_changed(self, node: ChainNodeItem, edit: QTextEdit) -> None:
+        node.goal_template = edit.toPlainText()
+        self._editor._dirty = True
+        self._editor._auto_save_timer.start()
+
+    def _on_delete_assignment(self, node: ChainNodeItem) -> None:
+        self._editor._canvas._remove_node(node)
+        self._editor._canvas._scene.clearSelection()
+        self.rebuild()
+
     # -- rebuild ----------------------------------------------------------
     def rebuild(self) -> None:
         self._clear()
         items = self._editor._canvas._scene.selectedItems()
+        mission_items = [i for i in items if isinstance(i, MissionCoreItem)]
         nodes = [i for i in items if isinstance(i, ChainNodeItem)]
         edges = [i for i in items if isinstance(i, ChainEdgeItem)]
 
-        if nodes:
-            self._rebuild_node_form(nodes[0])
+        if mission_items:
+            self._rebuild_mission_core_form(mission_items[0])
+        elif nodes:
+            node = nodes[0]
+            if node.is_assignment:
+                self._rebuild_assignment_form(node)
+            else:
+                self._rebuild_node_form(node)
         elif edges:
             self._rebuild_edge_form(edges[0])
         else:
@@ -441,6 +701,9 @@ class _PropertyPanel(QScrollArea):
         self._add_label(f"Chain ID: {self._editor._current_chain_id or '(unsaved)'}", color=FG_DIM)
 
     def _rebuild_node_form(self, node: ChainNodeItem) -> None:
+        if node.is_assignment:
+            self._rebuild_assignment_form(node)
+            return
         self._add_label("Node Properties", bold=True)
         self._add_separator()
         name = node.drone.name if node.drone else "(missing)"
@@ -561,6 +824,7 @@ class ChainEditor(QWidget):
         self._canvas = ChainCanvas(self)
         self._canvas.setStyleSheet(f"background: {_qss_color(BG)}; border: none;")
         self._canvas.canvasChanged.connect(self._on_canvas_changed)
+        self._canvas.runMissionRequested.connect(self._on_run_clicked)
         self._canvas._scene.selectionChanged.connect(self._on_selection_changed)
         self._splitter.addWidget(self._canvas)
 
@@ -645,7 +909,7 @@ class ChainEditor(QWidget):
         tb_layout.setSpacing(6)
 
         # Title label
-        self._title_label = QLabel("Untitled Workflow")
+        self._title_label = QLabel("Untitled Mission")
         self._title_label.setStyleSheet(
             f"font-size: 13px; font-weight: bold; color: {_qss_color(FG)}; padding-right: 10px; background: transparent; border: none;"
         )
@@ -703,7 +967,7 @@ class ChainEditor(QWidget):
         tb_layout.addWidget(validate_btn)
 
         # Run
-        run_btn = QPushButton("Run")
+        self._run_btn = QPushButton("Run")
         run_btn.setStyleSheet(
             f"QPushButton {{"
             f"  background: {_qss_color(ACCENT_DIM)};"
@@ -717,9 +981,9 @@ class ChainEditor(QWidget):
             f"  background: {_qss_color(ACCENT)};"
             f"}}"
         )
-        run_btn.setCursor(Qt.PointingHandCursor)
-        run_btn.clicked.connect(self._on_run_clicked)
-        tb_layout.addWidget(run_btn)
+        self._run_btn.setCursor(Qt.PointingHandCursor)
+        self._run_btn.clicked.connect(self._on_run_clicked)
+        tb_layout.addWidget(self._run_btn)
 
         # Delete
         delete_btn = QPushButton("Delete")
@@ -775,7 +1039,8 @@ class ChainEditor(QWidget):
                 self._auto_route = data.get("auto_route", False)
                 chain_def = _chain_from_dict(data)
                 drone_lookup = self._build_drone_lookup()
-                self._canvas.load_chain(chain_def, drone_lookup)
+                mission_core_data = data.get("mission_core")
+                self._canvas.load_chain(chain_def, drone_lookup, mission_core_data)
                 self._dirty = False
                 self._update_title_label()
                 self._property_panel.rebuild()
@@ -822,14 +1087,17 @@ class ChainEditor(QWidget):
 
     def _snapshot_chain(self) -> dict:
         self._sync_chain_from_form()
-        nodes, edges = self._canvas.to_chain_nodes_and_edges()
-        return {
+        nodes, edges, mission_core = self._canvas.to_chain_nodes_and_edges()
+        result = {
             "nodes": nodes,
             "edges": edges,
             "name": self._chain_name,
             "description": self._chain_desc,
             "auto_route": self._auto_route,
         }
+        if mission_core:
+            result["mission_core"] = mission_core
+        return result
 
     def _save_chain(self) -> None:
         self._sync_chain_from_form()
@@ -858,7 +1126,7 @@ class ChainEditor(QWidget):
 
     def _validate_chain(self) -> None:
         self._sync_chain_from_form()
-        nodes, edges = self._canvas.to_chain_nodes_and_edges()
+        nodes, edges, _mission_core = self._canvas.to_chain_nodes_and_edges()
         issues: list[str] = []
 
         if not nodes:
@@ -899,7 +1167,7 @@ class ChainEditor(QWidget):
         return "cancel"
 
     def _update_title_label(self) -> None:
-        name = self._chain_name or "Untitled Workflow"
+        name = self._chain_name or "Untitled Mission"
         suffix = " *" if self._dirty else ""
         self._title_label.setText(f"\u25c6 {name}{suffix}")
 
@@ -928,6 +1196,10 @@ class ChainEditor(QWidget):
         self._property_panel.rebuild()
         self._update_context_panel()
         self._update_title_label()
+        if self._canvas._nodes:
+            self._run_btn.setText("Run Mission")
+        else:
+            self._run_btn.setText("Run")
 
     def _on_chain_property_changed(self) -> None:
         self._dirty = True
@@ -945,12 +1217,21 @@ class ChainEditor(QWidget):
         selection = self._canvas._scene.selectedItems()
         node_items = [i for i in selection if isinstance(i, ChainNodeItem)]
         edge_items = [i for i in selection if isinstance(i, ChainEdgeItem)]
+        mission_items = [i for i in selection if isinstance(i, MissionCoreItem)]
 
-        if not node_items and not edge_items:
+        if not node_items and not edge_items and not mission_items:
             # Nothing selected: hide right panel
             sizes = self._splitter.sizes()
             if len(sizes) >= 3:
                 self._splitter.setSizes([sizes[0], sizes[0] + sizes[1] + sizes[2], 0])
+            return
+
+        if mission_items:
+            # Show property panel for mission core
+            self._right_stack.setCurrentIndex(0)
+            self._property_panel.rebuild()
+            w = max(300, self.width() - 500)
+            self._splitter.setSizes([220, w, 280])
             return
 
         if node_items:
@@ -1184,6 +1465,34 @@ class ChainEditor(QWidget):
             chain_def = _chain_from_dict(data)
             drone_lookup = self._build_drone_lookup()
             self._canvas.load_chain(chain_def, drone_lookup)
+
+    def refresh_run_state(self) -> None:
+        """Refresh mission core stats and assignment run status after a chain run."""
+        chain_id = self._current_chain_id
+        if not chain_id:
+            return
+
+        cargo_items, run_status = _read_cargo_for_chain(self._workspace_root, chain_id)
+
+        # Update MissionCoreItem if present
+        mc = self._canvas._mission_core
+        if mc is not None:
+            mc._cargo_count = len(cargo_items)
+            mc._output_status = run_status
+            mc.update()
+
+        # Update assignment node run status from the latest ChainRun
+        chain_run = get_last_chain_run(self._workspace_root, chain_id)
+        if chain_run is not None:
+            node_runs = chain_run.node_runs
+            for node in self._canvas._nodes.values():
+                if not node.is_assignment:
+                    continue
+                nr = node_runs.get(node.node_id)
+                node.run_status = nr.get("status", "idle") if nr else "idle"
+
+        # Refresh the property panel if mission core or assignment is selected
+        self._property_panel.rebuild()
 
     def chain_editor(self) -> ChainEditor:
         """Return self for compatibility with popout window accessor."""

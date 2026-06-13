@@ -42,6 +42,7 @@ def _chain_from_dict(data: dict) -> ChainDefinition:
                 draft_accepts=n.get("draft_accepts", ""),
                 draft_produces=n.get("draft_produces", ""),
                 draft_brief=n.get("draft_brief", ""),
+                is_assignment=n.get("is_assignment", False),
             )
         )
 

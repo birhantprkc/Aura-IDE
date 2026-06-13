@@ -1199,6 +1199,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chat.append_content(report)
         self._chat.assistant_done()
 
+        # Refresh chain editor run state (post-run stats, status dots)
+        if self._drone_workbay_window and self._drone_workbay_window.is_open():
+            self._drone_workbay_window.chain_editor.refresh_run_state()
+
 
     def _on_chain_run_error(self, msg: str, thread: QThread) -> None:
         """Handle chain run exception."""

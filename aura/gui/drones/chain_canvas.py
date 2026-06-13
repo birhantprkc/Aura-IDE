@@ -41,6 +41,10 @@ NODE_HEIGHT = 76
 PORT_RADIUS = 3
 PORT_DIAMETER = PORT_RADIUS * 2
 NODE_RADIUS = 12
+MISSION_CORE_WIDTH = 400
+MISSION_CORE_HEIGHT = 200
+ASSIGNMENT_WIDTH = 252
+ASSIGNMENT_HEIGHT = 40
 
 
 def _qt_color(value, fallback="#ffffff"):
@@ -114,6 +118,7 @@ class ChainNodeItem(QGraphicsObject):
         draft_accepts: str = "",
         draft_produces: str = "",
         draft_brief: str = "",
+        is_assignment: bool = False,
     ):
         super().__init__()
         self._node_id = node_id
@@ -126,11 +131,17 @@ class ChainNodeItem(QGraphicsObject):
         self._draft_accepts = draft_accepts
         self._draft_produces = draft_produces
         self._draft_brief = draft_brief
+        self._is_assignment = is_assignment
+        self._run_status = "idle"
 
-        # Ports
-        self.input_port = PortItem(self, is_input=True)
-        self.output_port = PortItem(self, is_input=False)
-        self._position_ports()
+        # Ports — assignments have no ports
+        if not is_assignment:
+            self.input_port = PortItem(self, is_input=True)
+            self.output_port = PortItem(self, is_input=False)
+            self._position_ports()
+        else:
+            self.input_port = None
+            self.output_port = None
 
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -166,6 +177,10 @@ class ChainNodeItem(QGraphicsObject):
         return self._is_draft
 
     @property
+    def is_assignment(self) -> bool:
+        return self._is_assignment
+
+    @property
     def draft_name(self) -> str:
         return self._draft_name
 
@@ -185,6 +200,15 @@ class ChainNodeItem(QGraphicsObject):
     @property
     def draft_brief(self) -> str:
         return self._draft_brief
+
+    @property
+    def run_status(self) -> str:
+        return self._run_status
+
+    @run_status.setter
+    def run_status(self, value: str) -> None:
+        self._run_status = value
+        self.update()
 
     @property
     def missing(self) -> bool:
@@ -210,12 +234,93 @@ class ChainNodeItem(QGraphicsObject):
         self.output_port.setPos(NODE_WIDTH, NODE_HEIGHT / 2)
 
     def boundingRect(self) -> QRectF:
+        if self._is_assignment:
+            return QRectF(0, 0, ASSIGNMENT_WIDTH, ASSIGNMENT_HEIGHT)
         return QRectF(0, 0, NODE_WIDTH, NODE_HEIGHT)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         rect = self.boundingRect()
 
-        # --- Card body: flat dark glass fill ---
+        # --- Assignment compact card ---
+        if self._is_assignment:
+            # Background
+            painter.setBrush(QBrush(QColor("#1a1a24")))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(rect, 6, 6)
+
+            # Border
+            border_color = QColor("#3a3a4a")
+            if self.isSelected():
+                border_color = _qt_color(ACCENT)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(border_color, 1))
+            painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
+
+            # Status dot (left) — color reflects run progress
+            _run_color_map = {
+                "idle": QColor("#6e7382"),
+                "pending": QColor("#e0af68"),
+                "running": QColor("#7dcfff"),
+                "completed": QColor("#9ece6a"),
+                "failed": QColor("#f7768e"),
+            }
+            if self._is_draft:
+                dot_color = QColor("#9d7cd8")
+            else:
+                dot_color = _run_color_map.get(self._run_status, _run_color_map["idle"])
+            painter.setBrush(QBrush(dot_color))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(QPointF(12, 20), 3, 3)
+
+            # Drone name
+            if self._is_draft:
+                name_text = self._draft_name or "Untitled Drone"
+            elif self._drone:
+                name_text = self._drone.name
+            else:
+                name_text = "Missing Drone"
+
+            font_name = QFont()
+            font_name.setPixelSize(12)
+            font_name.setBold(True)
+            painter.setFont(font_name)
+            painter.setPen(QPen(QColor("#eaecef")))
+            fm_name = QFontMetrics(font_name)
+            name_avail = 134
+            name_text = fm_name.elidedText(name_text, Qt.TextElideMode.ElideRight, name_avail)
+            painter.drawText(QRectF(26, 8, name_avail, 16),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name_text)
+
+            # Task preview
+            if self._goal_template:
+                preview = self._goal_template
+            elif self._drone:
+                preview = self._drone.description or ""
+            else:
+                preview = ""
+            if preview:
+                font_pv = QFont()
+                font_pv.setPixelSize(10)
+                painter.setFont(font_pv)
+                fm_pv = QFontMetrics(font_pv)
+                pv_avail = 140
+                preview = fm_pv.elidedText(preview, Qt.TextElideMode.ElideRight, pv_avail)
+                painter.setPen(QPen(_qt_color(FG_MUTED)))
+                painter.drawText(QRectF(26, 26, pv_avail, 14),
+                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, preview)
+
+            # Right side: Brings back pill
+            bb_value = self._drone.produces if self._drone and self._drone.produces else "Summary"
+            font_pill = QFont()
+            font_pill.setPixelSize(9)
+            painter.setFont(font_pill)
+            bb_text = f"Brings back: {bb_value}"
+            painter.setPen(QPen(_qt_color(FG_MUTED)))
+            painter.drawText(QRectF(162, 8, 82, 24),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, bb_text)
+            return
+
+        # --- Normal card body: flat dark glass fill ---
         painter.setBrush(QBrush(QColor(18, 20, 28, 230)))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, NODE_RADIUS, NODE_RADIUS)
@@ -348,6 +453,309 @@ class ChainNodeItem(QGraphicsObject):
         return super().itemChange(change, value)
 
 
+class MissionCoreItem(QGraphicsObject):
+    """A canvas card representing the mission command center."""
+
+    missionCoreChanged = Signal()
+    runRequested = Signal()
+
+    def __init__(self, node_id: str, canvas: ChainCanvas):
+        super().__init__()
+        self._node_id = node_id
+        self._canvas = canvas
+        self._title = "Mission Core"
+        self._goal = ""
+        self._assigned_drone_ids: set[str] = set()
+        self._cargo_count = 0
+        self._output_status = "idle"
+        self._run_btn_rect = QRectF()
+        self._run_btn_hovered = False
+        self._drag_hovered = False
+
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.setInterval(900)
+        self._pulse_timer.timeout.connect(self._on_pulse_tick)
+        self._pulse_timer.start()
+        self._pulse_phase = 0.0
+
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
+        self.setAcceptDrops(True)
+        self.setAcceptHoverEvents(True)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    @property
+    def node_id(self) -> str:
+        return self._node_id
+
+    @property
+    def title(self) -> str:
+        return self._title
+
+    @title.setter
+    def title(self, value: str) -> None:
+        self._title = value
+        self.missionCoreChanged.emit()
+        self.update()
+
+    @property
+    def goal(self) -> str:
+        return self._goal
+
+    @goal.setter
+    def goal(self, value: str) -> None:
+        self._goal = value
+        self.missionCoreChanged.emit()
+        self.update()
+
+    @property
+    def assigned_drone_ids(self) -> set[str]:
+        return self._assigned_drone_ids
+
+    @assigned_drone_ids.setter
+    def assigned_drone_ids(self, value: set[str]) -> None:
+        self._assigned_drone_ids = set(value)
+        self.missionCoreChanged.emit()
+        self.update()
+
+    def add_assigned_drone(self, drone_id: str) -> None:
+        self._assigned_drone_ids.add(drone_id)
+        self.missionCoreChanged.emit()
+        self.update()
+
+    def remove_assigned_drone(self, drone_id: str) -> None:
+        self._assigned_drone_ids.discard(drone_id)
+        self.missionCoreChanged.emit()
+        self.update()
+
+    def boundingRect(self) -> QRectF:
+        w = MISSION_CORE_WIDTH
+        h = MISSION_CORE_HEIGHT
+        return QRectF(-w / 2, -h / 2, w, h)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        rect = self.boundingRect()
+        w = MISSION_CORE_WIDTH
+        h = MISSION_CORE_HEIGHT
+
+        # Card body
+        painter.setBrush(QBrush(QColor("#1a1a24")))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect, NODE_RADIUS, NODE_RADIUS)
+
+        # Glow border
+        glow_color = QColor(_qt_color(ACCENT))
+        if self._output_status == "running":
+            pulse_val = (math.sin(self._pulse_phase) + 1) / 2
+            glow_alpha = 20 + int(pulse_val * 30)
+        else:
+            glow_alpha = 25
+        if self.isSelected():
+            glow_alpha = 60
+        if self._drag_hovered:
+            glow_alpha = 80
+        glow_color.setAlpha(glow_alpha)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(glow_color, 4))
+        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), NODE_RADIUS - 1, NODE_RADIUS - 1)
+
+        # Border
+        border_color = QColor("#3a3a4a")
+        if self.isSelected():
+            border_color = _qt_color(ACCENT)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(border_color, 1.5))
+        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), NODE_RADIUS - 1, NODE_RADIUS - 1)
+
+        # Drag hover highlight
+        if self._drag_hovered:
+            highlight_color = QColor(_qt_color(ACCENT))
+            highlight_color.setAlpha(40)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(highlight_color, 1, Qt.PenStyle.DashLine))
+            painter.drawRoundedRect(rect.adjusted(3, 3, -3, -3), NODE_RADIUS - 3, NODE_RADIUS - 3)
+
+        # Title
+        font_title = QFont()
+        font_title.setPixelSize(15)
+        font_title.setBold(True)
+        painter.setFont(font_title)
+        painter.setPen(QPen(_qt_color(ACCENT)))
+        painter.drawText(
+            QRectF(-w / 2 + 16, -h / 2 + 14, w - 32, 24),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            self._title,
+        )
+
+        # Header beacon diamond
+        beacon_color = QColor(_qt_color(ACCENT))
+        if self._output_status == "running":
+            pulse_val = (math.sin(self._pulse_phase) + 1) / 2
+            beacon_alpha = 180 + int(pulse_val * 40)
+        else:
+            beacon_alpha = 200
+        beacon_color.setAlpha(int(beacon_alpha))
+        painter.setBrush(QBrush(beacon_color))
+        painter.setPen(Qt.PenStyle.NoPen)
+        beacon_path = QPainterPath()
+        beacon_path.moveTo(QPointF(-w / 2 + 30, -h / 2 + 23))
+        beacon_path.lineTo(QPointF(-w / 2 + 33, -h / 2 + 26))
+        beacon_path.lineTo(QPointF(-w / 2 + 30, -h / 2 + 29))
+        beacon_path.lineTo(QPointF(-w / 2 + 27, -h / 2 + 26))
+        beacon_path.closeSubpath()
+        painter.drawPath(beacon_path)
+
+        # Goal preview (first ~3 lines, truncated)
+        if self._goal:
+            font_goal = QFont()
+            font_goal.setPixelSize(11)
+            painter.setFont(font_goal)
+            painter.setPen(QPen(_qt_color(FG_MUTED)))
+            lines = self._goal.split("\n")[:3]
+            preview = "\n".join(lines)
+            if len(self._goal) > len(preview):
+                preview += "\n\u2026"
+            goal_rect = QRectF(-w / 2 + 16, -h / 2 + 44, w - 32, 52)
+            painter.drawText(
+                goal_rect,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                preview,
+            )
+
+        # "Drop drones here" hint when empty
+        if not self._assigned_drone_ids:
+            font_hint = QFont()
+            font_hint.setPixelSize(12)
+            font_hint.setItalic(True)
+            painter.setFont(font_hint)
+            if self._drag_hovered:
+                painter.setPen(QPen(_qt_color(ACCENT)))
+            else:
+                painter.setPen(QPen(_qt_color(FG_MUTED)))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "Drop drones here")
+
+        # Metrics row
+        metrics_y = h / 2 - 28
+        font_metrics = QFont()
+        font_metrics.setPixelSize(11)
+        painter.setFont(font_metrics)
+        painter.setPen(QPen(QColor("#eaecef")))
+        drone_count = len(self._assigned_drone_ids)
+        metrics_text = f"\u2699 {drone_count} drones    \U0001f4e6 {self._cargo_count} cargo    \u2713 {self._output_status}"
+        painter.drawText(
+            QRectF(-w / 2 + 16, metrics_y, w - 32, 20),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            metrics_text,
+        )
+
+        # "Run Mission" button (bottom-right)
+        btn_x = w / 2 - 126
+        btn_y = h / 2 - 36
+        btn_w = 110
+        btn_h = 26
+        self._run_btn_rect = QRectF(btn_x, btn_y, btn_w, btn_h)
+
+        btn_alpha = 150 if self._run_btn_hovered else 80
+        btn_color = QColor(_qt_color(ACCENT))
+        btn_color.setAlpha(btn_alpha)
+        painter.setBrush(QBrush(btn_color))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(self._run_btn_rect, 5, 5)
+
+        font_btn = QFont()
+        font_btn.setPixelSize(11)
+        font_btn.setBold(True)
+        painter.setFont(font_btn)
+        painter.setPen(QPen(QColor("#ffffff")))
+        painter.drawText(
+            self._run_btn_rect,
+            Qt.AlignmentFlag.AlignCenter,
+            "\u25b6 Run Mission",
+        )
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasFormat("application/x-aura-drone-id"):
+            self._drag_hovered = True
+            self.update()
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:
+        if event.mimeData().hasFormat("application/x-aura-drone-id"):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        if event.mimeData().hasFormat("application/x-aura-drone-id"):
+            self._drag_hovered = False
+            self.update()
+            drone_id = bytes(event.mimeData().data("application/x-aura-drone-id")).decode("utf-8")
+            self._canvas._handle_mission_core_drop(self, drone_id)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+    def dragLeaveEvent(self, event) -> None:
+        self._drag_hovered = False
+        self.update()
+        super().dragLeaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._run_btn_rect.contains(event.pos()):
+            self.runRequested.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def hoverMoveEvent(self, event) -> None:
+        hovered = self._run_btn_rect.contains(event.pos())
+        if hovered != self._run_btn_hovered:
+            self._run_btn_hovered = hovered
+            self.update()
+        super().hoverMoveEvent(event)
+
+    def hoverEnterEvent(self, event) -> None:
+        self._run_btn_hovered = False
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event) -> None:
+        self._run_btn_hovered = False
+        self.update()
+        super().hoverLeaveEvent(event)
+
+    def _on_pulse_tick(self) -> None:
+        self._pulse_phase += 0.15
+        self.update()
+
+    def to_dict(self) -> dict:
+        return {
+            "title": self._title,
+            "goal": self._goal,
+            "position": [self.pos().x(), self.pos().y()],
+            "assigned_drone_ids": list(self._assigned_drone_ids),
+        }
+
+    def from_dict(self, data: dict) -> None:
+        self._title = data.get("title", "Mission Core")
+        self._goal = data.get("goal", "")
+        pos = data.get("position")
+        if pos and len(pos) == 2:
+            self.setPos(pos[0], pos[1])
+        self._assigned_drone_ids = set(data.get("assigned_drone_ids", []))
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            self._canvas._on_node_moved()
+        elif change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+            self._canvas._on_selection_changed()
+        return super().itemChange(change, value)
+
+
 class ChainEdgeItem(QGraphicsPathItem):
     """Bezier curve edge between two ports."""
 
@@ -378,7 +786,7 @@ class ChainEdgeItem(QGraphicsPathItem):
     def paint(self, painter: QPainter, option, widget=None) -> None:
         # Draw glow strokes behind the main path
         if self._bezier_curve is not None:
-            for w, alpha in [(6, 15), (3, 30)]:
+            for w, alpha in [(4, 8), (2, 18)]:
                 c = QColor(self._glow_color)
                 c.setAlpha(alpha)
                 painter.setPen(QPen(c, w, self._pen_style))
@@ -422,7 +830,7 @@ class ChainEdgeItem(QGraphicsPathItem):
 
         # Main pen
         main_color = self._glow_color
-        main_width = 1.5 if not self.isSelected() else 2.5
+        main_width = 1.2 if not self.isSelected() else 2.0
         self.setPen(QPen(main_color, main_width, self._pen_style))
 
     def _build_bezier_curve(self, p1, p2, p3, p4) -> QPainterPath:
@@ -480,6 +888,7 @@ class ChainCanvas(QGraphicsView):
     """QGraphicsView-based canvas for building drone workflow chains."""
 
     canvasChanged = Signal()
+    runMissionRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -505,6 +914,9 @@ class ChainCanvas(QGraphicsView):
         # Empty state text (created lazily by load_chain / _update_empty_text)
         self._empty_text: QGraphicsTextItem | None = None
 
+        # Mission core card
+        self._mission_core: MissionCoreItem | None = None
+
         # Space background (static cached pixmap)
         self._space_bg_cache: QPixmap | None = None
 
@@ -520,8 +932,20 @@ class ChainCanvas(QGraphicsView):
                 pass  # C++ object already deleted
             self._empty_text = None
 
+        if not self._nodes and self._mission_core is None:
+            text = QGraphicsTextItem(
+                "Right-click to add a Mission Core. Drag drones onto it to assign work."
+            )
+            font = QFont()
+            font.setPixelSize(11)
+            text.setFont(font)
+            text.setDefaultTextColor(_qt_color(FG_MUTED))
+            text.setPos(-120, -15)
+            self._scene.addItem(text)
+            self._empty_text = text
 
-    def load_chain(self, chain: ChainDefinition, drone_lookup: dict[str, DroneDefinition]) -> None:
+
+    def load_chain(self, chain: ChainDefinition, drone_lookup: dict[str, DroneDefinition], mission_core_data: dict | None = None) -> None:
         """Populate canvas from a ChainDefinition."""
         self._scene.clear()
         self._empty_text = None  # scene.clear() deleted the C++ object
@@ -543,6 +967,7 @@ class ChainCanvas(QGraphicsView):
                 draft_accepts=node_data.draft_accepts,
                 draft_produces=node_data.draft_produces,
                 draft_brief=node_data.draft_brief,
+                is_assignment=node_data.is_assignment,
             )
             if drone is None and not node_data.is_draft:
                 item.missing = True
@@ -563,6 +988,18 @@ class ChainCanvas(QGraphicsView):
                 self._scene.addItem(edge)
                 self._edges.append(edge)
 
+        # Mission core
+        self._mission_core = None
+        if mission_core_data:
+            mission_item = MissionCoreItem(
+                node_id=f"mission-core-{uuid.uuid4().hex[:4]}",
+                canvas=self,
+            )
+            mission_item.from_dict(mission_core_data)
+            self._scene.addItem(mission_item)
+            self._mission_core = mission_item
+            mission_item.runRequested.connect(self.runMissionRequested.emit)
+
         self._update_empty_text()
 
         # Auto-fit after a short delay
@@ -570,18 +1007,27 @@ class ChainCanvas(QGraphicsView):
 
     def _fit_view(self) -> None:
         node_count = len(self._nodes)
-        if node_count == 0:
+        if node_count == 0 and self._mission_core is None:
             self.resetTransform()
             self.centerOn(0, 0)
-        elif node_count == 1:
+        elif node_count == 1 and self._mission_core is None:
             self.resetTransform()
             node = next(iter(self._nodes.values()))
             self.centerOn(node.sceneBoundingRect().center())
+        elif node_count == 0 and self._mission_core is not None:
+            self.resetTransform()
+            self.centerOn(self._mission_core.sceneBoundingRect().center())
         else:
             items_rect = self._scene.itemsBoundingRect()
             self.fitInView(items_rect.adjusted(-40, -40, 40, 40), Qt.AspectRatioMode.KeepAspectRatio)
 
-    def to_chain_nodes_and_edges(self) -> tuple[list[dict], list[dict]]:
+        # Clamp minimum zoom so canvas doesn't zoom out too far
+        current_scale = self.transform().m11()
+        if current_scale < 0.35:
+            factor = 0.35 / current_scale
+            self.scale(factor, factor)
+
+    def to_chain_nodes_and_edges(self) -> tuple[list[dict], list[dict], dict | None]:
         """Snapshot current canvas state to serializable dicts."""
         nodes = []
         for node_id, item in self._nodes.items():
@@ -596,6 +1042,7 @@ class ChainCanvas(QGraphicsView):
                 "draft_accepts": item.draft_accepts,
                 "draft_produces": item.draft_produces,
                 "draft_brief": item.draft_brief,
+                "is_assignment": item.is_assignment,
             })
 
         edges = []
@@ -605,7 +1052,8 @@ class ChainCanvas(QGraphicsView):
                 "to_node": edge.to_node_id,
             })
 
-        return nodes, edges
+        mission_dict = self._mission_core.to_dict() if self._mission_core else None
+        return nodes, edges, mission_dict
 
     # ---- Edge drawing ----
 
@@ -865,14 +1313,22 @@ class ChainCanvas(QGraphicsView):
 
     def _delete_selected(self) -> None:
         to_remove = [item for item in self._scene.selectedItems()
-                     if isinstance(item, (ChainNodeItem, ChainEdgeItem))]
+                     if isinstance(item, (ChainNodeItem, ChainEdgeItem, MissionCoreItem))]
         for item in to_remove:
-            if isinstance(item, ChainNodeItem):
+            if isinstance(item, MissionCoreItem):
+                self._mission_core = None
+                self._scene.removeItem(item)
+                self._update_empty_text()
+                self.canvasChanged.emit()
+            elif isinstance(item, ChainNodeItem):
                 self._remove_node(item)
             elif isinstance(item, ChainEdgeItem):
                 self._remove_edge(item)
 
     def _remove_node(self, node: ChainNodeItem) -> None:
+        # Clean up mission core assignment
+        if self._mission_core is not None:
+            self._mission_core.remove_assigned_drone(node.drone_id)
         # Remove incident edges
         incident = [
             e for e in self._edges
@@ -909,9 +1365,14 @@ class ChainCanvas(QGraphicsView):
         items = self._scene.items(scene_pos)
         if not items or all(isinstance(i, (QGraphicsTextItem,)) for i in items):
             menu = QMenu()
-            add_draft_action = menu.addAction("Create Drone Here")
+            add_mission_action = menu.addAction("Add Mission Core")
+            if self._mission_core is not None:
+                add_mission_action.setEnabled(False)
+            add_drone_action = menu.addAction("Add Drone")
             action = menu.exec(event.globalPos())
-            if action == add_draft_action:
+            if action == add_mission_action:
+                self._canvas_add_mission_core(scene_pos)
+            elif action == add_drone_action:
                 self._canvas_add_draft_node(scene_pos)
             return
         super().contextMenuEvent(event)
@@ -952,6 +1413,47 @@ class ChainCanvas(QGraphicsView):
         center = self.mapToScene(self.viewport().rect().center())
         return self._canvas_add_draft_node(center, draft_name=name, draft_accepts=accepts, draft_produces=produces)
 
+    # ---- Mission core ----
+
+    def _canvas_add_mission_core(self, scene_pos: QPointF) -> None:
+        if self._mission_core is not None:
+            return
+        node_id = f"mission-core-{uuid.uuid4().hex[:4]}"
+        item = MissionCoreItem(node_id=node_id, canvas=self)
+        item.setPos(scene_pos - QPointF(MISSION_CORE_WIDTH / 2, MISSION_CORE_HEIGHT / 2))
+        self._scene.addItem(item)
+        self._mission_core = item
+        item.runRequested.connect(self.runMissionRequested.emit)
+        self._update_empty_text()
+        self.canvasChanged.emit()
+
+    def _handle_mission_core_drop(self, mission_item: MissionCoreItem, drone_id: str) -> None:
+        from aura.drones.store import DroneStore
+        drone = DroneStore.load_drone(self._get_workspace_root(), drone_id)
+        if drone is None:
+            return
+        node_id = f"{drone_id}-{uuid.uuid4().hex[:4]}"
+        item = ChainNodeItem(
+            node_id=node_id,
+            drone=drone,
+            goal_template="",
+            canvas=self,
+            is_assignment=True,
+        )
+        # Stack assignments vertically to the right of the mission core
+        mc_pos = mission_item.pos()
+        assignment_index = sum(1 for n in self._nodes.values() if n.is_assignment)
+        x = mc_pos.x() + MISSION_CORE_WIDTH / 2 + 40
+        y = mc_pos.y() - MISSION_CORE_HEIGHT / 2 + 30 + assignment_index * (ASSIGNMENT_HEIGHT + 8)
+        item.setPos(x, y)
+        self._scene.addItem(item)
+        self._nodes[node_id] = item
+        mission_item.add_assigned_drone(drone_id)
+        self._scene.clearSelection()
+        item.setSelected(True)
+        self._update_empty_text()
+        self.canvasChanged.emit()
+
     # ---- Space background ----
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
@@ -966,6 +1468,25 @@ class ChainCanvas(QGraphicsView):
             cache = self._build_space_cache(viewport_rect.size())
             self._space_bg_cache = cache
         painter.drawPixmap(viewport_rect.topLeft(), cache)
+        painter.restore()
+
+    def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
+        """Draw assignment connection lines from mission core to assignments."""
+        if self._mission_core is None:
+            return
+        mc_pos = self._mission_core.pos()
+        mc_right = mc_pos + QPointF(MISSION_CORE_WIDTH / 2, 0)
+        painter.save()
+        pen = QPen(_qt_color(ACCENT))
+        pen.setAlpha(25)
+        pen.setWidthF(0.5)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for node in self._nodes.values():
+            if node.is_assignment:
+                node_left_center = node.pos() + QPointF(0, ASSIGNMENT_HEIGHT / 2)
+                painter.drawLine(mc_right, node_left_center)
         painter.restore()
 
     def _build_space_cache(self, size) -> QPixmap:
