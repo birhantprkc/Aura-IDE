@@ -50,16 +50,17 @@ def topological_order(chain: ChainDefinition) -> list[str]:
 
     Raises ValueError if a cycle is detected.
     """
-    node_ids = {n.id for n in chain.nodes}
-    adj: dict[str, list[str]] = {nid: [] for nid in node_ids}
-    in_degree: dict[str, int] = {nid: 0 for nid in node_ids}
+    ordered_ids = [n.id for n in chain.nodes]
+    node_ids = set(ordered_ids)
+    adj: dict[str, list[str]] = {nid: [] for nid in ordered_ids}
+    in_degree: dict[str, int] = {nid: 0 for nid in ordered_ids}
 
     for edge in chain.edges:
         if edge.from_node in adj and edge.to_node in adj:
             adj[edge.from_node].append(edge.to_node)
             in_degree[edge.to_node] += 1
 
-    queue = [nid for nid, deg in in_degree.items() if deg == 0]
+    queue = [nid for nid in ordered_ids if in_degree[nid] == 0]
     result: list[str] = []
 
     while queue:

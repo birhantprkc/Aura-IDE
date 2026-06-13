@@ -274,6 +274,67 @@ def _execute_node(
                 f"\n\n## Input from {upstream_nid}\n{summary}"
             )
 
+    # ── Warehouse cargo for assignment nodes ────────────
+    if node.is_assignment:
+        warehouse_cargo: list[dict[str, Any]] = []
+        for completed_nid, nr in chain_run.node_runs.items():
+            if completed_nid == node_id:
+                continue
+            if nr.get("status") != "completed":
+                continue
+            artifact_path = nr.get("artifact_path", "")
+            if not artifact_path:
+                continue
+            output_path = workspace_root / artifact_path
+            if not output_path.exists():
+                continue
+            try:
+                data = json.loads(output_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            cargo_entry: dict[str, Any] = {
+                "node_id": completed_nid,
+                "drone_id": nr.get("drone_id", "?"),
+            }
+            summary = data.get("summary", "")
+            evidence = data.get("evidence", "")
+            if summary:
+                cargo_entry["summary"] = summary
+            if evidence:
+                cargo_entry["evidence"] = evidence
+            for k in ("result", "output", "findings", "data"):
+                if k in data:
+                    cargo_entry[k] = data[k]
+            warehouse_cargo.append(cargo_entry)
+
+        if warehouse_cargo:
+            goal_text += (
+                "\n\n## Mission Warehouse Cargo\n"
+                "The following cargo was returned by previously completed "
+                "drones in this mission. "
+                "Use this information in your work.\n\n"
+            )
+            for entry in warehouse_cargo:
+                goal_text += (
+                    f"- **{entry['drone_id']}** ({entry['node_id']}):"
+                )
+                if "summary" in entry:
+                    goal_text += f" {entry['summary']}"
+                goal_text += "\n"
+                extras = {
+                    k: v
+                    for k, v in entry.items()
+                    if k not in ("node_id", "drone_id", "summary", "evidence")
+                }
+                if extras:
+                    goal_text += (
+                        "  ```json\n  "
+                        + json.dumps(extras, indent=2).replace(
+                            "\n", "\n  "
+                        )
+                        + "\n  ```\n"
+                    )
+
     # ── Execute ────────────────────────────────────────
     try:
         if drone.write_policy == "read_only":

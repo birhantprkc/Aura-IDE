@@ -467,7 +467,7 @@ class _PropertyPanel(QScrollArea):
             lambda text, item=mission_item: self._on_mission_core_name_changed(item, text)
         )
 
-        self._add_label(f"Assigned Drones: {len(mission_item.assigned_drone_ids)}", color=FG_DIM)
+        self._add_label(f"Launch Queue: {len(mission_item.assigned_drone_ids)} drones", color=FG_DIM)
 
         cargo_items, run_status = _read_cargo_for_chain(
             self._editor._workspace_root, self._editor._current_chain_id or ""
@@ -477,7 +477,9 @@ class _PropertyPanel(QScrollArea):
         mission_item.update()
 
         self._add_label(f"Cargo Bay: {len(cargo_items)} items", color=FG_DIM)
-        self._add_label(f"Status: {run_status}", color=FG_DIM)
+        _status_icons = {"completed": "\u2713", "running": "\u25ce", "failed": "\u2717", "idle": "\u25cb"}
+        status_icon = _status_icons.get(run_status, "\u25cb")
+        self._add_label(f"Status: {status_icon} {run_status}", color=FG_DIM)
 
         self._add_separator()
         self._add_label("Cargo Bay", bold=True)

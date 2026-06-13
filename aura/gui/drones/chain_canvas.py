@@ -45,7 +45,7 @@ PORT_RADIUS = 3
 PORT_DIAMETER = PORT_RADIUS * 2
 NODE_RADIUS = 12
 MISSION_CORE_WIDTH = 240
-MISSION_CORE_HEIGHT = 105
+MISSION_CORE_HEIGHT = 120
 ASSIGNMENT_WIDTH = 60
 ASSIGNMENT_HEIGHT = 24
 
@@ -597,14 +597,43 @@ class MissionCoreItem(QGraphicsObject):
         beacon_path.closeSubpath()
         painter.drawPath(beacon_path)
 
+        # Section labels: Launch Bay & Cargo Bay
+        font_section = QFont()
+        font_section.setPixelSize(9)
+        painter.setFont(font_section)
+        painter.setPen(QPen(QColor("#a8aebb")))
+        drone_count = len(self._assigned_drone_ids)
+        launch_bay_text = f"\u25c7  Launch Bay: {drone_count} drones"
+        painter.drawText(
+            QRectF(-w / 2 + 12, -h / 2 + 34, w - 24, 14),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            launch_bay_text,
+        )
+        cargo_bay_text = f"\u25c6  Cargo Bay: {self._cargo_count} items"
+        painter.drawText(
+            QRectF(-w / 2 + 12, -h / 2 + 48, w - 24, 14),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            cargo_bay_text,
+        )
+
         # Metrics row
         font_metrics = QFont()
-        font_metrics.setPixelSize(10)
+        font_metrics.setPixelSize(9)
         painter.setFont(font_metrics)
-        painter.setPen(QPen(QColor("#eaecef")))
-        drone_count = len(self._assigned_drone_ids)
-        metrics_text = f"\u2699 {drone_count}  \U0001f4e6 {self._cargo_count}  \u2713 {self._output_status}"
-        metrics_y = h / 2 - 32
+
+        _status_map = {
+            "completed": ("\u2713 completed", _qt_color(ACCENT)),
+            "running": ("\u25ce running", _qt_color(ACCENT)),
+            "failed": ("\u2717 failed", _qt_color(DANGER)),
+            "idle": ("\u25cb idle", _qt_color(FG_MUTED)),
+        }
+        status_text, status_color = _status_map.get(
+            self._output_status, ("\u25cb idle", _qt_color(FG_MUTED))
+        )
+        metrics_text = f"\u2699 {drone_count}  \U0001f4e6 {self._cargo_count}  {status_text}"
+
+        painter.setPen(QPen(status_color))
+        metrics_y = h / 2 - 42
         painter.drawText(
             QRectF(-w / 2 + 12, metrics_y, w - 24, 16),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
@@ -1712,37 +1741,6 @@ class ChainCanvas(QGraphicsView):
         self._update_empty_text()
         self.canvasChanged.emit()
 
-    def _handle_goal_planet_drop(self, planet: GoalPlanetItem, drone_id: str) -> None:
-        from aura.drones.store import DroneStore
-        drone = DroneStore.load_drone(self._get_workspace_root(), drone_id)
-        if drone is None:
-            return
-        node_id = f"{drone_id}-{uuid.uuid4().hex[:4]}"
-        item = ChainNodeItem(
-            node_id=node_id,
-            drone=drone,
-            goal_template="",
-            canvas=self,
-            is_assignment=True,
-        )
-        # Position in a ring around the planet
-        existing = [n for n in self._nodes.values() if n.is_assignment]
-        count = len(existing)
-        angle = count * 0.8
-        radius = 80
-        offset_x = math.cos(angle) * radius
-        offset_y = math.sin(angle) * radius
-        planet_center = planet.pos()
-        item.setPos(planet_center.x() + offset_x - ASSIGNMENT_WIDTH / 2, planet_center.y() + offset_y - ASSIGNMENT_HEIGHT / 2)
-        self._scene.addItem(item)
-        self._nodes[node_id] = item
-        if self._mission_core is not None:
-            self._mission_core.add_assigned_drone(drone_id)
-        self._scene.clearSelection()
-        item.setSelected(True)
-        self._update_empty_text()
-        self.canvasChanged.emit()
-
     def _handle_mission_core_drop(self, mission_item: MissionCoreItem, drone_id: str) -> None:
         from aura.drones.store import DroneStore
         drone = DroneStore.load_drone(self._get_workspace_root(), drone_id)
@@ -1759,8 +1757,8 @@ class ChainCanvas(QGraphicsView):
         # Stack assignments vertically to the right of the mission core
         mc_pos = mission_item.pos()
         assignment_index = sum(1 for n in self._nodes.values() if n.is_assignment)
-        x = mc_pos.x() + MISSION_CORE_WIDTH / 2 + 40
-        y = mc_pos.y() - MISSION_CORE_HEIGHT / 2 + 30 + assignment_index * (ASSIGNMENT_HEIGHT + 8)
+        x = mc_pos.x() + MISSION_CORE_WIDTH / 2 + 4
+        y = mc_pos.y() - MISSION_CORE_HEIGHT / 2 + 6 + assignment_index * (ASSIGNMENT_HEIGHT + 4)
         item.setPos(x, y)
         self._scene.addItem(item)
         self._nodes[node_id] = item
