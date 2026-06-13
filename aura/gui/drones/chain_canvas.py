@@ -11,12 +11,11 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
-    QLinearGradient,
     QPainter,
-    QRadialGradient,
     QPainterPath,
     QPen,
     QPixmap,
+    QRadialGradient,
 )
 from PySide6.QtWidgets import (
     QGraphicsItem,
@@ -33,19 +32,15 @@ from aura.drones.chain import ChainDefinition
 from aura.drones.definition import DroneDefinition
 from aura.gui.theme import (
     ACCENT,
-    BG_ALT,
     DANGER,
-    FG,
     FG_MUTED,
-    SUCCESS,
-    WARN,
 )
 
-NODE_WIDTH = 180
+NODE_WIDTH = 260
 NODE_HEIGHT = 72
 PORT_RADIUS = 4
 PORT_DIAMETER = PORT_RADIUS * 2
-NODE_RADIUS = 14
+NODE_RADIUS = 12
 
 
 def _qt_color(value, fallback="#ffffff"):
@@ -217,194 +212,131 @@ class ChainNodeItem(QGraphicsObject):
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         rect = self.boundingRect()
-        pad_x = 12
-        inner_w = NODE_WIDTH - pad_x * 2
 
-        # --- Glass body (vertical gradient) ---
-        body_grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-        body_grad.setColorAt(0.0, QColor(40, 44, 58, 120))
-        body_grad.setColorAt(0.5, QColor(26, 29, 40, 128))
-        body_grad.setColorAt(1.0, QColor(18, 20, 28, 138))
-        painter.setBrush(QBrush(body_grad))
+        # --- Card body: flat dark glass fill ---
+        painter.setBrush(QBrush(QColor(18, 20, 28, 230)))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, NODE_RADIUS, NODE_RADIUS)
 
-        # --- Glow & border colors ---
-        if self._is_draft:
-            glow_color = QColor("#9d7cd8")
-            border_style = Qt.PenStyle.DashLine
-        elif self._missing:
-            glow_color = _qt_color(DANGER)
-            border_style = Qt.PenStyle.SolidLine
-        else:
-            policy = getattr(self._drone, "write_policy", "read_only")
-            if policy == "read_only":
-                glow_color = QColor("#7dcfff")
-            else:
-                glow_color = QColor("#e0af68")
-            border_style = Qt.PenStyle.SolidLine
-
+        # --- Border / glow (single stroke) ---
+        border_color = self.border_color
         if self.isSelected():
-            glow_color = _qt_color(ACCENT)
+            border_color = _qt_color(ACCENT)
+
+        base_alpha = 90
+        if self._hovered:
+            base_alpha = min(base_alpha + 30, 255)
+        if self.isSelected():
+            base_alpha = 170
 
         adjusted = rect.adjusted(1, 1, -1, -1)
         adj_radius = NODE_RADIUS - 1
+        border_style = Qt.PenStyle.DashLine if self._is_draft else Qt.PenStyle.SolidLine
+        pen_w = 2 if self.isSelected() else 1.5
 
-        # --- Capability inner tint ---
-        tint_grad = QRadialGradient(
-            QPointF(rect.width() / 2, rect.height() * 0.80),
-            max(rect.width(), rect.height()) * 0.55,
-        )
-        tint_grad.setColorAt(0.0, QColor(glow_color.red(), glow_color.green(), glow_color.blue(), 14))
-        tint_grad.setColorAt(1.0, QColor(glow_color.red(), glow_color.green(), glow_color.blue(), 0))
-        painter.save()
-        clip = QPainterPath()
-        clip.addRoundedRect(rect, NODE_RADIUS, NODE_RADIUS)
-        painter.setClipPath(clip)
-        painter.setBrush(tint_grad)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRect(rect)
-        painter.restore()
-
-        # --- Layered glow strokes ---
+        glow = QColor(border_color)
+        glow.setAlpha(base_alpha)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        outer = QColor(glow_color)
-        outer.setAlpha(38)
-        painter.setPen(QPen(outer, 5))
+        painter.setPen(QPen(glow, pen_w, border_style))
         painter.drawRoundedRect(adjusted, adj_radius, adj_radius)
 
-        mid = QColor(glow_color)
-        mid.setAlpha(60)
-        painter.setPen(QPen(mid, 2.5))
-        painter.drawRoundedRect(adjusted, adj_radius, adj_radius)
-
-        # --- Main border ---
-        if self.isSelected():
-            pen_w = 2
-            main_border = _qt_color(ACCENT)
-        else:
-            pen_w = 1
-            main_border = QColor(255, 255, 255, 40)
-        painter.setPen(QPen(main_border, pen_w, border_style))
-        painter.drawRoundedRect(adjusted, adj_radius, adj_radius)
-
-        # --- Top sheen (glass reflection) ---
-        sheen_rect = QRectF(rect.x() + 3, rect.y() + 2, rect.width() - 6, (rect.height() - 4) * 0.34)
-        sheen_grad = QLinearGradient(sheen_rect.topLeft(), sheen_rect.bottomLeft())
-        sheen_grad.setColorAt(0.0, QColor(255, 255, 255, 30))
-        sheen_grad.setColorAt(1.0, QColor(255, 255, 255, 0))
-        painter.setBrush(sheen_grad)
+        # --- Row 1: status dot + title ---
+        dot_color = QColor(border_color)
+        dot_color.setAlpha(220)
+        painter.setBrush(QBrush(dot_color))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(sheen_rect, 6, 6)
+        painter.drawEllipse(QPointF(18, 22), 4, 4)
 
-        # --- Inner highlight (1px bright stroke at top inset) ---
-        painter.setPen(QPen(QColor(255, 255, 255, 32), 1))
-        painter.drawLine(
-            QPointF(rect.x() + NODE_RADIUS, rect.y() + 1.5),
-            QPointF(rect.x() + NODE_WIDTH - NODE_RADIUS, rect.y() + 1.5),
-        )
-
-        # --- Text ---
-        if self._is_draft:
-            # Row 1: Draft name
-            painter.setPen(QPen(QColor("#eaecef")))
-            font = QFont()
-            font.setBold(True)
-            font.setPointSize(10)
-            painter.setFont(font)
-            name = self._draft_name or "Untitled Drone"
-            fm = QFontMetrics(font)
-            name = fm.elidedText(name, Qt.TextElideMode.ElideRight, inner_w)
-            painter.drawText(QRectF(pad_x, 6, inner_w, 16),
-                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
-
-            # Row 2: "draft" status pill
-            font_s = QFont()
-            font_s.setPointSize(7)
-            painter.setFont(font_s)
-            painter.setPen(QPen(QColor("#9d7cd8")))
-            painter.drawText(QRectF(pad_x, 22, inner_w, 12),
-                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "draft")
-
-            # Row 3: Contract badges
-            painter.setPen(QPen(_qt_color(FG_MUTED)))
-            font_xs = QFont()
-            font_xs.setPointSize(8)
-            painter.setFont(font_xs)
-            painter.drawText(QRectF(pad_x, 36, inner_w, 16),
-                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                             f"in: {self._draft_accepts or '?'}  \u2192  out: {self._draft_produces or '?'}")
-
-            # Row 4: Brief preview
-            if self._draft_brief:
-                font_t = QFont()
-                font_t.setPointSize(7)
-                painter.setFont(font_t)
-                painter.setPen(QPen(_qt_color(FG_MUTED)))
-                preview = self._draft_brief[:50]
-                if len(self._draft_brief) > 50:
-                    preview += "\u2026"
-                painter.drawText(QRectF(pad_x, 52, inner_w, 14),
-                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, preview)
-            return
-
-        # --- Real drone node ---
-        # Row 1: Drone name
         painter.setPen(QPen(QColor("#eaecef")))
         font = QFont()
         font.setBold(True)
-        font.setPointSize(10)
+        font.setPointSize(9)
         painter.setFont(font)
-        name = self._drone.name if self._drone else "(missing)"
-        if self._missing:
-            name += " (missing)"
+
+        if self._is_draft:
+            name = self._draft_name or "Untitled Drone"
+        elif self._drone:
+            name = self._drone.name
+            if self._missing:
+                name += " (missing)"
+        else:
+            name = "Missing Drone"
+
         fm = QFontMetrics(font)
-        name = fm.elidedText(name, Qt.TextElideMode.ElideRight, inner_w)
-        painter.drawText(QRectF(pad_x, 6, inner_w, 16),
+        avail_w = NODE_WIDTH - 34 - 12
+        name = fm.elidedText(name, Qt.TextElideMode.ElideRight, avail_w)
+        painter.drawText(QRectF(34, 13, avail_w, 14),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
 
-        # Row 2: Status pill
-        font_s = QFont()
-        font_s.setPointSize(7)
-        painter.setFont(font_s)
-        if self._missing:
-            painter.setPen(QPen(_qt_color(DANGER)))
-            status_text = "missing"
+        # --- Row 2: status pill + preview ---
+        pill_x = 34
+        pill_y = 37
+        pill_h = 14
+
+        if self._is_draft:
+            pill_text = "draft"
+            pill_color = QColor("#9d7cd8")
+        elif self._missing:
+            pill_text = "missing"
+            pill_color = _qt_color(DANGER)
         else:
             policy = getattr(self._drone, "write_policy", "read_only")
             if policy == "read_only":
-                painter.setPen(QPen(QColor("#7dcfff")))
-                status_text = "read-only"
+                pill_text = "read-only"
+                pill_color = QColor("#7dcfff")
             else:
-                painter.setPen(QPen(QColor("#e0af68")))
-                status_text = "writes"
-        painter.drawText(QRectF(pad_x, 22, inner_w, 12),
-                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, status_text)
+                pill_text = "writes"
+                pill_color = QColor("#e0af68")
 
-        # Row 3: Goal preview or contract info
-        painter.setPen(QPen(_qt_color(FG_MUTED)))
-        font_m = QFont()
-        font_m.setPointSize(8)
-        painter.setFont(font_m)
-        accepts = getattr(self._drone, "accepts", None) or "any"
-        produces = getattr(self._drone, "produces", None) or "any"
-        if self._goal_template:
-            preview = self._goal_template[:40]
-            if len(self._goal_template) > 40:
-                preview += "\u2026"
-            painter.drawText(QRectF(pad_x, 36, inner_w, 16),
-                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, preview)
-            # Row 4: Contract badges
-            font_t = QFont()
-            font_t.setPointSize(7)
-            painter.setFont(font_t)
-            painter.drawText(QRectF(pad_x, 52, inner_w, 14),
-                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                             f"in: {accepts}  \u2192  out: {produces}")
+        font_pill = QFont()
+        font_pill.setPointSize(7)
+        painter.setFont(font_pill)
+        fm_pill = QFontMetrics(font_pill)
+        pill_text_w = fm_pill.horizontalAdvance(pill_text) + 8
+        pill_w = max(pill_text_w, 36)
+
+        pill_bg = QColor(255, 255, 255, 13)
+        painter.setBrush(QBrush(pill_bg))
+        painter.setPen(QPen(QColor(255, 255, 255, 20), 1))
+        pill_rect = QRectF(pill_x, pill_y, pill_w, pill_h)
+        painter.drawRoundedRect(pill_rect, 3, 3)
+
+        painter.setPen(QPen(pill_color))
+        painter.drawText(pill_rect.adjusted(4, 0, -4, 0),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, pill_text)
+
+        # Preview text
+        if self._is_draft:
+            preview = self._draft_brief or ""
+        elif self._goal_template:
+            preview = self._goal_template
+        elif self._drone:
+            preview = self._drone.description or ""
         else:
-            painter.drawText(QRectF(pad_x, 38, inner_w, 16),
-                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                             f"in: {accepts}  \u2192  out: {produces}")
+            preview = ""
+
+        if preview:
+            preview_x = pill_x + pill_w + 6
+            preview_w_avail = NODE_WIDTH - preview_x - 12
+            if preview_w_avail > 20:
+                font_pv = QFont()
+                font_pv.setPointSize(7)
+                painter.setFont(font_pv)
+                fm_pv = QFontMetrics(font_pv)
+                preview = fm_pv.elidedText(preview, Qt.TextElideMode.ElideRight, int(preview_w_avail))
+                painter.setPen(QPen(_qt_color(FG_MUTED)))
+                painter.drawText(QRectF(preview_x, pill_y, preview_w_avail, pill_h),
+                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, preview)
+
+    def hoverEnterEvent(self, event) -> None:
+        self._hovered = True
+        self.update()
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event) -> None:
+        self._hovered = False
+        self.update()
+        super().hoverLeaveEvent(event)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
@@ -632,7 +564,6 @@ class ChainCanvas(QGraphicsView):
         self._update_empty_text()
 
         # Auto-fit after a short delay
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(100, self._fit_view)
 
     def _fit_view(self) -> None:

@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QMimeData, QTimer, Signal
-from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap, QIcon, QEnterEvent, QMouseEvent, QResizeEvent
+from PySide6.QtCore import QMimeData, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QDrag, QFont, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -15,24 +15,23 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QTextEdit,
-    QToolButton,
     QVBoxLayout,
-    QSizePolicy,
     QWidget,
 )
 
-from aura.drones.build_spec import BuildMode, BuildSpec
+from aura.drones.build_spec import BuildSpec
+from aura.drones.chain import ChainDefinition
+from aura.drones.chain_store import _chain_from_dict, delete_chain, load_chain, save_chain
+from aura.drones.store import DroneStore
 from aura.gui.drones.chain_canvas import (
     ChainCanvas,
     ChainEdgeItem,
     ChainNodeItem,
 )
-from aura.drones.chain import ChainDefinition
-from aura.drones.chain_store import _chain_from_dict, load_chain, save_chain, delete_chain, list_chains
-from aura.drones.store import DroneStore
 from aura.gui.drones.drone_workshop_panel import DroneWorkshopPanel
 from aura.gui.drones.workflow_list_pane import WorkflowListPane
 
@@ -78,23 +77,24 @@ def _qss_darker(hex_str: str, factor: float = 0.6) -> str:
 class _DroneCard(QFrame):
     """A single drone card in the roster with drag initiation."""
 
-    def __init__(self, drone_id: str, name: str, description: str, accepts: str, produces: str, parent: QWidget | None = None) -> None:
+    def __init__(self, drone_id: str, name: str, description: str, accepts: str, produces: str, write_policy: str = "read_only", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.drone_id = drone_id
         self.drone_name = name
         self.accepts = accepts
         self.produces = produces
+        self._write_policy = write_policy
         self.setObjectName("drone_card")
         self.setStyleSheet(
-            f"#drone_card {{"
-            f"  background: rgba(22, 24, 33, 0.92);"
-            f"  border: 1px solid rgba(255, 255, 255, 0.06);"
-            f"  border-radius: 8px;"
-            f"}}"
-            f"#drone_card:hover {{"
-            f"  border-color: rgba(196, 181, 253, 0.25);"
-            f"  background: rgba(28, 30, 42, 0.94);"
-            f"}}"
+            "#drone_card {"
+            "  background: rgba(18, 20, 28, 0.90);"
+            "  border: 1px solid rgba(255, 255, 255, 0.06);"
+            "  border-radius: 10px;"
+            "}"
+            "#drone_card:hover {"
+            "  border-color: rgba(196, 181, 253, 0.20);"
+            "  background: rgba(24, 26, 36, 0.94);"
+            "}"
         )
         self.setCursor(Qt.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
@@ -104,13 +104,29 @@ class _DroneCard(QFrame):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(4)
 
+        # Title row: status dot + title
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(6)
+
+        dot_color = "#7dcfff" if write_policy == "read_only" else "#e0af68"
+        dot = QLabel()
+        dot.setFixedSize(8, 8)
+        dot.setStyleSheet(
+            f"background: {dot_color};"
+            f"border-radius: 4px;"
+            f"border: none;"
+        )
+        title_row.addWidget(dot)
+
         title = QLabel(name)
         title_font = QFont()
         title_font.setBold(True)
         title_font.setPixelSize(12)
         title.setFont(title_font)
         title.setStyleSheet(f"color: {_qss_color(FG)}; background: transparent; border: none;")
-        layout.addWidget(title)
+        title_row.addWidget(title, 1)
+        layout.addLayout(title_row)
 
         if description:
             desc = QLabel(description)
@@ -118,9 +134,32 @@ class _DroneCard(QFrame):
             desc.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; background: transparent; border: none;")
             layout.addWidget(desc)
 
-        meta = QLabel(f"In: {accepts}  ·  Out: {produces}")
-        meta.setStyleSheet(f"color: {_qss_color(FG_DIM)}; font-size: 10px; background: transparent; border: none;")
-        layout.addWidget(meta)
+        # Pill row: status pill + truncated description preview
+        pill_row = QHBoxLayout()
+        pill_row.setContentsMargins(0, 0, 0, 0)
+        pill_row.setSpacing(6)
+
+        policy_text = "read-only" if write_policy == "read_only" else "writes"
+        policy_color = "#7dcfff" if write_policy == "read_only" else "#e0af68"
+        pill = QLabel(policy_text)
+        pill.setStyleSheet(
+            f"color: {policy_color};"
+            f"background: rgba(255, 255, 255, 0.05);"
+            f"border: 1px solid rgba(255, 255, 255, 0.08);"
+            f"border-radius: 3px;"
+            f"padding: 1px 5px;"
+            f"font-size: 10px;"
+        )
+        pill.setFixedHeight(16)
+        pill_row.addWidget(pill)
+
+        preview_text = description if description else ""
+        preview = QLabel(preview_text)
+        preview.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 10px; background: transparent; border: none;")
+        preview.setTextFormat(Qt.TextFormat.PlainText)
+        preview.setWordWrap(False)
+        pill_row.addWidget(preview, 1)
+        layout.addLayout(pill_row)
 
         # -- action buttons ------------------------------------------------
         self._on_run = lambda: None
@@ -258,7 +297,7 @@ class _DroneRosterWidget(QScrollArea):
             empty.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 8px;")
             self._layout.insertWidget(self._layout.count() - 1, empty)
         for d in drones:
-            card = _DroneCard(d.id, d.name, d.description, d.accepts or "any", d.produces or "any")
+            card = _DroneCard(d.id, d.name, d.description, d.accepts or "any", d.produces or "any", d.write_policy)
             card._on_run = lambda did=d.id: self._editor.runDroneRequested.emit(did)
             card._on_edit = lambda did=d.id: self._editor.editDroneRequested.emit(did)
             card._on_delete = lambda did=d.id: self._editor.deleteDroneRequested.emit(did)
