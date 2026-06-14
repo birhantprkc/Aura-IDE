@@ -269,6 +269,7 @@ class InputPanel(QFrame):
         self._original_send_text = self._send_btn.text()
         self._original_send_tooltip = self._send_btn.toolTip()
         self._original_frame_style = self.styleSheet()
+        self._drone_architect_active = False
 
     # ---- public state -----------------------------------------------------
 
@@ -289,6 +290,7 @@ class InputPanel(QFrame):
 
     def set_drone_architect_mode(self, active: bool) -> None:
         """Toggle the drone architect visual state on the input panel."""
+        self._drone_architect_active = active
         if active:
             self._editor.setPlaceholderText(
                 "Describe the Drone you want to build..."
@@ -313,7 +315,10 @@ class InputPanel(QFrame):
         if count > 0:
             self._send_btn.setText(f"→  [{count} queued]")
         else:
-            self._send_btn.setText("→")
+            if self._drone_architect_active:
+                self._send_btn.setText("Forge")
+            else:
+                self._send_btn.setText("→")
 
     # ---- attachments ------------------------------------------------------
 

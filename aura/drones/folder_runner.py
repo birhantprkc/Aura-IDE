@@ -83,6 +83,16 @@ def run_folder_drone_sync(
     elif cargo is not None:
         summary = str(cargo)
 
+    # Determine route_used with fallback priority.
+    route_used = None
+    if isinstance(cargo, dict):
+        if isinstance(cargo.get("route_used"), dict):
+            route_used = cargo["route_used"]
+        elif isinstance(cargo.get("route"), dict):
+            route_used = cargo["route"]
+    if route_used is None and isinstance(drone.route, dict) and drone.route:
+        route_used = drone.route
+
     receipt = DroneReceipt(
         run_id=run.run_id,
         drone_id=drone.id,
@@ -100,6 +110,7 @@ def run_folder_drone_sync(
         produced_artifact=cargo if isinstance(cargo, dict) else {"result": cargo} if cargo is not None else None,
         met=True if run.status == "completed" else False,
         evidence="Folder-backed Drone returned cargo." if run.status == "completed" else "",
+        route_used=route_used,
     )
     RunHistoryStore.save_run(workspace_root, receipt)
 
