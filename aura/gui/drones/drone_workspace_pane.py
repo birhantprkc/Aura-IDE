@@ -202,15 +202,11 @@ def _status_for_phase(phase: str) -> str:
         return "Building"
     if phase in (
         WorkspacePhase.READINESS_RUNNING.value,
-        WorkspacePhase.PROOF_RUNNING.value,
         WorkspacePhase.INSTALLING.value,
         WorkspacePhase.AWAITING_DECISION.value,
     ):
         return "Testing"
-    if phase in (
-        WorkspacePhase.READINESS_FAILED.value,
-        WorkspacePhase.PROOF_FAILED.value,
-    ):
+    if phase == WorkspacePhase.READINESS_FAILED.value:
         return "Needs Fix"
     if phase == WorkspacePhase.INSTALLED.value:
         return "Ready"

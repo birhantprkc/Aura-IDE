@@ -93,9 +93,9 @@ def _builder_status_for_phase(phase: str) -> str:
         return "Draft"
     if phase in {"building", "iterating"}:
         return "Building"
-    if phase in {"readiness_running", "proof_running", "installing", "awaiting_decision"}:
+    if phase in {"readiness_running", "installing", "awaiting_decision"}:
         return "Testing"
-    if phase in {"readiness_failed", "proof_failed"}:
+    if phase == "readiness_failed":
         return "Needs Fix"
     if phase == "installed":
         return "Ready"

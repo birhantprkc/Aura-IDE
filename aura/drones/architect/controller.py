@@ -467,7 +467,7 @@ class DroneArchitectController:
         return WorkshopRequested(messages=messages)
 
     def _handle_failed_phase_message(self, text: str):
-        """Handle messages in readiness_failed / proof_failed phases."""
+        """Handle messages in readiness_failed phase."""
         cmd, arg = parse_drone_command(text, self._active_workspace.phase)
 
         if cmd == DroneCommand.NEW:
