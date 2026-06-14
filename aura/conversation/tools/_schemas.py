@@ -178,8 +178,12 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                             },
                             "regex_mode": {
                                 "type": "boolean",
-                                "description": "If true, treat pattern as a regex. If false, plain text substring match.",
-                                "default": False,
+                                "description": (
+                                    "grep_search uses grep/ripgrep pattern behavior by default: pattern is treated "
+                                    "as a regex, so alternation like 'foo|bar', anchors like '^def name', and "
+                                    "similar grep patterns work. Pass regex_mode=false for literal text search."
+                                ),
+                                "default": True,
                             },
                             "case_sensitive": {
                                 "type": "boolean",

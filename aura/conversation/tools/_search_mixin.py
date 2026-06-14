@@ -27,10 +27,13 @@ class SearchHandlersMixin:
         pattern = args.get("pattern", "")
         if not pattern:
             return ToolExecResult(ok=False, payload={"ok": False, "error": "pattern is required"})
+        regex_mode = args.get("regex_mode")
+        if regex_mode is None:
+            regex_mode = True
         payload = _reg.grep_files(
             workspace_root=self._root,
             pattern=pattern,
-            regex_mode=bool(args.get("regex_mode", False)),
+            regex_mode=bool(regex_mode),
             case_sensitive=bool(args.get("case_sensitive", False)),
             max_results=int(args.get("max_results", 50)),
             include_pattern=args.get("include_pattern"),

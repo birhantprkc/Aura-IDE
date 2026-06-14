@@ -30,7 +30,7 @@ def _safe_relative_to(path: Path, root: Path) -> Path:
 def grep_files(
     workspace_root: Path,
     pattern: str,
-    regex_mode: bool = False,
+    regex_mode: bool = True,
     case_sensitive: bool = False,
     max_results: int = 50,
     include_pattern: str | None = None,
