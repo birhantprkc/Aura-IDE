@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aura.drones.store import DroneStore
 from aura.drones.workspaces.model import DroneWorkspace
 from aura.drones.workspaces.paths import (
     active_workspace_path,
@@ -223,6 +225,40 @@ class DroneWorkspaceStore:
             encoding="utf-8",
         )
         DroneWorkspaceStore.save_workspace(workspace)
+
+    @staticmethod
+    def create_workspace_for_drone(project_root: Path, drone_id: str) -> DroneWorkspace | None:
+        drone = DroneStore.load_drone(project_root, drone_id)
+        if drone is None:
+            return None
+
+        workspace = DroneWorkspaceStore.create_workspace(
+            project_root, display_name=drone.name, mode="edit", installed_drone_id=drone_id
+        )
+
+        source_folder = DroneStore.drone_folder(drone_id)
+        target_folder = candidate_dir(project_root, workspace.workspace_id)
+        shutil.copytree(source_folder, target_folder, dirs_exist_ok=True)
+
+        workspace.phase = "awaiting_decision"
+        workspace.build_brief = drone.description or ""
+        workspace.candidate_drone_id = drone_id
+        DroneWorkspaceStore.save_workspace(workspace)
+        return workspace
+
+    @staticmethod
+    def find_workspace_for_drone(project_root: Path, drone_id: str) -> DroneWorkspace | None:
+        for ws in DroneWorkspaceStore.list_workspaces(project_root):
+            if ws.installed_drone_id == drone_id and ws.mode == "edit":
+                return ws
+        return None
+
+    @staticmethod
+    def load_or_create_workspace_for_drone(project_root: Path, drone_id: str) -> DroneWorkspace | None:
+        ws = DroneWorkspaceStore.find_workspace_for_drone(project_root, drone_id)
+        if ws is not None:
+            return ws
+        return DroneWorkspaceStore.create_workspace_for_drone(project_root, drone_id)
 
     @staticmethod
     def discard_workspace(workspace: DroneWorkspace) -> None:

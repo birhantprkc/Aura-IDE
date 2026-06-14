@@ -242,6 +242,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_coordinator.drone_mode_changed.connect(
             self._on_drone_architect_mode_changed
         )
+        self._drone_coordinator.drone_list_changed.connect(
+            self._on_drone_list_changed
+        )
 
         # Send handler — owns message queue, vision routing, undo logic.
         self._send_handler = SendHandler(
@@ -883,18 +886,18 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._refresh_drone_context()
 
     def _on_edit_drone(self, drone_id: str) -> None:
+        """Route to Drone mode for editing the installed Drone."""
         drone = DroneStore.load_drone(self._workspace_root, drone_id)
         if drone is None:
             return
-        dlg = DroneEditorDialog(
-            workspace_root=self._workspace_root,
-            parent=self,
-            drone=drone,
-        )
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._refresh_drone_context()
-            if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
-                self._drone_workbay_window.chain_editor.refresh_roster()
+
+        self._drone_coordinator.edit_installed_drone(drone_id)
+
+    def _on_drone_list_changed(self) -> None:
+        """Refresh drone bay after Drone install/discard from Drone mode."""
+        self._refresh_drone_context()
+        if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
+            self._drone_workbay_window.chain_editor.refresh_roster()
 
     def _on_duplicate_drone(self, drone_id: str) -> None:
         drone = DroneStore.load_drone(self._workspace_root, drone_id)
