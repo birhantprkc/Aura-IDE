@@ -45,25 +45,12 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
             "Legacy string entrypoint is no longer supported. "
             "Drone must use command entrypoint: {'kind': 'command', ...}"
         )
-    data = _apply_manifest_defaults(data)
     known_fields = {f.name for f in fields(DroneDefinition)}
     filtered = {k: v for k, v in data.items() if k in known_fields}
     drone = DroneDefinition(**filtered)
     DroneStore.validate_drone(drone)
     return drone
 
-
-def _apply_manifest_defaults(data: dict) -> dict:
-    """Fill UI compatibility defaults for a folder-backed manifest."""
-    if not data.get("instructions"):
-        data = {**data, "instructions": str(data.get("description") or data.get("name") or "")}
-    if not data.get("write_policy"):
-        data = {**data, "write_policy": "read_only"}
-    if not data.get("output_contract"):
-        data = {**data, "output_contract": "Return JSON-serializable cargo or a concise text summary."}
-    if not data.get("scope"):
-        data = {**data, "scope": "global"}
-    return data
 
 
 def _validate_entrypoint(entrypoint: dict) -> None:

@@ -35,7 +35,7 @@ class DroneRunCard(QFrame):
     Layout (running):
       ┌──────────────────────────────────────────────┐
       │  Drone Name                    ● running      │
-      │  Elapsed: 12s  ·  Tools: 5                    │
+      │  Elapsed: 12s                                 │
       │                                                │
       │  ┌─ Live Status ─────────────────────────┐    │
       │  │  Streaming response text here...       │    │
@@ -47,7 +47,7 @@ class DroneRunCard(QFrame):
     Layout (completed):
       ┌──────────────────────────────────────────────┐
       │  Drone Name                    ✓ completed    │
-      │  Elapsed: 45s  ·  Tools: 12  ·  Errors: 0    │
+      │  Elapsed: 45s                                 │
       │                                                │
       │  ┌─ Report ───────────────────────────────┐   │
       │  │  (receipt.summary as primary content)   │   │
@@ -69,8 +69,8 @@ class DroneRunCard(QFrame):
         self._started_at = time.time()
         self._tool_count = 0
         self._tool_calls_log: list[tuple[str, str, bool, str]] = []  # (call_id, name, ok, result)
-        self._tool_output_widgets: list[QWidget] = []
         self._tool_output_expanded = False
+        self._tool_output_widgets: list[QWidget] = []
         self._live_content = ""
         self._elapsed_timer: QTimer | None = None
         self._report_placeholder: QLabel | None = None
@@ -95,7 +95,6 @@ class DroneRunCard(QFrame):
             self._meta_elapsed.setText(f"{elapsed:.1f}s")
         else:
             self._meta_elapsed.setText(f"{elapsed / 60:.1f}m")
-        self._meta_tool_count.setText(f"· Tools: {self._tool_count}")
 
     def _build_ui(self) -> None:
         self.setObjectName("droneRunCard")
@@ -127,7 +126,7 @@ class DroneRunCard(QFrame):
 
         layout.addLayout(header)
 
-        # --- Meta row: elapsed + tool count ---
+        # --- Meta row: elapsed ---
         meta_row = QHBoxLayout()
         meta_row.setSpacing(16)
         self._meta_elapsed = QLabel("0.0s")
@@ -136,65 +135,64 @@ class DroneRunCard(QFrame):
         )
         meta_row.addWidget(self._meta_elapsed)
 
-        self._meta_tool_count = QLabel("Tools: 0")
-        self._meta_tool_count.setStyleSheet(
-            f"color: {FG_MUTED}; font-size: 11px; background: transparent;"
-        )
-        meta_row.addWidget(self._meta_tool_count)
-
         meta_row.addStretch()
         layout.addLayout(meta_row)
 
-        # --- Live status area (streaming content) ---
-        self._live_area = QFrame()
+        # --- Live status area ---
+        self._live_area = QScrollArea()
+        self._live_area.setWidgetResizable(True)
+        self._live_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._live_area.setStyleSheet(
-            f"QFrame {{ background: {BG}; border: 1px solid {BORDER}; border-radius: 4px; }}"
+            f"QScrollArea {{ background: {BG}; border: 1px solid {BORDER}; "
+            f"border-radius: 6px; }}"
         )
-        live_layout = QVBoxLayout(self._live_area)
-        live_layout.setContentsMargins(8, 6, 8, 6)
-
-        self._live_label = QLabel("")
+        self._live_label = QLabel(self._live_content)
         self._live_label.setWordWrap(True)
-        self._live_label.setStyleSheet(f"color: {FG}; font-size: 12px; background: transparent;")
-        self._live_label.setMaximumHeight(100)
-        live_layout.addWidget(self._live_label)
+        self._live_label.setStyleSheet(
+            f"color: {FG}; font-size: 13px; background: transparent; "
+            f"padding: 8px;"
+        )
+        self._live_area.setWidget(self._live_label)
+        layout.addWidget(self._live_area, 1)
 
-        layout.addWidget(self._live_area)
-
-        # --- Report area (hidden until receipt ready) ---
-        self._report_area = QFrame()
+        # --- Report area ---
+        self._report_area = QScrollArea()
+        self._report_area.setWidgetResizable(True)
+        self._report_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._report_area.setStyleSheet(
-            f"QFrame {{ background: {BG}; border: 1px solid {BORDER}; border-radius: 4px; }}"
+            f"QScrollArea {{ background: {BG}; border: 1px solid {BORDER}; "
+            f"border-radius: 6px; }}"
         )
-        self._report_layout = QVBoxLayout(self._report_area)
+        report_inner = QWidget()
+        self._report_layout = QVBoxLayout(report_inner)
         self._report_layout.setContentsMargins(8, 6, 8, 6)
-
+        self._report_layout.setSpacing(4)
+        self._report_area.setWidget(report_inner)
         self._report_area.hide()
-        layout.addWidget(self._report_area)
+        layout.addWidget(self._report_area, 1)
 
-        # --- Tool output expander ---
+        # --- Tool toggle ---
+        toggle_row = QHBoxLayout()
         self._tool_toggle = QToolButton()
-        self._tool_toggle.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
         self._tool_toggle.setArrowType(Qt.ArrowType.RightArrow)
         self._tool_toggle.setText("Show tool output (0 calls)")
         self._tool_toggle.setStyleSheet(
-            f"QToolButton {{ color: {ACCENT}; font-size: 11px; border: none; "
-            f"background: transparent; padding: 2px; }}"
+            f"QToolButton {{ color: {FG_DIM}; font-size: 11px; background: transparent; "
+            f"border: none; padding: 0px; }}"
             f"QToolButton:hover {{ color: {FG}; }}"
         )
         self._tool_toggle.clicked.connect(self._toggle_tool_output)
-        layout.addWidget(self._tool_toggle)
+        toggle_row.addWidget(self._tool_toggle)
+        toggle_row.addStretch()
+        layout.addLayout(toggle_row)
 
+        # --- Tool output scroll area ---
         self._tool_output_scroll = QScrollArea()
         self._tool_output_scroll.setWidgetResizable(True)
-        self._tool_output_scroll.setMaximumHeight(200)
+        self._tool_output_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._tool_output_scroll.setStyleSheet(
             f"QScrollArea {{ background: {BG}; border: 1px solid {BORDER}; "
-            f"border-radius: 4px; }}"
-            f"QScrollBar:vertical {{ background: {BG}; width: 8px; }}"
-            f"QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 4px; }}"
+            f"border-radius: 6px; max-height: 200px; }}"
         )
 
         self._tool_output_widget = QWidget()
@@ -351,7 +349,6 @@ class DroneRunCard(QFrame):
         """Increment tool count and log for expander."""
         self._tool_count += 1
         self._tool_calls_log.append((call_id, name, True, ""))
-        self._meta_tool_count.setText(f"· Tools: {self._tool_count}")
         self._tool_toggle.setText(f"Show tool output ({self._tool_count} calls)")
 
         # If expanded, append live to the tool output area
@@ -425,9 +422,6 @@ class DroneRunCard(QFrame):
         elapsed = receipt.elapsed_seconds or (time.time() - self._started_at)
         dur_str = f"{elapsed:.0f}s" if elapsed < 60 else f"{elapsed / 60:.1f}m"
         self._meta_elapsed.setText(dur_str)
-        self._meta_tool_count.setText(
-            f"Tools: {receipt.tool_calls_made}  ·  Errors: {receipt.tool_errors}"
-        )
 
         # Switch from live to report
         self._live_area.hide()
@@ -491,9 +485,6 @@ class DroneRunCard(QFrame):
         elapsed = receipt.elapsed_seconds or 0
         dur_str = f"{elapsed:.0f}s" if elapsed < 60 else f"{elapsed / 60:.1f}m"
         self._meta_elapsed.setText(dur_str)
-        self._meta_tool_count.setText(
-            f"Tools: {receipt.tool_calls_made}  ·  Errors: {receipt.tool_errors}"
-        )
 
         # Status badge
         status = receipt.status

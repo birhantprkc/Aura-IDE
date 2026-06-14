@@ -344,12 +344,11 @@ class DroneBayPane(QWidget):
         )
         if last_run_info:
             elapsed = last_run_info.get("elapsed_seconds", 0)
-            tool_calls = last_run_info.get("tool_calls_count", 0)
             if elapsed < 60:
                 dur_str = f"{elapsed:.0f}s"
             else:
                 dur_str = f"{elapsed/60:.1f}m"
-            last_run_label.setText(f"{dur_str} \u00b7 {tool_calls}")
+            last_run_label.setText(dur_str)
             status = last_run_info.get("status", "")
             if status == "failed":
                 last_run_label.setStyleSheet(
@@ -664,12 +663,6 @@ class DroneBayPane(QWidget):
         dur_label = QLabel(dur_str)
         dur_label.setStyleSheet(f"font-size: 11px; color: {FG_MUTED}; background: transparent;")
         layout.addWidget(dur_label)
-
-        # Tool count
-        tool_count = run_data.get("tool_calls_count", 0)
-        calls_label = QLabel(f"{tool_count} calls")
-        calls_label.setStyleSheet(f"font-size: 11px; color: {FG_MUTED}; background: transparent;")
-        layout.addWidget(calls_label)
 
         layout.addStretch()
 

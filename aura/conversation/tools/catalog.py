@@ -13,7 +13,6 @@ from aura.conversation.tools._schemas import (
     READ_TOOL_DEFS,
     REGISTER_DRONE_FOLDER_TOOL_DEF,
     RESEARCH_TOOL_DEFS,
-    RESOLVE_CAPABILITY_TOOL_DEF,
     RUN_READ_ONLY_DRONE_TOOL_DEF,
     SUMMON_DRONE_TOOL_DEF,
     TERMINAL_TOOL_DEF,
@@ -99,7 +98,6 @@ class ToolCatalog:
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
-                + [dict(RESOLVE_CAPABILITY_TOOL_DEF)]
             )
         elif mode == "worker":
             worker_write_tools = [
