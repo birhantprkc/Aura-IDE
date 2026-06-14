@@ -49,9 +49,10 @@ class DroneModeCoordinator(QObject):
         # Controller owns lifecycle state.
         self._controller = DroneArchitectController()
 
-        # Workshop runner — created once, reused per workshop turn.
+        # Workshop runner references retained until their QThreads finish.
         self._workshop_runner: DroneWorkshopRunner | None = None
         self._workshop_thread: QThread | None = None
+        self._retiring_workshop_runs: list[tuple[QThread, DroneWorkshopRunner | None]] = []
         self._pending_workshop_model: str = ""
         self._pending_workshop_thinking: str = "off"
 
@@ -259,14 +260,17 @@ class DroneModeCoordinator(QObject):
         self._cancel_workshop()
 
         provider_id = getattr(self._bridge, "_provider", None) or "deepseek"
-        self._workshop_runner = DroneWorkshopRunner()
-        self._workshop_runner.contentDelta.connect(self._on_workshop_delta)
-        self._workshop_runner.responseReady.connect(self._on_workshop_response)
-        self._workshop_runner.apiError.connect(self._on_workshop_error)
+        runner = DroneWorkshopRunner()
+        thread = QThread()
+        self._workshop_runner = runner
+        self._workshop_thread = thread
+        runner.contentDelta.connect(self._on_workshop_delta)
+        runner.responseReady.connect(self._on_workshop_response)
+        runner.apiError.connect(self._on_workshop_error)
         self._pending_workshop_model = model
         self._pending_workshop_thinking = thinking
 
-        self._workshop_runner.configure(
+        runner.configure(
             conversation=messages,
             provider_id=provider_id,
             model=model,
@@ -274,16 +278,15 @@ class DroneModeCoordinator(QObject):
             temperature=0.4,
         )
 
-        self._workshop_thread = QThread()
-        self._workshop_runner.moveToThread(self._workshop_thread)
-        self._workshop_thread.started.connect(self._workshop_runner.do_run)
-        self._workshop_runner.finished.connect(self._workshop_thread.quit)
-        self._workshop_runner.finished.connect(self._workshop_runner.deleteLater)
-        self._workshop_thread.finished.connect(self._workshop_thread.deleteLater)
-        self._workshop_thread.finished.connect(self._on_workshop_thread_finished)
+        runner.moveToThread(thread)
+        thread.started.connect(runner.do_run)
+        runner.finished.connect(thread.quit)
+        runner.finished.connect(runner.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread, r=runner: self._on_workshop_thread_finished(t, r))
 
         self._chat.begin_assistant()
-        self._workshop_thread.start()
+        thread.start()
 
     @Slot(str)
     def _on_workshop_delta(self, text: str) -> None:
@@ -306,18 +309,41 @@ class DroneModeCoordinator(QObject):
         self._chat.add_error("Workshop Error", message)
 
     @Slot()
-    def _on_workshop_thread_finished(self) -> None:
-        self._workshop_runner = None
-        self._workshop_thread = None
+    def _on_workshop_thread_finished(
+        self,
+        thread: QThread | None = None,
+        runner: DroneWorkshopRunner | None = None,
+    ) -> None:
+        if thread is None and runner is None:
+            self._workshop_thread = None
+            self._workshop_runner = None
+            return
+        if thread is self._workshop_thread:
+            self._workshop_thread = None
+        if runner is not None and runner is self._workshop_runner:
+            self._workshop_runner = None
+        try:
+            self._retiring_workshop_runs.remove((thread, runner))
+        except ValueError:
+            pass
 
     def _cancel_workshop(self) -> None:
-        if self._workshop_runner is not None:
-            self._workshop_runner.cancel()
-            self._workshop_runner = None
-        if self._workshop_thread is not None:
-            self._workshop_thread.quit()
-            self._workshop_thread.wait(1000)
-            self._workshop_thread = None
+        runner = self._workshop_runner
+        thread = self._workshop_thread
+        self._workshop_runner = None
+        self._workshop_thread = None
+        if runner is not None:
+            runner.cancel()
+        if thread is None:
+            return
+        self._retiring_workshop_runs.append((thread, runner))
+        try:
+            if thread.isRunning():
+                thread.quit()
+            else:
+                self._on_workshop_thread_finished(thread, runner)
+        except RuntimeError:
+            self._on_workshop_thread_finished(thread, runner)
 
     # ------------------------------------------------------------------
     # Build dispatch

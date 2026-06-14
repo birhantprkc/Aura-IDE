@@ -141,6 +141,7 @@ class _DispatchProxy(QObject):
         # shouldn't happen, but be safe) don't trample each other.
         self._lock = threading.Lock()
         self._pending: dict[str, _DispatchPending] = {}
+        self._active_builds: dict[str, tuple[QThread, QObject]] = {}
         # Records of each completed dispatch for persistence.
         self._records: list[WorkerDispatchRecord] = []
         self._result_metadata: dict[str, dict[str, Any]] = {}
@@ -323,9 +324,17 @@ class _DispatchProxy(QObject):
         runner._pending = pending
         runner.moveToThread(thread)
 
+        with self._lock:
+            self._active_builds[tool_call_id] = (thread, runner)
+
+        def _remove_build_ref(tool_id: str = tool_call_id) -> None:
+            with self._lock:
+                self._active_builds.pop(tool_id, None)
+
         thread.started.connect(runner.run)
         runner.finished.connect(thread.quit)
         runner.finished.connect(runner.deleteLater)
+        thread.finished.connect(_remove_build_ref)
         thread.finished.connect(thread.deleteLater)
         thread.start()
 

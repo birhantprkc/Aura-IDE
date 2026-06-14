@@ -321,12 +321,16 @@ class DroneWorkshopRunner(QObject):
                 elif isinstance(event, Done):
                     pass  # stream ended normally
 
+            if self._cancel_event.is_set():
+                return
+
             # Parse the accumulated response
             response = parse_workshop_response("".join(full_text))
             self.responseReady.emit(response)
 
         except Exception as exc:
-            self.apiError.emit(0, str(exc))
+            if not self._cancel_event.is_set():
+                self.apiError.emit(0, str(exc))
 
         finally:
             self._backend = None

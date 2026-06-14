@@ -99,6 +99,7 @@ class DroneWorkshopPanel(QWidget):
         self._last_valid_brief: DroneBuildBrief | None = None
         self._runner_thread: QThread | None = None
         self._runner: DroneWorkshopRunner | None = None
+        self._retiring_runs: list[tuple[QThread, DroneWorkshopRunner | None]] = []
         self._thinking_card: AssistantCard | None = None
         self._empty_hint: QLabel | None = None
         self._aura_wrapper: AuraWidget | None = None
@@ -348,25 +349,31 @@ class DroneWorkshopPanel(QWidget):
             self._aura_wrapper.start_aura()
             self._aura_wrapper.set_glow_state("thinking")
 
-            self._runner = DroneWorkshopRunner(parent=None)
-            self._runner_thread = QThread(self)
-            self._runner.moveToThread(self._runner_thread)
+            runner = DroneWorkshopRunner(parent=None)
+            thread = QThread()
+            self._runner = runner
+            self._runner_thread = thread
+            runner.moveToThread(thread)
 
             # Connect signals
-            self._runner.responseReady.connect(self._on_response_ready)
-            self._runner.apiError.connect(self._on_api_error)
-            self._runner.finished.connect(self._on_runner_finished)
+            runner.responseReady.connect(self._on_response_ready)
+            runner.apiError.connect(self._on_api_error)
+            runner.finished.connect(self._on_runner_finished)
+            runner.finished.connect(thread.quit)
+            runner.finished.connect(runner.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(lambda t=thread, r=runner: self._on_runner_thread_finished(t, r))
 
-            self._runner.configure(
+            runner.configure(
                 conversation=self._conversation,
                 provider_id=self._provider_id,
                 model=self._model,
                 thinking=self._thinking,
                 temperature=self._temperature,
             )
-            self._runner.contentDelta.connect(self._on_content_delta)
-            self._runner_thread.started.connect(self._runner.do_run)
-            self._runner_thread.start()
+            runner.contentDelta.connect(self._on_content_delta)
+            thread.started.connect(runner.do_run)
+            thread.start()
         except Exception as exc:
             if self._aura_wrapper is not None:
                 self._aura_wrapper.stop_aura()
@@ -466,16 +473,40 @@ class DroneWorkshopPanel(QWidget):
         if self._last_valid_brief is not None and self._last_valid_brief.is_ready_to_build():
             self._build_btn.setEnabled(True)
             self._build_btn.setText("\u2713 Build This Drone")
-        # Clean up thread and runner \u2014 non-blocking
-        if self._runner_thread is not None:
-            thread = self._runner_thread
-            runner = self._runner
+
+    def _on_runner_thread_finished(
+        self,
+        thread: QThread | None = None,
+        runner: DroneWorkshopRunner | None = None,
+    ) -> None:
+        if thread is self._runner_thread:
             self._runner_thread = None
+        if runner is not None and runner is self._runner:
             self._runner = None
-            thread.quit()
-            thread.finished.connect(thread.deleteLater)
-            if runner is not None:
-                thread.finished.connect(runner.deleteLater)
+        try:
+            self._retiring_runs.remove((thread, runner))
+        except ValueError:
+            pass
+
+    def _retire_runner(self, *, mark_cancelled: bool = False) -> None:
+        runner = self._runner
+        thread = self._runner_thread
+        self._runner = None
+        self._runner_thread = None
+        if mark_cancelled:
+            self._response_received = True
+        if runner is not None:
+            runner.cancel()
+        if thread is None:
+            return
+        self._retiring_runs.append((thread, runner))
+        try:
+            if thread.isRunning():
+                thread.quit()
+            else:
+                self._on_runner_thread_finished(thread, runner)
+        except RuntimeError:
+            self._on_runner_thread_finished(thread, runner)
 
     def _on_approve_build(self) -> None:
         """User clicked Build this Drone \u2014 emit signal only."""
@@ -486,21 +517,14 @@ class DroneWorkshopPanel(QWidget):
 
     def cancel(self) -> None:
         """Cancel the runner if running, clear the last valid brief, and request back to palette."""
-        if self._runner is not None:
-            self._runner.cancel()
+        self._retire_runner(mark_cancelled=True)
         self._last_valid_brief = None
         self.cancelled.emit()
         self.cancelled_and_back_requested.emit()
 
     def reset_workshop_state(self) -> None:
         """Clear conversation, brief editor, and cancel any active runner."""
-        # Cancel active runner
-        if self._runner is not None:
-            self._runner.cancel()
-        if self._runner_thread is not None:
-            self._runner_thread.quit()
-            self._runner_thread = None
-        self._runner = None
+        self._retire_runner(mark_cancelled=True)
 
         # Clear conversation
         self._conversation.clear()

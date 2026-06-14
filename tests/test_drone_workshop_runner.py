@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 import pytest
 
+from aura.client.events import ContentDelta
 from aura.drones.build_spec import DroneBuildBrief
 from aura.drones.workshop_runner import (
     DRONE_WORKSHOP_SYSTEM_PROMPT,
     DroneWorkshopResponse,
+    DroneWorkshopRunner,
     extract_json_object,
     parse_workshop_response,
 )
@@ -180,6 +183,65 @@ class TestParseWorkshopResponse:
         text = '{"type": "question", "message": "ok"}'
         resp = parse_workshop_response(text)
         assert resp.raw_text == text
+
+
+# ===================================================================
+# DroneWorkshopRunner cancellation
+# ===================================================================
+
+
+class TestDroneWorkshopRunnerCancellation:
+    def test_cancelled_stream_does_not_emit_partial_response(self) -> None:
+        class Backend:
+            def __init__(self, provider: str) -> None:
+                self.provider = provider
+
+            def stream(self, **kwargs):
+                cancel_event = kwargs["cancel_event"]
+                yield ContentDelta('{"type": "question", ')
+                cancel_event.set()
+                yield ContentDelta('"message": "stale"}')
+
+        runner = DroneWorkshopRunner()
+        responses = []
+        finished = []
+        runner.responseReady.connect(responses.append)
+        runner.finished.connect(lambda: finished.append(True))
+
+        with patch("aura.drones.workshop_runner.APIAgentBackend", Backend):
+            runner.run(
+                conversation=[{"role": "user", "content": "Build a Drone"}],
+                provider_id="deepseek",
+                model="test-model",
+            )
+
+        assert responses == []
+        assert finished == [True]
+
+    def test_cancelled_stream_exception_does_not_emit_error(self) -> None:
+        class Backend:
+            def __init__(self, provider: str) -> None:
+                self.provider = provider
+
+            def stream(self, **kwargs):
+                kwargs["cancel_event"].set()
+                raise RuntimeError("stream closed")
+
+        runner = DroneWorkshopRunner()
+        errors = []
+        finished = []
+        runner.apiError.connect(lambda status, message: errors.append((status, message)))
+        runner.finished.connect(lambda: finished.append(True))
+
+        with patch("aura.drones.workshop_runner.APIAgentBackend", Backend):
+            runner.run(
+                conversation=[{"role": "user", "content": "Build a Drone"}],
+                provider_id="deepseek",
+                model="test-model",
+            )
+
+        assert errors == []
+        assert finished == [True]
 
 
 # ===================================================================
