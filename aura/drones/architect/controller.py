@@ -20,6 +20,8 @@ from aura.drones.architect.results import (
     ModeEntered,
     ReadinessFailed,
     ReadinessPassed,
+    ThreadCreated,
+    ThreadSwitched,
     WorkshopClarifying,
     WorkshopQuestion,
     WorkshopRequested,
@@ -27,7 +29,7 @@ from aura.drones.architect.results import (
 )
 from aura.drones.architect.workshop_prompt import build_workshop_messages
 from aura.drones.store import DroneStore
-from aura.drones.workspaces.model import DroneWorkspace, WorkspacePhase
+from aura.drones.workspaces.model import DroneThread, DroneWorkspace, WorkspacePhase
 from aura.drones.workspaces.paths import candidate_dir
 from aura.drones.workspaces.store import DroneWorkspaceStore
 
@@ -47,7 +49,7 @@ class DroneArchitectController:
     def __init__(self):
         self._workspace_root: Path | None = None
         self._active_workspace: DroneWorkspace | None = None
-        self._workshop_conversation: list[dict[str, str]] = []
+        self._active_thread: DroneThread | None = None
         self._pending_dispatch_spec: dict | None = None
         self._last_candidate_path: str = ""
         self._last_drone_id: str = ""
@@ -72,7 +74,9 @@ class DroneArchitectController:
 
     @property
     def workshop_messages(self) -> list[dict[str, str]]:
-        return list(self._workshop_conversation)
+        if self._active_thread is not None:
+            return list(self._active_thread.messages)
+        return []
 
     @property
     def pending_dispatch_spec(self) -> dict | None:
@@ -100,7 +104,7 @@ class DroneArchitectController:
         if root != self._workspace_root:
             self._workspace_root = root
             self._active_workspace = None
-            self._workshop_conversation = []
+            self._active_thread = None
             self._pending_dispatch_spec = None
 
     def enter_mode(self):
@@ -110,10 +114,11 @@ class DroneArchitectController:
         ws = DroneWorkspaceStore.load_active_workspace(self._workspace_root)
         if ws is None:
             self._active_workspace = None
-            self._workshop_conversation = []
+            self._active_thread = None
             self._pending_dispatch_spec = None
             return ModeEntered(workspace_id=None, display_name=None)
         self._active_workspace = ws
+        self._load_or_create_active_thread()
         return WorkspaceLoaded(
             workspace_id=ws.workspace_id,
             display_name=ws.display_name,
@@ -121,8 +126,16 @@ class DroneArchitectController:
         )
 
     def _start_workshop_from_text(self, text: str):
-        self._workshop_conversation.append({"role": "user", "content": text})
-        messages = build_workshop_messages(text, self._workshop_conversation[:-1])
+        if self._active_thread is not None:
+            self._active_thread.messages.append({"role": "user", "content": text})
+            if self._workspace_root is not None and self._active_workspace is not None:
+                DroneWorkspaceStore.save_thread(
+                    self._workspace_root,
+                    self._active_workspace.workspace_id,
+                    self._active_thread,
+                )
+        history = self._active_thread.messages[:-1] if self._active_thread else []
+        messages = build_workshop_messages(text, history)
         return WorkshopRequested(messages=messages)
 
     def _create_workspace_from_first_message(self, text: str):
@@ -150,11 +163,67 @@ class DroneArchitectController:
 
     def exit_mode(self) -> None:
         """Reset internal state."""
+        self._save_current_thread()
+        self._active_thread = None
         self._active_workspace = None
-        self._workshop_conversation = []
         self._pending_dispatch_spec = None
         self._last_candidate_path = ""
         self._last_drone_id = ""
+
+    def _load_or_create_active_thread(self) -> None:
+        """Load the most recent thread for the active workspace, or create one."""
+        if self._workspace_root is None or self._active_workspace is None:
+            self._active_thread = None
+            return
+        ws = self._active_workspace
+        threads = DroneWorkspaceStore.list_threads(
+            self._workspace_root, ws.workspace_id
+        )
+        if threads:
+            self._active_thread = threads[0]
+        else:
+            self._active_thread = DroneWorkspaceStore.create_thread(
+                self._workspace_root, ws.workspace_id
+            )
+
+    def _save_current_thread(self) -> None:
+        """Persist the current active thread if one exists."""
+        if (
+            self._workspace_root is not None
+            and self._active_workspace is not None
+            and self._active_thread is not None
+        ):
+            DroneWorkspaceStore.save_thread(
+                self._workspace_root,
+                self._active_workspace.workspace_id,
+                self._active_thread,
+            )
+
+    def create_new_thread(self):
+        """Save current thread and create a new one for the active workspace."""
+        if self._workspace_root is None or self._active_workspace is None:
+            return ErrorResult(message="No active workspace")
+        self._save_current_thread()
+        thread = DroneWorkspaceStore.create_thread(
+            self._workspace_root, self._active_workspace.workspace_id
+        )
+        self._active_thread = thread
+        return ThreadCreated(thread_id=thread.id, title=thread.title)
+
+    def switch_thread(self, thread_id: str):
+        """Save current thread and switch to another by ID."""
+        if self._workspace_root is None or self._active_workspace is None:
+            return ErrorResult(message="No active workspace")
+        self._save_current_thread()
+        thread = DroneWorkspaceStore.load_thread(
+            self._workspace_root,
+            self._active_workspace.workspace_id,
+            thread_id,
+        )
+        if thread is None:
+            return ErrorResult(message=f"Thread not found: {thread_id}")
+        self._active_thread = thread
+        return ThreadSwitched(thread_id=thread.id, title=thread.title)
 
     def load_workspace(self, workspace_id: str):
         """Load a workspace by ID."""
@@ -163,7 +232,9 @@ class DroneArchitectController:
         ws = DroneWorkspaceStore.load_workspace(self._workspace_root, workspace_id)
         if ws is None:
             return ErrorResult(message=f"Drone not found: {workspace_id}")
+        self._save_current_thread()
         self._active_workspace = ws
+        self._load_or_create_active_thread()
         DroneWorkspaceStore.set_active_workspace(self._workspace_root, ws)
         return WorkspaceLoaded(
             workspace_id=ws.workspace_id,
@@ -179,7 +250,9 @@ class DroneArchitectController:
             self._workspace_root, display_name
         )
         self._active_workspace = ws
-        self._workshop_conversation = []
+        self._active_thread = DroneWorkspaceStore.create_thread(
+            self._workspace_root, ws.workspace_id
+        )
         self._pending_dispatch_spec = None
         DroneWorkspaceStore.set_active_workspace(self._workspace_root, ws)
         return WorkspaceLoaded(
@@ -199,8 +272,9 @@ class DroneArchitectController:
         if ws is None:
             return ErrorResult(message=f"Drone not found: {drone_id}")
 
+        self._save_current_thread()
         self._active_workspace = ws
-        self._workshop_conversation = []
+        self._load_or_create_active_thread()
         DroneWorkspaceStore.set_active_workspace(self._workspace_root, ws)
         return WorkspaceLoaded(
             workspace_id=ws.workspace_id,
@@ -250,9 +324,16 @@ class DroneArchitectController:
         if self._active_workspace is None:
             return ErrorResult(message="No active Drone")
 
-        self._workshop_conversation.append(
-            {"role": "assistant", "content": raw_text}
-        )
+        if self._active_thread is not None:
+            self._active_thread.messages.append(
+                {"role": "assistant", "content": raw_text}
+            )
+            if self._workspace_root is not None and self._active_workspace is not None:
+                DroneWorkspaceStore.save_thread(
+                    self._workspace_root,
+                    self._active_workspace.workspace_id,
+                    self._active_thread,
+                )
 
         if ws_response.kind == "question":
             return WorkshopQuestion(message=ws_response.message)
@@ -417,7 +498,7 @@ class DroneArchitectController:
                 ws = None
             else:
                 self._active_workspace = ws
-                self._workshop_conversation = []
+                self._load_or_create_active_thread()
                 if not text:
                     return WorkspaceLoaded(
                         workspace_id=ws.workspace_id,
@@ -462,8 +543,16 @@ class DroneArchitectController:
             )
 
         # UNKNOWN or any other text — treat as workshop conversation.
-        self._workshop_conversation.append({"role": "user", "content": text})
-        messages = build_workshop_messages(text, self._workshop_conversation[:-1])
+        if self._active_thread is not None:
+            self._active_thread.messages.append({"role": "user", "content": text})
+            if self._workspace_root is not None and self._active_workspace is not None:
+                DroneWorkspaceStore.save_thread(
+                    self._workspace_root,
+                    self._active_workspace.workspace_id,
+                    self._active_thread,
+                )
+        history = self._active_thread.messages[:-1] if self._active_thread else []
+        messages = build_workshop_messages(text, history)
         return WorkshopRequested(messages=messages)
 
     def _handle_failed_phase_message(self, text: str):

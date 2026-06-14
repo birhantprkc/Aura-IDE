@@ -96,6 +96,20 @@ class Discarded:
 
 
 @dataclass(frozen=True)
+class ThreadCreated:
+    kind: str = "thread_created"
+    thread_id: str = ""
+    title: str = ""
+
+
+@dataclass(frozen=True)
+class ThreadSwitched:
+    kind: str = "thread_switched"
+    thread_id: str = ""
+    title: str = ""
+
+
+@dataclass(frozen=True)
 class ErrorResult:
     kind: str = "error"
     message: str = ""

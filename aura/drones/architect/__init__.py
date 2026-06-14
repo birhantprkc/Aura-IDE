@@ -19,6 +19,8 @@ from aura.drones.architect.results import (
     ReadinessFailed,
     ReadinessPassed,
     ReadinessRunning,
+    ThreadCreated,
+    ThreadSwitched,
     WorkshopClarifying,
     WorkshopQuestion,
     WorkshopRequested,
@@ -33,6 +35,8 @@ __all__ = [
     "DroneArchitectController",
     # Results
     "ModeEntered",
+    "ThreadCreated",
+    "ThreadSwitched",
     "WorkspaceLoaded",
     "WorkshopRequested",
     "WorkshopQuestion",

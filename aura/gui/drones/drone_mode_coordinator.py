@@ -74,6 +74,8 @@ class DroneModeCoordinator(QObject):
         self._workspace_pane.discard_workspace_requested.connect(
             self._on_discard_workspace
         )
+        self._workspace_pane.new_thread_requested.connect(self._on_new_thread)
+        self._workspace_pane.thread_selected.connect(self._on_thread_selected)
         self._workspace_pane.planner_model_changed.connect(
             lambda model: self._bridge.set_planner_model(model)
             if hasattr(self._bridge, 'set_planner_model') else None
@@ -107,6 +109,7 @@ class DroneModeCoordinator(QObject):
         self._render_result(result)
 
         self._workspace_pane.refresh()
+        self._refresh_thread_pane()
 
     def edit_builder_drone(self, workspace_id: str) -> None:
         """Enter drone mode and load a Drone that is still in the Builder."""
@@ -116,6 +119,7 @@ class DroneModeCoordinator(QObject):
         result = self._controller.load_workspace(workspace_id)
         self._render_result(result)
         self._workspace_pane.refresh()
+        self._refresh_thread_pane()
 
     def discard_builder_drone(self, workspace_id: str) -> None:
         """Discard a Drone that is still in the Builder."""
@@ -167,6 +171,7 @@ class DroneModeCoordinator(QObject):
             # Delegate to controller and render result.
             result = self._controller.enter_mode()
             self._render_result(result)
+            self._refresh_thread_pane()
 
     def exit_drone_mode(self) -> None:
         if not self._drone_mode:
@@ -201,6 +206,7 @@ class DroneModeCoordinator(QObject):
         result = self._controller.handle_user_message(text)
         self._render_result(result, model, thinking)
         self._workspace_pane.refresh()
+        self._refresh_thread_pane()
 
     # ------------------------------------------------------------------
     # Result rendering
@@ -276,6 +282,20 @@ class DroneModeCoordinator(QObject):
             )
             self.drone_list_changed.emit()
             self.exit_drone_mode()
+        elif kind == "thread_created":
+            self._chat.add_info("Thread", f"Created thread: {result.title}")
+            self._refresh_thread_pane()
+        elif kind == "thread_switched":
+            self._chat.clear()
+            # Replay thread messages in the chat.
+            for msg in self._controller.workshop_messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role == "user":
+                    self._chat.add_user(content)
+                elif role == "assistant":
+                    self._chat.add_info("Drone Workshop", content)
+            self._refresh_thread_pane()
         elif kind == "discarded":
             self._chat.add_info("Drone Builder", "Drone discarded.")
             self.drone_list_changed.emit()
@@ -611,6 +631,37 @@ class DroneModeCoordinator(QObject):
         bg_thread.start()
 
     # ------------------------------------------------------------------
+    # Thread helpers
+    # ------------------------------------------------------------------
+
+    def _refresh_thread_pane(self) -> None:
+        """Update the pane's thread list and active highlight."""
+        ws = self._controller.active_workspace
+        if ws is None or self._workspace_root is None:
+            self._workspace_pane.set_active_workspace_id(None)
+            self._workspace_pane.set_active_thread(None)
+            return
+        threads = DroneWorkspaceStore.list_threads(
+            self._workspace_root, ws.workspace_id
+        )
+        active_id = self._controller._active_thread.id if self._controller._active_thread else None  # type: ignore[attr-defined]
+        self._workspace_pane.set_active_workspace_id(ws.workspace_id)
+        self._workspace_pane.set_active_thread(active_id, threads)
+
+    def _on_new_thread(self) -> None:
+        if self._workspace_root is None:
+            return
+        result = self._controller.create_new_thread()
+        self._render_result(result)
+        self._workspace_pane.refresh()
+        self._refresh_thread_pane()
+
+    def _on_thread_selected(self, thread_id: str) -> None:
+        result = self._controller.switch_thread(thread_id)
+        self._workspace_pane.refresh()
+        self._render_result(result)
+
+    # ------------------------------------------------------------------
     # Workspace pane callbacks
     # ------------------------------------------------------------------
 
@@ -619,6 +670,7 @@ class DroneModeCoordinator(QObject):
             return
         result = self._controller.load_workspace(workspace_id)
         self._workspace_pane.refresh()
+        self._refresh_thread_pane()
         self._render_result(result)
 
     def _on_new_workspace(self) -> None:
@@ -626,6 +678,7 @@ class DroneModeCoordinator(QObject):
             return
         result = self._controller.create_workspace()
         self._workspace_pane.refresh()
+        self._refresh_thread_pane()
         self._render_result(result)
 
     def _on_discard_workspace(self, workspace_id: str) -> None:

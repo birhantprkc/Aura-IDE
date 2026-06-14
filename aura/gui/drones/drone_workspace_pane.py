@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import ProviderId
-from aura.drones.workspaces.model import DroneWorkspace, WorkspacePhase
+from aura.drones.workspaces.model import DroneThread, DroneWorkspace, WorkspacePhase
 from aura.drones.workspaces.store import DroneWorkspaceStore
 from aura.gui.left_pane import _models_with_default
 from aura.gui.theme import (
@@ -104,18 +104,77 @@ class _WorkspaceRow(QFrame):
         self.clicked.emit(self._workspace_id)
 
 
+class _ThreadRow(QFrame):
+    """A single clickable thread row in the sidebar pane."""
+
+    clicked = Signal(str)  # thread_id
+
+    def __init__(self, thread: DroneThread, active: bool = False, parent=None) -> None:
+        super().__init__(parent)
+        self._thread_id = thread.id
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        bg = BG_RAISED if active else "transparent"
+        self.setStyleSheet(
+            f"""
+            _ThreadRow {{
+                background: {bg};
+                border-radius: 4px;
+                padding: 2px 4px;
+            }}
+            _ThreadRow:hover {{
+                background: {BG_RAISED};
+                border-radius: 4px;
+            }}
+            """
+        )
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 2, 6, 2)
+        layout.setSpacing(4)
+
+        title_label = QLabel(thread.title or "Untitled")
+        title_label.setStyleSheet(
+            f"color: {FG}; font-size: 12px; background: transparent;"
+        )
+        layout.addWidget(title_label, 1)
+
+    def mousePressEvent(self, event) -> None:
+        super().mousePressEvent(event)
+        self.clicked.emit(self._thread_id)
+
+    def set_active(self, active: bool) -> None:
+        bg = BG_RAISED if active else "transparent"
+        self.setStyleSheet(
+            f"""
+            _ThreadRow {{
+                background: {bg};
+                border-radius: 4px;
+                padding: 2px 4px;
+            }}
+            _ThreadRow:hover {{
+                background: {BG_RAISED};
+                border-radius: 4px;
+            }}
+            """
+        )
+
+
 class DroneWorkspacePane(QFrame):
     """Sidebar pane showing Drones being built for the current project."""
 
     workspace_selected = Signal(str)  # workspace_id
     new_workspace_requested = Signal()
     discard_workspace_requested = Signal(str)  # workspace_id
+    new_thread_requested = Signal()
+    thread_selected = Signal(str)  # thread_id
     planner_model_changed = Signal(str)
     worker_model_changed = Signal(str)
 
     def __init__(self, project_root: Path | None = None, parent=None) -> None:
         super().__init__(parent)
         self._project_root = project_root
+        self._active_workspace_id: str | None = None
+        self._active_thread_id: str | None = None
 
         self.setObjectName("leftPane")
         self.setMinimumWidth(180)
@@ -147,6 +206,34 @@ class DroneWorkspacePane(QFrame):
 
         scroll.setWidget(scroll_content)
         layout.addWidget(scroll, 1)
+
+        # --- Threads section ---
+        self._threads_section = QFrame()
+        self._threads_section.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        threads_layout = QVBoxLayout(self._threads_section)
+        threads_layout.setContentsMargins(0, 0, 0, 0)
+        threads_layout.setSpacing(3)
+
+        threads_sep = QFrame()
+        threads_sep.setFrameShape(QFrame.Shape.HLine)
+        threads_sep.setStyleSheet(f"QFrame {{ color: {BORDER}; }}")
+        threads_layout.addWidget(threads_sep)
+
+        threads_header = QLabel("THREADS")
+        threads_header.setObjectName("paneTitleProjects")
+        threads_layout.addWidget(threads_header)
+
+        new_thread_btn = QPushButton("+ New Thread")
+        new_thread_btn.clicked.connect(self.new_thread_requested.emit)
+        threads_layout.addWidget(new_thread_btn)
+
+        self._threads_rows_layout = QVBoxLayout()
+        self._threads_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._threads_rows_layout.setSpacing(2)
+        threads_layout.addLayout(self._threads_rows_layout)
+
+        self._threads_section.setVisible(False)
+        layout.addWidget(self._threads_section)
 
         # --- Model Config section ---
         self._model_config_footer = QFrame()
@@ -245,6 +332,32 @@ class DroneWorkspacePane(QFrame):
             item = self._rows_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+
+    def _clear_thread_rows(self) -> None:
+        """Remove all widgets from the thread rows layout."""
+        while self._threads_rows_layout.count() > 0:
+            item = self._threads_rows_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def set_active_workspace_id(self, workspace_id: str | None) -> None:
+        """Set the active workspace ID to show/hide the thread section."""
+        self._active_workspace_id = workspace_id
+        self._threads_section.setVisible(workspace_id is not None)
+
+    def set_active_thread(
+        self, thread_id: str | None, threads: list[DroneThread] | None = None
+    ) -> None:
+        """Update the thread list display and highlight active thread."""
+        self._active_thread_id = thread_id
+        self._clear_thread_rows()
+        if not threads:
+            return
+        for t in threads:
+            active = t.id == thread_id
+            row = _ThreadRow(t, active=active)
+            row.clicked.connect(self.thread_selected.emit)
+            self._threads_rows_layout.addWidget(row)
 
     def populate_models(self, planner_provider: ProviderId, worker_provider: ProviderId) -> None:
         """Populate planner and worker model combos from provider specs."""

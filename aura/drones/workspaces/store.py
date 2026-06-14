@@ -7,9 +7,10 @@ import shutil
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from aura.drones.store import DroneStore
-from aura.drones.workspaces.model import DroneWorkspace
+from aura.drones.workspaces.model import DroneThread, DroneWorkspace
 from aura.drones.workspaces.paths import (
     active_workspace_path,
     artifacts_dir,
@@ -23,6 +24,14 @@ from aura.drones.workspaces.paths import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _new_id() -> str:
+    return uuid4().hex[:12]
 
 
 def _slugify(name: str) -> str:
@@ -252,6 +261,76 @@ class DroneWorkspaceStore:
         if ws is not None:
             return ws
         return DroneWorkspaceStore.create_workspace_for_drone(project_root, drone_id)
+
+    @staticmethod
+    @staticmethod
+    def list_threads(
+        project_root: Path, workspace_id: str, include_archived: bool = False
+    ) -> list[DroneThread]:
+        """List threads in a workspace's chats directory, sorted by updated_at desc."""
+        cd = chats_dir(project_root, workspace_id)
+        if not cd.is_dir():
+            return []
+        threads: list[DroneThread] = []
+        for path in sorted(cd.iterdir()):
+            if not path.suffix == ".json":
+                continue
+            thread = DroneWorkspaceStore._load_thread_from_path(path)
+            if thread is None:
+                continue
+            if not include_archived and thread.archived:
+                continue
+            threads.append(thread)
+        threads.sort(key=lambda t: t.updated_at, reverse=True)
+        return threads
+
+    @staticmethod
+    def create_thread(
+        project_root: Path, workspace_id: str, title: str = "New thread"
+    ) -> DroneThread:
+        """Create a new thread and persist it."""
+        now = _utc_iso()
+        thread = DroneThread(
+            id=_new_id(),
+            workspace_id=workspace_id,
+            title=title,
+            created_at=now,
+            updated_at=now,
+        )
+        DroneWorkspaceStore.save_thread(project_root, workspace_id, thread)
+        return thread
+
+    @staticmethod
+    def load_thread(
+        project_root: Path, workspace_id: str, thread_id: str
+    ) -> DroneThread | None:
+        """Load a single thread from its JSON file."""
+        path = chats_dir(project_root, workspace_id) / f"{thread_id}.json"
+        return DroneWorkspaceStore._load_thread_from_path(path)
+
+    @staticmethod
+    def save_thread(
+        project_root: Path, workspace_id: str, thread: DroneThread
+    ) -> None:
+        """Persist a thread to its JSON file."""
+        thread.updated_at = _utc_iso()
+        cd = chats_dir(project_root, workspace_id)
+        cd.mkdir(parents=True, exist_ok=True)
+        path = cd / f"{thread.id}.json"
+        path.write_text(
+            json.dumps(thread.to_dict(), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _load_thread_from_path(path: Path) -> DroneThread | None:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        return DroneThread.from_dict(data)
 
     @staticmethod
     def discard_workspace(workspace: DroneWorkspace) -> None:

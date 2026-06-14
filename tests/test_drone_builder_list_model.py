@@ -11,7 +11,7 @@ from aura.drones.architect.controller import DroneArchitectController
 from aura.drones.architect.installer import install_or_reinstall
 from aura.drones.store import DroneStore
 from aura.drones.workspaces.model import WorkspacePhase
-from aura.drones.workspaces.paths import candidate_dir
+from aura.drones.workspaces.paths import candidate_dir, chats_dir
 from aura.drones.workspaces.store import DroneWorkspaceStore
 
 
@@ -240,3 +240,115 @@ def test_build_failure_ignores_old_placeholder_summary(tmp_path: Path) -> None:
     assert result.kind == "build_failed"
     assert result.error == "Build failed without an error message from the Worker."
     assert result.error != old_placeholder
+
+
+# ---------------------------------------------------------------------------
+# Thread persistence tests
+# ---------------------------------------------------------------------------
+
+
+def test_create_thread_persists_to_chats_dir(tmp_path: Path) -> None:
+    """Creating a thread via the store writes a JSON file in chats_dir."""
+    controller = DroneArchitectController()
+    controller.set_workspace_root(tmp_path)
+    result = controller.create_workspace("Test Drone")
+    assert result.kind == "workspace_loaded"
+    ws_id = result.workspace_id
+
+    cd = chats_dir(tmp_path, ws_id)
+    json_files = list(cd.glob("*.json"))
+    assert len(json_files) == 1
+
+    data = json.loads(json_files[0].read_text(encoding="utf-8"))
+    assert data["workspace_id"] == ws_id
+    assert data["title"] == "New thread"
+
+
+def test_load_workspace_restores_thread_messages(tmp_path: Path) -> None:
+    """Messages added to a thread survive a workspace reload."""
+    controller = DroneArchitectController()
+    controller.set_workspace_root(tmp_path)
+    controller.create_workspace("Test Drone")
+
+    # Add a message via the workshop mechanism.
+    msg_text = "Build a drone that checks for updates"
+    controller._start_workshop_from_text(msg_text)  # type: ignore[attr-defined]
+
+    assert len(controller.workshop_messages) == 1
+    assert controller.workshop_messages[0]["role"] == "user"
+    assert controller.workshop_messages[0]["content"] == msg_text
+
+    # Reload the workspace
+    ws = controller.active_workspace
+    assert ws is not None
+    controller.load_workspace(ws.workspace_id)
+
+    assert len(controller.workshop_messages) == 1
+    assert controller.workshop_messages[0]["content"] == msg_text
+
+
+def test_multiple_threads_per_workspace(tmp_path: Path) -> None:
+    """Multiple threads can exist for the same workspace."""
+    controller = DroneArchitectController()
+    controller.set_workspace_root(tmp_path)
+    controller.create_workspace("Test Drone")
+    ws = controller.active_workspace
+    assert ws is not None
+
+    controller.create_new_thread()
+
+    threads = DroneWorkspaceStore.list_threads(tmp_path, ws.workspace_id)
+    assert len(threads) == 2
+
+
+def test_exit_mode_saves_thread(tmp_path: Path) -> None:
+    """Messages survive exit_mode / re-enter."""
+    controller = DroneArchitectController()
+    controller.set_workspace_root(tmp_path)
+    controller.create_workspace("Test Drone")
+
+    msg_text = "Create a notification drone"
+    controller._start_workshop_from_text(msg_text)  # type: ignore[attr-defined]
+
+    assert len(controller.workshop_messages) == 1
+
+    # Exit then re-enter
+    controller.exit_mode()
+    result = controller.enter_mode()
+    assert result.kind == "workspace_loaded"
+
+    assert len(controller.workshop_messages) == 1
+    assert controller.workshop_messages[0]["content"] == msg_text
+
+
+def test_switch_threads_preserves_each(tmp_path: Path) -> None:
+    """Each thread retains its own messages when switching."""
+    controller = DroneArchitectController()
+    controller.set_workspace_root(tmp_path)
+    controller.create_workspace("Test Drone")
+    ws = controller.active_workspace
+    assert ws is not None
+
+    # First thread with its message
+    first_msg = "Build drone one"
+    controller._start_workshop_from_text(first_msg)  # type: ignore[attr-defined]
+    assert len(controller.workshop_messages) == 1
+    # Capture first thread ID before creating second.
+    first_id = controller._active_thread.id  # type: ignore[union-attr]
+
+    controller.create_new_thread()
+    second_msg = "Build drone two"
+    controller._start_workshop_from_text(second_msg)  # type: ignore[attr-defined]
+    assert len(controller.workshop_messages) == 1
+    assert controller.workshop_messages[0]["content"] == second_msg
+    second_id = controller._active_thread.id  # type: ignore[union-attr]
+
+    # Switch back to first thread
+    controller.switch_thread(first_id)
+    assert len(controller.workshop_messages) == 1
+    assert controller.workshop_messages[0]["content"] == first_msg
+
+    # Switch to second thread
+    controller.switch_thread(second_id)
+    assert len(controller.workshop_messages) == 1
+    assert controller.workshop_messages[0]["content"] == second_msg
