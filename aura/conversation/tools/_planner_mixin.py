@@ -280,7 +280,7 @@ class PlannerHandlersMixin:
         approval_cb: Any,
         reject_all: bool,
     ) -> ToolExecResult:
-        """Validate, smoke-test, and install a folder-backed Drone."""
+        """Validate, readiness-test, and install a folder-backed Drone."""
         folder_raw = str(args.get("folder_path") or "").strip()
         if not folder_raw:
             return ToolExecResult(
@@ -295,23 +295,23 @@ class PlannerHandlersMixin:
                     payload={"ok": False, "error": f"Drone folder does not exist: {folder_raw}"},
                 )
 
-            from aura.drones.folder_runner import run_drone_smoke
+            from aura.drones.folder_runner import run_drone_readiness
 
             drone = DroneStore.load_drone_from_folder(folder)
-            smoke_result = run_drone_smoke(folder, drone)
-            if not bool(smoke_result.get("ok")):
+            readiness_result = run_drone_readiness(folder, drone)
+            if not bool(readiness_result.get("ok")):
                 return ToolExecResult(
                     ok=False,
                     payload={
                         "ok": False,
-                        "error": "Drone smoke check failed",
-                        "smoke": smoke_result,
+                        "error": "Drone readiness check failed",
+                        "readiness_result": readiness_result,
                     },
                 )
             drone = DroneStore.register_drone_folder(
                 self._root,
                 folder,
-                smoke_result=smoke_result,
+                readiness_result=readiness_result,
             )
             return ToolExecResult(
                 ok=True,
@@ -324,9 +324,8 @@ class PlannerHandlersMixin:
                     "name": drone.name,
                     "runtime": drone.runtime,
                     "entrypoint": drone.entrypoint,
-                    "smoke": drone.smoke,
                     "permissions": drone.permissions,
-                    "smoke_result": smoke_result,
+                    "readiness_result": readiness_result,
                 },
                 extras={
                     "drone_saved": True,

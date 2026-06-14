@@ -3,12 +3,13 @@
 Drones are reusable folder-backed workers. A Drone is registered from a folder
 that contains:
 
-- `drone.json`
-- the Python entrypoint, usually `main.py`
-- the smoke check, usually `smoke.py`
+- `drone.json` (the manifest)
+- a runtime entrypoint file (e.g. `main.py` for the Python adapter)
 - optional support files such as `requirements.txt` and `README.md`
 
-The manifest must identify a Python runtime. `route`, `input_contract`, and
+Drones declare a `runtime` and `entrypoint` in their manifest. Python is the
+current built-in runtime adapter, but the Drone product contract is runtime-
+backed and not Python-specific. `route`, `input_contract`, and
 `cargo_contract` are optional but recommended for new Drones. Existing Drones
 without them still work.
 
@@ -19,7 +20,6 @@ without them still work.
   "description": "Collects source candidates.",
   "runtime": "python",
   "entrypoint": "main:run",
-  "smoke": "smoke:run",
   "instructions": "Collect candidates and return cargo.",
   "write_policy": "read_only",
   "allowed_tools": [],
@@ -74,5 +74,5 @@ through their folder entrypoint, not through an LLM tool menu.
 
 Use `/drone make <brief>` to enter Drone Architect mode. Aura may use the
 Planner/Worker harness to author the folder, but registration goes through
-`register_drone_folder`, which validates the manifest and runs the smoke check
-before installing the Drone globally.
+`register_drone_folder`, which validates the manifest and runs a safe readiness
+launch (trial run) before installing the Drone globally.

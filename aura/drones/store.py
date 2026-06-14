@@ -154,7 +154,7 @@ class DroneStore:
         """Update the manifest for an already registered folder-backed Drone.
 
         This is not a creation endpoint. New Drones must be installed with
-        register_drone_folder so their code and smoke check are present.
+        register_drone_folder so their code and readiness check are present.
         """
         _ = workspace_root
         DroneStore.validate_drone(drone)
@@ -192,11 +192,8 @@ class DroneStore:
 
         drone = _drone_from_dict(data)
         entry_module = _module_path_from_ref(drone.entrypoint)
-        smoke_module = _module_path_from_ref(drone.smoke)
         if not (folder / f"{entry_module.replace('.', '/')}.py").exists():
             raise ValueError(f"entrypoint module does not exist: {entry_module}.py")
-        if not (folder / f"{smoke_module.replace('.', '/')}.py").exists():
-            raise ValueError(f"smoke module does not exist: {smoke_module}.py")
         return drone
 
     @staticmethod
@@ -204,18 +201,18 @@ class DroneStore:
         workspace_root: Path,
         source_folder: Path,
         *,
-        smoke_result: dict | None = None,
+        readiness_result: dict | None = None,
     ) -> DroneDefinition:
         """Validate and install a folder-backed Drone into global storage."""
         _ = workspace_root
         source_folder = source_folder.resolve()
         drone = DroneStore.load_drone_from_folder(source_folder)
-        if smoke_result is None:
-            from aura.drones.folder_runner import run_drone_smoke
+        if readiness_result is None:
+            from aura.drones.folder_runner import run_drone_readiness
 
-            smoke_result = run_drone_smoke(source_folder, drone)
-        if not bool(smoke_result.get("ok")):
-            raise ValueError(f"Drone smoke check failed: {smoke_result}")
+            readiness_result = run_drone_readiness(source_folder, drone)
+        if not bool(readiness_result.get("ok")):
+            raise ValueError(f"Drone readiness check failed: {readiness_result}")
 
         target_folder = _global_drones_root() / drone.id
         target_folder.parent.mkdir(parents=True, exist_ok=True)
@@ -294,10 +291,7 @@ class DroneStore:
             raise ValueError("Drone runtime must be 'python'")
         if not drone.entrypoint.strip():
             raise ValueError("Drone entrypoint is required")
-        if not drone.smoke.strip():
-            raise ValueError("Drone smoke is required")
         _validate_ref_format(drone.entrypoint, "Drone entrypoint")
-        _validate_ref_format(drone.smoke, "Drone smoke")
 
 
 class RunHistoryStore:

@@ -44,9 +44,8 @@ class DroneDefinition:
     # {"type": "<name>", "description": "...", "schema": {...}}
     input_contract: dict[str, Any] = field(default_factory=dict)
     cargo_contract: dict[str, Any] = field(default_factory=dict)
-    runtime: str = ""  # python = folder-backed Drone
-    entrypoint: str = ""  # e.g. "main:run" for folder-backed Drones
-    smoke: str = ""  # e.g. "smoke:run"
+    runtime: str = ""  # Runtime adapter for this Drone, e.g. "python".
+    entrypoint: str = ""  # Entrypoint ref for the declared runtime, e.g. "main:run".
     permissions: dict[str, Any] = field(default_factory=dict)
     secrets: tuple[str, ...] = ()
     dependencies: tuple[str, ...] = ()

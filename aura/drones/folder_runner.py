@@ -20,16 +20,31 @@ from aura.drones.store import DroneStore, RunHistoryStore
 
 
 def is_folder_backed_drone(drone: DroneDefinition) -> bool:
-    return drone.runtime == "python" and bool(drone.entrypoint) and bool(drone.smoke)
+    return drone.runtime == "python" and bool(drone.entrypoint)
 
 
-def run_drone_smoke(folder: Path, drone: DroneDefinition) -> dict[str, Any]:
-    """Run a folder-backed Drone's smoke function."""
-    if not drone.smoke:
-        return {"ok": False, "error": "smoke is required"}
+def run_drone_readiness(folder: Path, drone: DroneDefinition) -> dict[str, Any]:
+    """Run a safe readiness check for a folder-backed Drone.
+
+    Calls the entrypoint with a trial payload that should not mutate state,
+    post data, push git, spend money, or call risky APIs.
+    """
+    if not drone.entrypoint:
+        return {"ok": False, "error": "entrypoint is required"}
     try:
-        result = _call_ref(folder, drone.smoke, {"smoke": True, "drone_id": drone.id})
-        return _normalize_result(result)
+        payload = {
+            "goal": "readiness",
+            "input": {},
+            "workspace_root": str(folder.parent),
+            "drone_id": drone.id,
+            "trial_run": True,
+            "readiness": True,
+        }
+        result = _call_ref(folder, drone.entrypoint, payload)
+        result = _normalize_result(result)
+        # Verify the result is JSON-compatible
+        json.dumps(result)
+        return result
     except Exception as exc:
         return {
             "ok": False,

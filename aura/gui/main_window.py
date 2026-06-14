@@ -1344,7 +1344,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             produces=drone.produces,
             runtime=drone.runtime,
             entrypoint=drone.entrypoint,
-            smoke=drone.smoke,
             permissions=drone.permissions,
             secrets=drone.secrets,
             dependencies=drone.dependencies,

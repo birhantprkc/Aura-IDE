@@ -327,7 +327,7 @@ class DroneEditorDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "Drone Architect",
-                "New Drones must be built with /drone so Aura can create the folder, code, manifest, and smoke check.",
+                "New Drones must be built with /drone so Aura can create the folder, code, manifest, and readiness validation.",
             )
             return
 
