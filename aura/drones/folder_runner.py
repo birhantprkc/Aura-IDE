@@ -168,6 +168,17 @@ def _run_command_drone(folder: Path, entrypoint: dict, payload: dict[str, Any], 
         )
         stdout_text = proc.stdout.strip()
         stderr_text = proc.stderr.strip()
+
+        if proc.returncode != 0:
+            error = f"Drone exited with non-zero return code ({proc.returncode})"
+            result: dict[str, Any] = {"ok": False, "error": error, "returncode": proc.returncode, "stderr": stderr_text}
+            if stdout_text:
+                try:
+                    result["stdout_json"] = json.loads(stdout_text)
+                except json.JSONDecodeError:
+                    result["stdout"] = stdout_text[:1000]
+            return result
+
         if not stdout_text:
             return {
                 "ok": False,
