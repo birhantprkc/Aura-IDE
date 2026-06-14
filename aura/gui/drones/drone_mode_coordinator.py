@@ -425,8 +425,19 @@ class DroneModeCoordinator(QObject):
         self._awaiting_build_result = False
         self._pending_build_dispatch_spec = None
 
+        failure_detail = None
+        if not ok:
+            failure_detail = {
+                "summary": summary,
+                "status": status,
+                "needs_followup": needs_followup,
+                "metadata": self._worker_result_metadata(tool_id),
+            }
+
         result = self._controller.on_build_completed(
-            ok, error=None if ok else (summary or status)
+            ok,
+            error=None if ok else summary,
+            failure_detail=failure_detail,
         )
         self._render_result(result)
         self._workspace_pane.refresh()
@@ -435,8 +446,15 @@ class DroneModeCoordinator(QObject):
             # Auto-chain: build → readiness → proof
             self._run_readiness()
         elif isinstance(result, BuildFailed):
-            # Stay in building phase so user can revise.
+            # Stay in failed Builder state so user can revise.
             pass
+
+    def _worker_result_metadata(self, tool_id: str) -> dict:
+        getter = getattr(self._bridge, "worker_result_metadata", None)
+        if not callable(getter):
+            return {}
+        metadata = getter(tool_id)
+        return metadata if isinstance(metadata, dict) else {}
 
     # ------------------------------------------------------------------
     # Readiness

@@ -176,7 +176,12 @@ class DroneWorkspaceStore:
             ws = DroneWorkspaceStore.load_workspace(project_root, active_id)
             if ws is None:
                 return None
-            if ws.phase in {"discarded", "installed"}:
+            if ws.phase in {
+                "discarded",
+                "installed",
+                "readiness_failed",
+                "proof_failed",
+            }:
                 return None
             return ws
         except Exception:

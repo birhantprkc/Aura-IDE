@@ -50,19 +50,89 @@ def _write_drone_folder(folder: Path, *, drone_id: str = "repo-scout") -> Path:
     return folder
 
 
-def test_drone_enter_mode_creates_visible_draft_entry(tmp_path: Path) -> None:
+def test_drone_enter_mode_does_not_create_blank_draft_entry(tmp_path: Path) -> None:
     controller = DroneArchitectController()
     controller.set_workspace_root(tmp_path)
 
     result = controller.enter_mode()
 
-    assert result.kind == "workspace_loaded"
+    assert result.kind == "mode_entered"
+    assert result.workspace_id is None
+    assert DroneStore.list_drone_entries(tmp_path) == []
+
+
+def test_first_real_description_creates_visible_builder_entry(tmp_path: Path) -> None:
+    controller = DroneArchitectController()
+    controller.set_workspace_root(tmp_path)
+    controller.enter_mode()
+
+    result = controller.handle_user_message("Build a Drone that summarizes PRs")
+
+    assert result.kind == "workshop_requested"
     entries = DroneStore.list_drone_entries(tmp_path)
     assert len(entries) == 1
     assert entries[0].name == "New Drone"
     assert entries[0].status == "Draft"
     assert entries[0].ready is False
-    assert entries[0].workspace_id == result.workspace_id
+    assert entries[0].workspace_id == controller.active_workspace.workspace_id
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        WorkspacePhase.READINESS_FAILED.value,
+        WorkspacePhase.PROOF_FAILED.value,
+        WorkspacePhase.INSTALLED.value,
+        WorkspacePhase.DISCARDED.value,
+    ],
+)
+def test_drone_enter_mode_ignores_stale_failed_or_terminal_active_workspace(
+    tmp_path: Path,
+    phase: str,
+) -> None:
+    stale = DroneWorkspaceStore.create_workspace(tmp_path, "Broken Drone")
+    stale.phase = phase
+    stale.build_brief = "Old failed work"
+    stale.last_error = "Old failure"
+    DroneWorkspaceStore.save_workspace(stale)
+    DroneWorkspaceStore.set_active_workspace(tmp_path, stale)
+
+    controller = DroneArchitectController()
+    controller.set_workspace_root(tmp_path)
+
+    entered = controller.enter_mode()
+    result = controller.handle_user_message("Build a Drone that checks releases")
+
+    reloaded_stale = DroneWorkspaceStore.load_workspace(tmp_path, stale.workspace_id)
+
+    assert entered.kind == "mode_entered"
+    assert result.kind == "workshop_requested"
+    assert controller.active_workspace.workspace_id != stale.workspace_id
+    assert reloaded_stale.phase == phase
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [WorkspacePhase.READINESS_FAILED.value, WorkspacePhase.PROOF_FAILED.value],
+)
+def test_explicitly_selected_failed_builder_drone_accepts_revision(
+    tmp_path: Path,
+    phase: str,
+) -> None:
+    workspace = DroneWorkspaceStore.create_workspace(tmp_path, "Broken Drone")
+    workspace.phase = phase
+    workspace.build_brief = "Old failed work"
+    DroneWorkspaceStore.save_workspace(workspace)
+
+    controller = DroneArchitectController()
+    controller.set_workspace_root(tmp_path)
+
+    loaded = controller.load_workspace(workspace.workspace_id)
+    result = controller.handle_user_message("Make the manifest valid JSON")
+
+    assert loaded.kind == "workspace_loaded"
+    assert result.kind == "build_started"
+    assert controller.active_workspace.workspace_id == workspace.workspace_id
 
 
 def test_builder_candidate_entry_is_visible_but_not_runnable(tmp_path: Path) -> None:
@@ -104,3 +174,41 @@ def test_install_and_register_are_not_user_commands() -> None:
     assert parse_drone_command("register the drone", "awaiting_decision")[0] is DroneCommand.REVISE
     assert parse_drone_command("install", "awaiting_decision")[0] is DroneCommand.REVISE
     assert parse_drone_command("install the drone", "readiness_failed")[0] is DroneCommand.UNKNOWN
+
+
+def test_build_failure_uses_dispatch_metadata_error(tmp_path: Path) -> None:
+    controller = DroneArchitectController()
+    controller.set_workspace_root(tmp_path)
+    controller.create_workspace("Broken Drone")
+
+    result = controller.on_build_completed(
+        False,
+        error="",
+        failure_detail={
+            "status": "",
+            "metadata": {
+                "extras": {
+                    "errors": ["Validation command failed (exit code 1): python -m py_compile main.py"],
+                }
+            },
+        },
+    )
+
+    assert result.kind == "build_failed"
+    assert "py_compile main.py" in result.error
+    assert result.error != "Unknown build error"
+
+
+def test_build_failure_uses_status_before_unknown(tmp_path: Path) -> None:
+    controller = DroneArchitectController()
+    controller.set_workspace_root(tmp_path)
+    controller.create_workspace("Broken Drone")
+
+    result = controller.on_build_completed(
+        False,
+        error="",
+        failure_detail={"status": "validation_failed", "metadata": {}},
+    )
+
+    assert result.kind == "build_failed"
+    assert result.error == "Worker status: validation_failed"
