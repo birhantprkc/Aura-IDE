@@ -7,9 +7,11 @@ from pathlib import Path
 from PySide6.QtCore import QMimeData, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QFont, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -474,11 +476,17 @@ class ChainEditor(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- Tab bar --------------------------------------------------
+        # --- Tab bar row with Save/Load chrome ------------------------
+        tab_row = QHBoxLayout()
+        tab_row.setContentsMargins(0, 0, 0, 0)
+        tab_row.setSpacing(0)
+
         self._tab_bar = QTabBar()
         self._tab_bar.setExpanding(False)
         self._tab_bar.setDrawBase(True)
         self._tab_bar.currentChanged.connect(self._on_tab_changed)
+        self._tab_bar.setTabsClosable(True)
+        self._tab_bar.tabCloseRequested.connect(self._on_tab_close)
         self._tab_bar.setStyleSheet(
             f"QTabBar {{"
             f"  background: {_qss_color(SURFACE)};"
@@ -504,7 +512,47 @@ class ChainEditor(QWidget):
         )
         # Add the "+" tab (always last)
         self._tab_bar.addTab("+")
-        root.addWidget(self._tab_bar)
+        tab_row.addWidget(self._tab_bar, 1)
+
+        # Save button
+        self._save_btn = QPushButton("\U0001f4be Save")
+        self._save_btn.clicked.connect(self._save_chain)
+        self._save_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: transparent;"
+            f"  border: 1px solid rgba(255, 255, 255, 0.06);"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color(FG_MUTED)};"
+            f"  font-size: 11px;"
+            f"  padding: 2px 10px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  border-color: rgba(255, 255, 255, 0.15);"
+            f"  color: {_qss_color(FG)};"
+            f"}}"
+        )
+        tab_row.addWidget(self._save_btn)
+
+        # Load button
+        self._load_btn = QPushButton("\U0001f4c2 Load")
+        self._load_btn.clicked.connect(self._on_load_clicked)
+        self._load_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: transparent;"
+            f"  border: 1px solid rgba(255, 255, 255, 0.06);"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color(FG_MUTED)};"
+            f"  font-size: 11px;"
+            f"  padding: 2px 10px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  border-color: rgba(255, 255, 255, 0.15);"
+            f"  color: {_qss_color(FG)};"
+            f"}}"
+        )
+        tab_row.addWidget(self._load_btn)
+
+        root.addLayout(tab_row)
 
         # --- 2-pane splitter (roster | canvas) ------------------------
         self._splitter = QSplitter(Qt.Horizontal)
@@ -526,6 +574,8 @@ class ChainEditor(QWidget):
         self._splitter.addWidget(self._canvas)
 
         self._splitter.setSizes([220, 580])
+
+        self._hide_plus_close_button()
 
     def _build_left_panel(self) -> None:
         container = QWidget()
@@ -631,6 +681,7 @@ class ChainEditor(QWidget):
         self._tab_bar.setCurrentIndex(idx)
         self._current_tab_index = idx
         self._load_or_create_chain(None)
+        self._hide_plus_close_button()
 
     # ------------------------------------------------------------------
     # Chain loading / saving
@@ -690,6 +741,158 @@ class ChainEditor(QWidget):
         if mission_core:
             result["mission_core"] = mission_core
         return result
+
+    def _hide_plus_close_button(self) -> None:
+        """Remove the close button from the trailing "+" tab."""
+        plus_idx = len(self._tabs)
+        self._tab_bar.setTabButton(plus_idx, QTabBar.ButtonPosition.RightSide, None)
+
+    def _on_tab_close(self, index: int) -> None:
+        """Handle close-request for a tab at *index*.  Does NOT touch disk."""
+        num_tabs = len(self._tabs)
+
+        # Ignore clicks on the "+" tab
+        if index == num_tabs:
+            return
+        if index < 0 or index >= num_tabs:
+            return
+
+        # If closing a tab different from the current one, switch to it first
+        # so the canvas shows its content and _prompt_save_changes sees the right chain.
+        if index != self._current_tab_index:
+            self._tab_bar.blockSignals(True)
+            self._tab_bar.setCurrentIndex(index)
+            self._tab_bar.blockSignals(False)
+            # _on_tab_changed was triggered above, so the tab is now current
+
+        # Snapshot current canvas state into the tab dict
+        self._tabs[index]["canvas_data"] = self._snapshot_chain()
+        self._tabs[index]["dirty"] = self._dirty
+        self._tabs[index]["name"] = self._chain_name
+        self._tabs[index]["description"] = self._chain_desc
+        self._tabs[index]["auto_route"] = self._auto_route
+
+        # Prompt save if dirty
+        if self._tabs[index].get("dirty", False):
+            choice = self._prompt_save_changes()
+            if choice == "cancel":
+                return  # Tab stays open
+
+        # Remove the tab
+        self._tab_bar.blockSignals(True)
+        self._tab_bar.removeTab(index)
+        self._tab_bar.blockSignals(False)
+        del self._tabs[index]
+
+        # Adjust current tab index
+        if self._current_tab_index is not None and self._current_tab_index > index:
+            self._current_tab_index -= 1
+        elif self._current_tab_index == index:
+            self._current_tab_index = None
+
+        # Handle empty state or lost current
+        if len(self._tabs) == 0:
+            tab_data = {
+                "chain_id": None,
+                "name": "",
+                "description": "",
+                "auto_route": False,
+                "dirty": False,
+                "canvas_data": None,
+            }
+            self._tabs.append(tab_data)
+            self._tab_bar.blockSignals(True)
+            self._tab_bar.insertTab(0, "Untitled")
+            self._tab_bar.blockSignals(False)
+            self._current_tab_index = 0
+            self._load_or_create_chain(None)
+        elif self._current_tab_index is None:
+            self._tab_bar.blockSignals(True)
+            self._tab_bar.setCurrentIndex(0)
+            self._tab_bar.blockSignals(False)
+            # _on_tab_changed fires from setCurrentIndex
+
+        self._hide_plus_close_button()
+
+    def _on_load_clicked(self) -> None:
+        """Show a dialog listing saved workflows and open the selected one."""
+        chains = list_chains(self._workspace_root)
+
+        # Filter out workflows already open in a tab
+        open_ids = {t["chain_id"] for t in self._tabs if t["chain_id"]}
+        available = [c for c in chains if c.get("id") not in open_ids]
+
+        if not available:
+            QMessageBox.information(self, "Load Workflow", "All saved workflows are already open.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Load Workflow")
+        dialog.setMinimumWidth(320)
+        dialog.setStyleSheet(
+            f"QDialog {{ background: {_qss_color(SURFACE)}; }}"
+            f"QLabel {{ color: {_qss_color(FG)}; font-size: 13px; }}"
+            f"QListWidget {{ background: {_qss_color(SURFACE_RAISED)}; color: {_qss_color(FG)}; border: 1px solid {_qss_color(BORDER)}; }}"
+            f"QPushButton {{ background: {_qss_color(SURFACE_RAISED)}; color: {_qss_color(FG)}; border: 1px solid {_qss_color(BORDER)}; border-radius: 4px; padding: 4px 14px; }}"
+            f"QPushButton:hover {{ border-color: {_qss_color(ACCENT_DIM)}; }}"
+        )
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(8)
+
+        label = QLabel("Select a workflow to open:")
+        layout.addWidget(label)
+
+        list_widget = QListWidget()
+        for c in available:
+            list_widget.addItem(c.get("name", "Untitled"))
+        layout.addWidget(list_widget)
+
+        btn_row = QHBoxLayout()
+        ok_btn = QPushButton("OK")
+        ok_btn.setDefault(True)
+        cancel_btn = QPushButton("Cancel")
+        btn_row.addStretch()
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+
+        def _on_accept():
+            row = list_widget.currentRow()
+            if row < 0:
+                return
+            selected = available[row]
+            selected_id = selected["id"]
+            # Check again if it somehow got opened while dialog was up
+            for i, t in enumerate(self._tabs):
+                if t["chain_id"] == selected_id:
+                    self._tab_bar.setCurrentIndex(i)
+                    dialog.accept()
+                    return
+            # New tab
+            tab_data = {
+                "chain_id": selected_id,
+                "name": selected.get("name", "Untitled"),
+                "description": selected.get("description", ""),
+                "auto_route": selected.get("auto_route", False),
+                "dirty": False,
+                "canvas_data": None,
+            }
+            self._tabs.append(tab_data)
+            idx = len(self._tabs) - 1
+            self._tab_bar.blockSignals(True)
+            self._tab_bar.insertTab(idx, tab_data["name"])
+            self._tab_bar.blockSignals(False)
+            self._tab_bar.setCurrentIndex(idx)
+            self._current_tab_index = idx
+            self._load_or_create_chain(selected_id)
+            self._hide_plus_close_button()
+            dialog.accept()
+
+        ok_btn.clicked.connect(_on_accept)
+        cancel_btn.clicked.connect(dialog.reject)
+        list_widget.itemDoubleClicked.connect(lambda: _on_accept())
+
+        dialog.exec()
 
     def _save_chain(self) -> None:
         data = self._snapshot_chain()
