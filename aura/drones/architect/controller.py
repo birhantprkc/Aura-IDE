@@ -118,6 +118,9 @@ class DroneArchitectController:
             self._pending_dispatch_spec = None
             return ModeEntered(workspace_id=None, display_name=None)
         self._active_workspace = ws
+        DroneWorkspaceStore.sync_display_name_from_candidate(
+            self._workspace_root, ws
+        )
         self._load_or_create_active_thread()
         return WorkspaceLoaded(
             workspace_id=ws.workspace_id,
@@ -292,6 +295,9 @@ class DroneArchitectController:
         self._active_workspace = ws
         self._load_or_create_active_thread()
         DroneWorkspaceStore.set_active_workspace(self._workspace_root, ws)
+        DroneWorkspaceStore.sync_display_name_from_candidate(
+            self._workspace_root, ws
+        )
         return WorkspaceLoaded(
             workspace_id=ws.workspace_id,
             display_name=ws.display_name,

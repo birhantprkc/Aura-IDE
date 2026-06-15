@@ -119,6 +119,34 @@ class DroneWorkspaceStore:
         DroneWorkspaceStore._ensure_folders(workspace)
 
     @staticmethod
+    def sync_display_name_from_candidate(
+        project_root: Path, workspace: DroneWorkspace
+    ) -> bool:
+        """Sync workspace.display_name from candidate/drone.json if it has a different name.
+
+        Reads candidate_dir(project_root, workspace.workspace_id) / "drone.json".
+        If the file exists and contains a non-empty "name" field that differs
+        from workspace.display_name, updates it, saves, and returns True.
+        Otherwise returns False.
+        """
+        drone_file = candidate_dir(project_root, workspace.workspace_id) / "drone.json"
+        if not drone_file.exists():
+            return False
+        try:
+            data = json.loads(drone_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        name = data.get("name", "")
+        if not isinstance(name, str) or not name.strip():
+            return False
+        name = name.strip()
+        if name == workspace.display_name:
+            return False
+        workspace.display_name = name
+        DroneWorkspaceStore.save_workspace(workspace)
+        return True
+
+    @staticmethod
     def create_workspace(
         project_root: Path,
         display_name: str,
