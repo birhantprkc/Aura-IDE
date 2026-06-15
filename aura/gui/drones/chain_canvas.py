@@ -488,7 +488,7 @@ class MissionCoreItem(QGraphicsObject):
         super().__init__()
         self._node_id = node_id
         self._canvas = canvas
-        self._title = "Mothership"
+        self._title = "Mission Control"
         self._goal = ""
         self._assigned_drone_ids: list[str] = []
         self._cargo_count = 0
@@ -765,7 +765,7 @@ class MissionCoreItem(QGraphicsObject):
         }
 
     def from_dict(self, data: dict) -> None:
-        self._title = data.get("title", "Mothership")
+        self._title = data.get("title", "Mission Control")
         self._goal = data.get("goal", "")
         pos = data.get("position")
         if pos and len(pos) == 2:
@@ -1304,6 +1304,7 @@ class ChainCanvas(QGraphicsView):
     canvasChanged = Signal()
     runMissionRequested = Signal()
     statusMessage = Signal(str, str)  # (text, level)
+    renameWorkflowRequested = Signal()
 
     def __init__(self, parent=None):
         # Set all attributes before super().__init__() because Qt paint events
@@ -1771,11 +1772,15 @@ class ChainCanvas(QGraphicsView):
             if self._mission_core is not None:
                 add_mission_action.setEnabled(False)
             add_goal_action = menu.addAction("Add Goal Planet")
+            menu.addSeparator()
+            rename_action = menu.addAction("Rename Workflow")
             action = menu.exec(event.globalPos())
             if action == add_mission_action:
                 self._canvas_add_mission_core(scene_pos)
             elif action == add_goal_action:
                 self._canvas_add_goal_planet(scene_pos)
+            elif action == rename_action:
+                self.renameWorkflowRequested.emit()
             return
         super().contextMenuEvent(event)
 

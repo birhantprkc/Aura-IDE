@@ -10,8 +10,10 @@ from PySide6.QtWidgets import (
     QDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -382,6 +384,19 @@ class _DroneRosterWidget(QScrollArea):
 
 
 # ---------------------------------------------------------------------------
+# WorkflowTabBar – right-click context menu on tabs
+# ---------------------------------------------------------------------------
+class _WorkflowTabBar(QTabBar):
+    tabContextMenuRequested = Signal(int)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.RightButton:
+            index = self.tabAt(event.position().toPoint())
+            self.tabContextMenuRequested.emit(index)
+        super().mousePressEvent(event)
+
+
+# ---------------------------------------------------------------------------
 # ChainEditor – central workbay: tabbed workflows + drone roster + canvas
 # ---------------------------------------------------------------------------
 class ChainEditor(QWidget):
@@ -482,12 +497,13 @@ class ChainEditor(QWidget):
         tab_row.setContentsMargins(0, 0, 0, 0)
         tab_row.setSpacing(0)
 
-        self._tab_bar = QTabBar()
+        self._tab_bar = _WorkflowTabBar()
         self._tab_bar.setExpanding(False)
         self._tab_bar.setDrawBase(True)
         self._tab_bar.currentChanged.connect(self._on_tab_changed)
         self._tab_bar.setTabsClosable(True)
         self._tab_bar.tabCloseRequested.connect(self._on_tab_close)
+        self._tab_bar.tabContextMenuRequested.connect(self._on_tab_context_menu)
         self._tab_bar.setStyleSheet(
             f"QTabBar {{"
             f"  background: {_qss_color(SURFACE)};"
@@ -591,6 +607,7 @@ class ChainEditor(QWidget):
         self._canvas.canvasChanged.connect(self._on_canvas_changed)
         self._canvas.runMissionRequested.connect(self._on_run_clicked)
         self._canvas.statusMessage.connect(self.set_status)
+        self._canvas.renameWorkflowRequested.connect(self._rename_current_workflow)
         right_layout.addWidget(self._canvas, 1)
 
         self._splitter.addWidget(right_pane)
@@ -639,16 +656,6 @@ class ChainEditor(QWidget):
         if index == self._current_tab_index:
             return
 
-        # Prompt save if current tab is dirty
-        if self._dirty:
-            choice = self._prompt_save_changes()
-            if choice == "cancel":
-                if self._current_tab_index is not None:
-                    self._tab_bar.blockSignals(True)
-                    self._tab_bar.setCurrentIndex(self._current_tab_index)
-                    self._tab_bar.blockSignals(False)
-                return
-
         # Save current tab state before switching
         if self._current_tab_index is not None and self._current_tab_index < num_tabs:
             self._tabs[self._current_tab_index]["canvas_data"] = self._snapshot_chain()
@@ -672,20 +679,13 @@ class ChainEditor(QWidget):
         self._tab_bar.setTabText(index, f"{name}{suffix}")
 
     def _add_new_tab(self) -> None:
-        choice = self._prompt_save_changes()
-        if choice == "cancel":
-            # Reset the tab bar selection back to the current tab
-            if self._current_tab_index is not None:
-                self._tab_bar.blockSignals(True)
-                self._tab_bar.setCurrentIndex(self._current_tab_index)
-                self._tab_bar.blockSignals(False)
-            return
-        # choice == "save" → _prompt_save_changes already saved
-
         # Save current tab state
         if self._current_tab_index is not None and self._current_tab_index < len(self._tabs):
             self._tabs[self._current_tab_index]["canvas_data"] = self._snapshot_chain()
             self._tabs[self._current_tab_index]["dirty"] = self._dirty
+            self._tabs[self._current_tab_index]["name"] = self._chain_name
+            self._tabs[self._current_tab_index]["description"] = self._chain_desc
+            self._tabs[self._current_tab_index]["auto_route"] = self._auto_route
 
         tab_data = {
             "chain_id": None,
@@ -704,6 +704,24 @@ class ChainEditor(QWidget):
         self._current_tab_index = idx
         self._load_or_create_chain(None)
         self._hide_plus_close_button()
+
+    # ------------------------------------------------------------------
+    # Tab context menu
+    # ------------------------------------------------------------------
+    def _on_tab_context_menu(self, index: int) -> None:
+        if index >= len(self._tabs):
+            return
+        menu = QMenu(self)
+        rename_action = menu.addAction("Rename Workflow")
+        action = menu.exec(self._tab_bar.mapToGlobal(self._tab_bar.tabRect(index).bottomLeft()))
+        if action == rename_action:
+            self._rename_current_workflow()
+
+    def _rename_current_workflow(self) -> None:
+        text, ok = QInputDialog.getText(self, "Rename Workflow", "Workflow name:", text=self._chain_name)
+        if ok and text.strip():
+            self._chain_name = text.strip()
+            self._save_chain()
 
     # ------------------------------------------------------------------
     # Chain loading / saving
