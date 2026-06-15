@@ -511,15 +511,14 @@ class ChainEditor(QWidget):
             f"  background: rgba(255, 255, 255, 0.03);"
             f"}}"
             f"QTabBar::close-button {{"
-            f"  image: none;"
-            f"  background: rgba(255, 255, 255, 0.08);"
-            f"  border-radius: 3px;"
-            f"  width: 10px;"
-            f"  height: 10px;"
+            f"  width: 12px;"
+            f"  height: 12px;"
             f"  subcontrol-position: right;"
+            f"  padding: 0px;"
             f"}}"
             f"QTabBar::close-button:hover {{"
-            f"  background: rgba(255, 255, 255, 0.18);"
+            f"  background: rgba(255, 255, 255, 0.12);"
+            f"  border-radius: 3px;"
             f"}}"
         )
         # Add the "+" tab (always last)
@@ -566,7 +565,6 @@ class ChainEditor(QWidget):
         )
         tab_row.addWidget(self._load_btn)
 
-        root.addLayout(tab_row)
 
         # --- 2-pane splitter (roster | canvas) ------------------------
         self._splitter = QSplitter(Qt.Horizontal)
@@ -579,13 +577,23 @@ class ChainEditor(QWidget):
         # Left panel – drone roster
         self._build_left_panel()
 
+        # Right pane: tab row above canvas
+        right_pane = QWidget()
+        right_pane.setStyleSheet(f"background: {_qss_color(BG)};")
+        right_layout = QVBoxLayout(right_pane)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        right_layout.addLayout(tab_row)
+
         # Center – canvas
         self._canvas = ChainCanvas(self)
         self._canvas.setStyleSheet(f"background: {_qss_color(BG)}; border: none;")
         self._canvas.canvasChanged.connect(self._on_canvas_changed)
         self._canvas.runMissionRequested.connect(self._on_run_clicked)
         self._canvas.statusMessage.connect(self.set_status)
-        self._splitter.addWidget(self._canvas)
+        right_layout.addWidget(self._canvas, 1)
+
+        self._splitter.addWidget(right_pane)
 
         self._splitter.setSizes([220, 580])
 
