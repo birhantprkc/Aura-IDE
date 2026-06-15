@@ -20,9 +20,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.drones.chain import ChainDefinition, ChainGoal, ChainNode, ChainEdge, ChainValidation, validate
+from aura.drones.chain import ChainDefinition
 from aura.drones.chain_runner import get_last_chain_run
-from aura.drones.chain_store import _chain_from_dict, delete_chain, load_chain, save_chain
+from aura.drones.chain_store import _chain_from_dict, list_chains, load_chain, save_chain
 from aura.drones.definition import DroneDefinition
 from aura.drones.store import DroneStore
 from aura.gui.drones.chain_canvas import (
@@ -50,24 +50,10 @@ ACCENT_DIM = "#7c6bb0"
 DRONE_PURPLE = "#8b5cf6"
 SEPARATOR = "#252830"
 
-
-def _widget_valid(w: object) -> bool:
-    """Check a widget hasn't been C++ deleted (PySide6 sip.isdeleted)."""
-    from PySide6 import sip
-    return not sip.isdeleted(w)
-
-
 def _qss_color(hex_str: str) -> str:
     """Return a QColor string suitable for inline stylesheet use."""
     c = QColor(hex_str)
     return f"rgba({c.red()},{c.green()},{c.blue()},{c.alpha() / 255:.2f})"
-
-
-def _qss_darker(hex_str: str, factor: float = 0.6) -> str:
-    """Darken a hex color by factor (0-1)."""
-    c = QColor(hex_str)
-    return f"rgba({int(c.red() * factor)},{int(c.green() * factor)},{int(c.blue() * factor)},{c.alpha() / 255:.2f})"
-
 
 def _read_cargo_for_chain(workspace_root: Path, chain_id: str) -> tuple[list[dict], str]:
     """Read the latest ChainRun node outputs as cargo items.
@@ -436,23 +422,42 @@ class ChainEditor(QWidget):
         self._current_tab_index: int | None = None
 
         self._build_layout()
-        self._load_or_create_chain(chain_id)
 
-        # Add the initial tab for the loaded chain
+        # Populate tabs from saved workflows
         self._tab_bar.blockSignals(True)
-        tab_data = {
-            "chain_id": self._chain_id,
-            "name": self._chain_name or "Untitled",
-            "description": self._chain_desc,
-            "auto_route": self._auto_route,
-            "dirty": False,
-            "canvas_data": None,
-        }
-        self._tabs.append(tab_data)
-        self._tab_bar.insertTab(0, tab_data["name"])
-        self._tab_bar.setCurrentIndex(0)
-        self._current_tab_index = 0
-        self._tab_bar.blockSignals(False)
+        chains = list_chains(self._workspace_root)
+        if chains:
+            target_idx = 0
+            for i, chain_data in enumerate(chains):
+                tab_data = {
+                    "chain_id": chain_data["id"],
+                    "name": chain_data.get("name", "Untitled"),
+                    "description": chain_data.get("description", ""),
+                    "auto_route": chain_data.get("auto_route", False),
+                    "dirty": False,
+                    "canvas_data": None,
+                }
+                self._tabs.append(tab_data)
+                self._tab_bar.insertTab(i, tab_data["name"])
+                if chain_id and chain_data["id"] == chain_id:
+                    target_idx = i
+            self._tab_bar.setCurrentIndex(target_idx)
+            self._tab_bar.blockSignals(False)
+            self._on_tab_changed(target_idx)
+        else:
+            tab_data = {
+                "chain_id": None,
+                "name": "Untitled",
+                "description": "",
+                "auto_route": False,
+                "dirty": False,
+                "canvas_data": None,
+            }
+            self._tabs.append(tab_data)
+            self._tab_bar.insertTab(0, "Untitled")
+            self._tab_bar.setCurrentIndex(0)
+            self._tab_bar.blockSignals(False)
+            self._on_tab_changed(0)
 
         self._roster.populate()
 
@@ -557,6 +562,20 @@ class ChainEditor(QWidget):
 
         if index < 0 or index >= num_tabs:
             return
+
+        # No-op if already on this tab
+        if index == self._current_tab_index:
+            return
+
+        # Prompt save if current tab is dirty
+        if self._dirty:
+            choice = self._prompt_save_changes()
+            if choice == "cancel":
+                if self._current_tab_index is not None:
+                    self._tab_bar.blockSignals(True)
+                    self._tab_bar.setCurrentIndex(self._current_tab_index)
+                    self._tab_bar.blockSignals(False)
+                return
 
         # Save current tab state before switching
         if self._current_tab_index is not None and self._current_tab_index < num_tabs:
@@ -686,15 +705,6 @@ class ChainEditor(QWidget):
         self._update_tab_label()
         self.set_status("Workflow saved.", "ok")
 
-    def _save_chain_as(self) -> None:
-        data = self._snapshot_chain()
-        chain_id = save_chain(self._workspace_root, None, data)
-        self._chain_id = chain_id
-        self._current_chain_id = chain_id
-        self._dirty = False
-        self._update_tab_label()
-        self.set_status(f"Saved as {self._chain_name or chain_id}", "ok")
-
     def _update_tab_label(self) -> None:
         if self._current_tab_index is None or self._current_tab_index >= len(self._tabs):
             return
@@ -705,76 +715,6 @@ class ChainEditor(QWidget):
         if self._current_tab_index < len(self._tabs):
             self._tabs[self._current_tab_index]["name"] = self._chain_name
             self._tabs[self._current_tab_index]["chain_id"] = self._chain_id
-
-    def _validate_chain(self) -> None:
-        nodes, edges, _mission_core, _goals = self._canvas.to_chain_nodes_and_edges()
-        issues: list[str] = []
-
-        # Shallow checks
-        if not nodes:
-            issues.append("No nodes in the workflow.")
-        node_ids = {n["id"] for n in nodes}
-        for e in edges:
-            if e["from_node"] not in node_ids:
-                issues.append(f"Edge references missing source node {e['from_node']}.")
-            if e["to_node"] not in node_ids:
-                issues.append(f"Edge references missing destination node {e['to_node']}.")
-
-        has_draft = any(n.get("is_draft") for n in nodes)
-        if has_draft:
-            issues.append("One or more draft nodes have not been built yet.")
-
-        # Build ChainDefinition and run shared validate()
-        goal_planets_data = self._canvas.goal_planets_data
-        chain_goals = [
-            ChainGoal(
-                id=g["id"],
-                title=g.get("title", ""),
-                objective=g.get("objective", ""),
-                position=tuple(g.get("position", [0.0, 0.0])),
-            )
-            for g in goal_planets_data
-        ]
-        chain_nodes = [
-            ChainNode(
-                id=n["id"],
-                drone_id=n["drone_id"],
-                goal_template=n.get("goal_template", ""),
-                position=tuple(n.get("position", [0.0, 0.0])),
-                is_draft=n.get("is_draft", False),
-                draft_name=n.get("draft_name", ""),
-                draft_accepts=n.get("draft_accepts", ""),
-                draft_produces=n.get("draft_produces", ""),
-                draft_brief=n.get("draft_brief", ""),
-                is_assignment=n.get("is_assignment", False),
-                goal_id=n.get("goal_id", ""),
-            )
-            for n in nodes
-        ]
-        chain_edges = [
-            ChainEdge(from_node=e["from_node"], to_node=e["to_node"])
-            for e in edges
-        ]
-        chain_def = ChainDefinition(
-            id=self._chain_id or "",
-            name=self._chain_name,
-            description=self._chain_desc,
-            nodes=tuple(chain_nodes),
-            edges=tuple(chain_edges),
-            goals=tuple(chain_goals),
-        )
-        drone_lookup = self._build_drone_lookup()
-        validation_result = validate(chain_def, drone_lookup)
-        for err in validation_result.errors:
-            issues.append(err)
-
-        if issues:
-            msg = "\n".join(f"\u2022 {i}" for i in issues)
-            QMessageBox.warning(self, "Validation", f"Issues found:\n\n{msg}")
-            self.set_status("Validation failed.", "error")
-        else:
-            QMessageBox.information(self, "Validation", "Workflow looks valid.")
-            self.set_status("Validation passed.", "ok")
 
     def _prompt_save_changes(self) -> str:
         """Ask user whether to Save, Discard, or Cancel. Returns 'save', 'discard', or 'cancel'."""
