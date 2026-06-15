@@ -112,6 +112,12 @@ class SendHandler(QObject):
                 self._drone_coordinator.exit_drone_mode()
                 return
 
+        # Handle /drone directly before generic route classification
+        if payload.text.strip().lower() == "/drone":
+            if self._drone_coordinator:
+                self._drone_coordinator.handle_drone_toggle()
+            return
+
         route = classify_user_request(payload.text)
         if route.action == "drone_enter_mode":
             self._handle_drone_enter_mode(payload)
@@ -225,10 +231,7 @@ class SendHandler(QObject):
     def _handle_drone_enter_mode(self, payload: SendPayload) -> None:
         """Handle /drone command — toggle Drone mode on/off."""
         if self._drone_coordinator:
-            if self._drone_coordinator.is_drone_mode():
-                self._drone_coordinator.exit_drone_mode()
-            else:
-                self._drone_coordinator.enter_drone_mode()
+            self._drone_coordinator.handle_drone_toggle()
 
     # ---- undo --------------------------------------------------------------
     def _handle_built_in_action(self, action: str) -> None:

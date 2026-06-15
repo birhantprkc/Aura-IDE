@@ -148,15 +148,69 @@ class DroneModeCoordinator(QObject):
             f"explicitly asks for a project code change (not a Drone change)."
         )
 
-    def enter_drone_mode(self, *, load_active: bool = True) -> None:
-        if self._drone_mode:
-            return
-        self._drone_mode = True
+    def _is_drone_ui_attached(self) -> bool:
+        """Return True when the workspace pane is visible and the left pane is hidden."""
+        return (
+            self._main_splitter.indexOf(self._workspace_pane) >= 0
+            and self._workspace_pane.isVisible()
+            and not self._left_pane.isVisible()
+        )
 
-        # Save/suspend the current project conversation before swapping to Drone mode
-        self._suspended_project_messages = copy.deepcopy(self._bridge.history().messages)
-        self._bridge.reset_history()
-        self._chat.reset()
+    def _attach_drone_ui(self) -> bool:
+        """Swap project left pane for drone workspace pane in the splitter.
+
+        Returns True on success, False if the left pane wasn't found.
+        """
+        idx = self._main_splitter.indexOf(self._left_pane)
+        if idx < 0:
+            logger.error("Cannot attach drone UI: left pane not found in splitter")
+            return False
+        self._left_pane.hide()
+        self._main_splitter.replaceWidget(idx, self._workspace_pane)
+        self._workspace_pane.show()
+        return True
+
+    def _attach_project_ui(self) -> bool:
+        """Swap drone workspace pane back to project left pane in the splitter.
+
+        Returns True on success, False if the workspace pane wasn't found.
+        """
+        idx = self._main_splitter.indexOf(self._workspace_pane)
+        if idx < 0:
+            logger.error("Cannot attach project UI: workspace pane not found in splitter")
+            return False
+        self._workspace_pane.hide()
+        self._main_splitter.replaceWidget(idx, self._left_pane)
+        self._left_pane.show()
+        return True
+
+    def _restore_project_chat(self) -> None:
+        """Restore suspended project messages into bridge and chat, then clear the saved copy."""
+        if self._suspended_project_messages is not None:
+            self._bridge.reset_history()
+            self._bridge.history().messages = copy.deepcopy(self._suspended_project_messages)
+            self._chat.reset()
+            self._chat.replay_messages(self._suspended_project_messages)
+            self._suspended_project_messages = None
+
+    def enter_drone_mode(self, *, load_active: bool = True) -> None:
+        # Reconcile stale state vs fresh entry
+        if self._drone_mode and self._is_drone_ui_attached():
+            return  # already properly in drone mode
+
+        entering_fresh = False
+        if self._drone_mode and not self._is_drone_ui_attached():
+            # Stale state — repair without re-saving project messages
+            logger.warning(
+                "Drone mode stale state detected: _drone_mode=%s but drone UI not visible — repairing",
+                self._drone_mode,
+            )
+        else:
+            entering_fresh = True
+            # Save/suspend the current project conversation before swapping to Drone mode
+            self._suspended_project_messages = copy.deepcopy(self._bridge.history().messages)
+            self._bridge.reset_history()
+            self._chat.reset()
 
         if load_active:
             self._controller.enter_mode()
@@ -175,18 +229,20 @@ class DroneModeCoordinator(QObject):
         )
 
         # Swap left pane for workspace pane in the splitter
-        idx = self._main_splitter.indexOf(self._left_pane)
-        if idx >= 0:
-            self._left_pane.hide()
-            self._main_splitter.replaceWidget(idx, self._workspace_pane)
-            self._workspace_pane.show()
+        if not self._attach_drone_ui():
+            logger.error("Failed to attach drone UI")
+            self._chat.add_error("Drone Builder", "Could not switch to Drone mode: left pane not found.")
+            if entering_fresh:
+                self._restore_project_chat()  # undo the bridge reset
+            return
 
+        self._drone_mode = True
         self._input.set_drone_architect_mode(True)
         self._status_bar.set_drone_architect_mode(True)
         self.drone_mode_changed.emit(True)
 
     def exit_drone_mode(self, *, restore_project_chat: bool = True) -> None:
-        if not self._drone_mode:
+        if not self._drone_mode and not self._is_drone_ui_attached():
             return
         self._save_current_thread()
         self._active_thread_id = None
@@ -195,27 +251,26 @@ class DroneModeCoordinator(QObject):
         # Restore the suspended project chat if requested
         if self._suspended_project_messages is not None:
             if restore_project_chat:
-                self._bridge.reset_history()
-                self._bridge.history().messages = copy.deepcopy(self._suspended_project_messages)
-                self._chat.reset()
-                self._chat.replay_messages(self._suspended_project_messages)
-            self._suspended_project_messages = None
+                self._restore_project_chat()
+            else:
+                self._suspended_project_messages = None
 
         # Swap workspace pane back to left pane
-        idx = self._main_splitter.indexOf(self._workspace_pane)
-        if idx >= 0:
-            self._workspace_pane.hide()
-            self._main_splitter.replaceWidget(idx, self._left_pane)
-            self._left_pane.show()
+        self._attach_project_ui()
 
         self._input.set_drone_architect_mode(False)
         self._status_bar.set_drone_architect_mode(False)
         self.drone_mode_changed.emit(False)
 
-        pass  # workshop runner removed
-
         self._workspace_pane.set_active_workspace_id(None)
         self._controller.exit_mode()
+
+    def handle_drone_toggle(self) -> None:
+        """Toggle drone mode on/off based on current state."""
+        if self._drone_mode and self._is_drone_ui_attached():
+            self.exit_drone_mode()
+        else:
+            self.enter_drone_mode()
 
     def _activate_workspace(self, thread_id: str | None = None) -> None:
         """Centralized workspace activation.
@@ -234,8 +289,7 @@ class DroneModeCoordinator(QObject):
         self._active_thread_id = thread_id
 
         # Enter drone mode first (saves project chat, resets bridge/chat, swaps pane)
-        if not self._drone_mode:
-            self.enter_drone_mode(load_active=False)
+        self.enter_drone_mode(load_active=False)
 
         # Then load the thread into the (now empty) UI
         if thread_id:
