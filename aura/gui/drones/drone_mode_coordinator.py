@@ -13,6 +13,7 @@ from aura.drones.architect.results import (
     Discarded,
     ErrorResult,
     Installed,
+    WorkspaceLoaded,
 )
 from aura.drones.workspaces.model import WorkspacePhase
 from aura.drones.workspaces.store import DroneWorkspaceStore
@@ -26,6 +27,7 @@ class DroneModeCoordinator(QObject):
 
     drone_mode_changed = Signal(bool)
     drone_list_changed = Signal()
+    fresh_session_requested = Signal()
 
     def __init__(
         self,
@@ -56,8 +58,8 @@ class DroneModeCoordinator(QObject):
         self._workspace_pane = DroneWorkspacePane(parent=None)
         self._workspace_pane.hide()
         self._workspace_pane.workspace_selected.connect(self._on_workspace_selected)
-        self._workspace_pane.new_workspace.connect(self._on_new_workspace)
-        self._workspace_pane.discard_workspace.connect(self._on_discard_workspace)
+        self._workspace_pane.new_workspace_requested.connect(self._on_new_workspace)
+        self._workspace_pane.discard_workspace_requested.connect(self._on_discard_workspace)
         self._workspace_pane.edit_installed.connect(self.edit_installed_drone)
 
         # Active build tool state for cancellation after drone mode exit.
@@ -133,6 +135,11 @@ class DroneModeCoordinator(QObject):
         if self._drone_mode:
             return
         self._drone_mode = True
+
+        if load_active:
+            self._controller.enter_mode()
+        ws = self._controller.active_workspace
+        self._workspace_pane.set_active_workspace_id(ws.workspace_id if ws else None)
         self._workspace_pane.refresh()
 
         # Swap left pane for workspace pane in the splitter
@@ -145,11 +152,6 @@ class DroneModeCoordinator(QObject):
         self._input.set_drone_architect_mode(True)
         self._status_bar.set_drone_architect_mode(True)
         self.drone_mode_changed.emit(True)
-
-        if load_active:
-            self._controller.enter_mode()
-        ws = self._controller.active_workspace
-        self._workspace_pane.set_active_workspace_id(ws.workspace_id if ws else None)
 
     def exit_drone_mode(self) -> None:
         if not self._drone_mode:
@@ -359,13 +361,30 @@ class DroneModeCoordinator(QObject):
     # ------------------------------------------------------------------
 
     def _on_workspace_selected(self, workspace_id: str) -> None:
-        self._controller.load_workspace(workspace_id)
-        if self._controller.active_workspace is not None:
+        result = self._controller.load_workspace(workspace_id)
+        if isinstance(result, ErrorResult):
+            self._chat.add_error("Drone Builder", f"Could not load workspace: {result.message}")
+            return
+        if self._drone_mode:
+            self._workspace_pane.set_active_workspace_id(workspace_id)
+            self._workspace_pane.refresh()
+            self._input.focus_editor()
+        else:
             self.enter_drone_mode(load_active=False)
 
-    def _on_new_workspace(self) -> None:
+    def start_fresh_drone_session(self) -> None:
+        """Create a new workspace and reset the Builder session without exiting Drone mode."""
         self._controller.create_workspace("New Drone")
-        self.enter_drone_mode(load_active=False)
+        ws = self._controller.active_workspace
+        self._workspace_pane.refresh()
+        self._workspace_pane.set_active_workspace_id(ws.workspace_id if ws else None)
+        self._chat.reset()
+        self._bridge.reset_history()
+        self.fresh_session_requested.emit()
+        self._input.focus_editor()
+
+    def _on_new_workspace(self) -> None:
+        self.start_fresh_drone_session()
 
     def _on_discard_workspace(self, workspace_id: str) -> None:
         self.discard_builder_drone(workspace_id)

@@ -108,7 +108,7 @@ class SendHandler(QObject):
         if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
             text = payload.text.strip()
             lower = text.lower()
-            if lower == "/chat" or lower == "/drone" or lower.startswith("/drone off"):
+            if lower == "/chat" or lower.startswith("/drone off"):
                 self._chat.add_user(payload.text)
                 self._drone_coordinator.exit_drone_mode()
                 self._chat.add_info("Drone Builder", "Back to normal Aura.")
@@ -225,10 +225,13 @@ class SendHandler(QObject):
     # ---- drone architect --------------------------------------------------
 
     def _handle_drone_enter_mode(self, payload: SendPayload) -> None:
-        """Handle /drone command — enter Drone Architect mode."""
+        """Handle /drone command — enter Drone Architect mode or start fresh session."""
         self._chat.add_user(payload.text)
         if self._drone_coordinator:
-            self._drone_coordinator.enter_drone_mode()
+            if self._drone_coordinator.is_drone_mode():
+                self._drone_coordinator.start_fresh_drone_session()
+            else:
+                self._drone_coordinator.enter_drone_mode()
 
     # ---- undo --------------------------------------------------------------
     def _handle_built_in_action(self, action: str) -> None:

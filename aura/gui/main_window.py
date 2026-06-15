@@ -257,6 +257,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             drone_coordinator=self._drone_coordinator,
             parent=self,
         )
+        self._drone_coordinator.fresh_session_requested.connect(
+            self._send_handler.clear_queue
+        )
 
         # Companion (mobile control plane)
         self._companion = CompanionManager(self._settings)
