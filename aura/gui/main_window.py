@@ -8,7 +8,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 from PySide6.QtCore import QByteArray, QObject, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -47,21 +47,19 @@ from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
-from aura.gui.drones.chain_editor import ChainEditor
 from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
+from aura.gui.drones.drone_mode_coordinator import DroneModeCoordinator
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
-from aura.gui.drones.drone_workbay_window import DroneWorkbayWindow
 from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.drones.drone_summon_card import DroneSummonCard
+from aura.gui.drones.drone_workbay_window import DroneWorkbayWindow
 from aura.gui.edge_rails import EdgeTabRail
-from aura.gui.theme import DANGER, SUCCESS
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
 from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.playground import AuraPlayground
 from aura.gui.send_handler import SendHandler
-from aura.gui.drones.drone_mode_coordinator import DroneModeCoordinator
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog, UpdateWorker
@@ -69,6 +67,7 @@ from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.window_chrome import WindowChromeMixin
 from aura.gui.worker_handler import WorkerEventHandler
 from aura.handoff import extract_handoff_text, generate_handoff_prompt, save_handoff
+from aura.hooks import hooks
 from aura.prompts import SINGLE_SYSTEM_PROMPT
 from aura.updater import UpdateStatus
 
@@ -555,6 +554,52 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._settings.drone_workbay_window_geometry = geometry
         save_settings(self._settings)
 
+    def _query_workbay_state(self) -> dict | None:
+        """Hook handler: return the active Workbay tab's canvas state as plain dict."""
+        workbay = self._drone_workbay_window
+        if workbay is None or not workbay.is_open():
+            return None
+        editor = workbay.chain_editor
+        if not editor:
+            return None
+        chain_id = editor._current_chain_id
+        if not chain_id:
+            return None
+        name = editor._chain_name
+        description = editor._chain_desc
+
+        nodes, edges, mission_core, goals = editor._canvas.to_chain_nodes_and_edges()
+
+        # Build drone lookup from canvas nodes
+        drone_lookup: dict[str, dict] = {}
+        for node_dict in nodes:
+            drone_id = node_dict.get("drone_id", "")
+            if not drone_id:
+                continue
+            # Find the ChainNodeItem with this drone_id to access its .drone attribute
+            for node_item in editor._canvas._nodes.values():
+                if node_item.drone_id == drone_id:
+                    drone_def = node_item.drone
+                    if drone_def is not None:
+                        drone_lookup[drone_id] = {
+                            "id": drone_def.id,
+                            "name": drone_def.name,
+                            "write_policy": drone_def.write_policy,
+                        }
+                    break
+
+        return {
+            "chain_id": chain_id,
+            "name": name,
+            "description": description,
+            "dirty": editor._dirty,
+            "nodes": nodes,
+            "edges": edges,
+            "mission_core": mission_core or {},
+            "goals": goals,
+            "drone_lookup": drone_lookup,
+        }
+
     def _dim_terminal_tab_after_success(self) -> None:
         if self._edge_rail.state == "success":
             self._edge_rail.set_state("dim")
@@ -610,6 +655,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._left_pane.refresh_projects(path)
         # Close chain editor when workspace root changes
         if self._drone_workbay_window is not None:
+            hooks.unregister('query_mission_workbay_state')
             self._drone_workbay_window.hide()
             self._drone_workbay_window.deleteLater()
             self._drone_workbay_window = None
@@ -799,6 +845,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         editor.editDroneRequested.connect(self._on_edit_drone)
         editor.deleteDroneRequested.connect(self._on_delete_drone)
         workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
+        hooks.register('query_mission_workbay_state', self._query_workbay_state)
         workbay.show_and_raise()
 
     def _sync_drone_tab_checked(self) -> None:
@@ -812,7 +859,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         """Open the Drone editor pre-filled from the last Worker run."""
         from PySide6.QtWidgets import QDialog
 
-        from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
 
         workspace_root = self._workspace_root
         if not workspace_root:
@@ -1207,6 +1253,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._on_run_workflow(cid)
         editor.runChainRequested.connect(on_run)
         workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
+        hooks.register('query_mission_workbay_state', self._query_workbay_state)
         workbay.show_and_raise()
 
     # ----- Drone Run lifecycle (Phase 2) --------------------------------
