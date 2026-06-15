@@ -176,7 +176,7 @@ class DroneStore:
             phase = workspace.phase
             if phase == WorkspacePhase.DISCARDED.value:
                 continue
-            if phase == WorkspacePhase.INSTALLED.value and workspace.installed_drone_id:
+            if phase == WorkspacePhase.INSTALLED.value and workspace.installed_drone_id and workspace.installed_drone_id in installed:
                 continue
 
             candidate_folder = candidate_dir(Path(workspace.project_root), workspace.workspace_id)
@@ -214,12 +214,15 @@ class DroneStore:
             if write_policy not in _WRITE_POLICIES:
                 write_policy = "read_only"
 
+            status = _builder_status_for_phase(phase)
+            if phase == WorkspacePhase.INSTALLED.value and workspace.installed_drone_id and not installed_drone:
+                status = "Needs Fix"
             rows[key] = DroneListEntry(
                 id=key if str(key).startswith("builder:") else str(drone_id or key),
                 name=name,
                 description=description,
                 write_policy=write_policy,
-                status=_builder_status_for_phase(phase),
+                status=status,
                 ready=False,
                 drone=installed_drone,
                 workspace_id=workspace.workspace_id,

@@ -12,6 +12,8 @@ def install_candidate(workspace: DroneWorkspace, workspace_root: Path) -> dict:
     candidate_folder = candidate_dir(Path(workspace.project_root), workspace.workspace_id)
     drone = DroneStore.load_drone_from_folder(candidate_folder)
     DroneStore.register_drone_folder(workspace_root, candidate_folder)
+    if DroneStore.load_drone(workspace_root, drone.id) is None:
+        return {"ok": False, "error": f"Installed Drone '{drone.id}' could not be loaded back after registration"}
     workspace.phase = "installed"
     workspace.installed_drone_id = drone.id
     workspace.candidate_drone_id = drone.id
@@ -23,6 +25,8 @@ def reinstall_candidate(workspace: DroneWorkspace, workspace_root: Path) -> dict
     candidate_folder = candidate_dir(Path(workspace.project_root), workspace.workspace_id)
     drone = DroneStore.load_drone_from_folder(candidate_folder)
     DroneStore.register_drone_folder(workspace_root, candidate_folder)
+    if DroneStore.load_drone(workspace_root, drone.id) is None:
+        return {"ok": False, "error": f"Installed Drone '{drone.id}' could not be loaded back after registration"}
     workspace.phase = "installed"
     workspace.installed_drone_id = drone.id
     DroneWorkspaceStore.save_workspace(workspace)

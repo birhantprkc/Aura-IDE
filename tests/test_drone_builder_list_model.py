@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -163,6 +164,69 @@ def test_ready_step_promotes_builder_entry_to_ready_drone(
         ("repo-scout", "Ready", True)
     ]
     assert DroneStore.load_drone(tmp_path, "repo-scout") is not None
+
+
+def test_installed_drone_appears_only_once_when_present(
+    tmp_path: Path,
+) -> None:
+    """An installed Drone with its global folder intact appears exactly once as Ready."""
+    workspace = DroneWorkspaceStore.create_workspace(tmp_path, "Repo Scout")
+    _write_drone_folder(candidate_dir(tmp_path, workspace.workspace_id))
+
+    result = install_or_reinstall(workspace, tmp_path)
+    assert result["ok"] is True, result
+
+    entries = DroneStore.list_drone_entries(tmp_path)
+    assert len(entries) == 1
+    assert entries[0].id == "repo-scout"
+    assert entries[0].status == "Ready"
+    assert entries[0].ready is True
+
+
+def test_installed_workspace_with_missing_global_drone_shows_as_needs_fix(
+    tmp_path: Path,
+) -> None:
+    """When an installed Drone's global folder is deleted, the workspace shows as Needs Fix."""
+    workspace = DroneWorkspaceStore.create_workspace(tmp_path, "Repo Scout")
+    _write_drone_folder(candidate_dir(tmp_path, workspace.workspace_id))
+
+    result = install_or_reinstall(workspace, tmp_path)
+    assert result["ok"] is True, result
+
+    # Delete the global drone folder to simulate corruption / accidental removal
+    global_drone_dir = aura_paths.data_dir() / "drones" / "repo-scout"
+    assert global_drone_dir.exists()
+    shutil.rmtree(global_drone_dir)
+
+    entries = DroneStore.list_drone_entries(tmp_path)
+    assert len(entries) == 1
+    assert entries[0].name == "Repo Scout"
+    assert entries[0].status == "Needs Fix"
+    assert entries[0].ready is False
+
+
+def test_install_candidate_fails_when_load_drone_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """install_or_reinstall fails if the registered Drone cannot be loaded back."""
+    workspace = DroneWorkspaceStore.create_workspace(tmp_path, "Repo Scout")
+    _write_drone_folder(candidate_dir(tmp_path, workspace.workspace_id))
+    original_phase = workspace.phase
+
+    monkeypatch.setattr(
+        DroneStore,
+        "load_drone",
+        lambda *args, **kwargs: None,
+    )
+
+    result = install_or_reinstall(workspace, tmp_path)
+    assert result["ok"] is False
+
+    # Reload workspace to verify phase was NOT changed to "installed"
+    reloaded = DroneWorkspaceStore.load_workspace(tmp_path, workspace.workspace_id)
+    assert reloaded is not None
+    assert reloaded.phase != "installed"
 
 
 def test_install_and_register_are_not_user_commands() -> None:
