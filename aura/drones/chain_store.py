@@ -306,8 +306,6 @@ def save_chain(workspace_root: Path, chain_id: str | None, data: dict) -> str:
         raise ValueError(f"Invalid chain id: {chain_id!r}")
     data = dict(data)
     data["id"] = chain_id
-    if not data.get("name", "").strip():
-        data["name"] = chain_id
 
     # Ensure goals list is present
     goals = data.get("goals", [])

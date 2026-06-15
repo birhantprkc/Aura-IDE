@@ -1234,39 +1234,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._open_chain_editor(chain_id=None)
 
     def _open_chain_editor(self, chain_id: str | None) -> None:
-        """Create and show the chain editor in a standalone window."""
-        if self._drone_workbay_window is not None and self._drone_workbay_window.is_open():
-            if hooks.is_registered('query_mission_workbay_state'):
-                hooks.unregister('query_mission_workbay_state')
-            self._drone_workbay_window.hide()
-
-        self._drone_workbay_window = DroneWorkbayWindow(
-            workspace_root=self._workspace_root,
-            chain_id=chain_id,
-            provider_id=self._settings.planner_provider,
-            model=self.current_model(),
-            thinking=self.current_thinking(),
-            temperature=self._settings.temperature,
-            initial_geometry=self._settings.drone_workbay_window_geometry,
-            parent=self,
-        )
-        workbay = self._drone_workbay_window
-        editor = workbay.chain_editor
-        editor.goBackRequested.connect(workbay.hide)
-        editor.closeRequested.connect(workbay.hide)
-        editor.runDroneRequested.connect(self._on_launch_drone)
-        editor.editDroneRequested.connect(self._on_edit_drone)
-        editor.deleteDroneRequested.connect(self._on_delete_drone)
-
-        def on_run(cid: str) -> None:
-            self._on_run_workflow(cid)
-        editor.runChainRequested.connect(on_run)
-        workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
-        if hooks.is_registered('query_mission_workbay_state'):
-            hooks.unregister('query_mission_workbay_state')
-        hooks.register('query_mission_workbay_state', self._query_workbay_state)
-        workbay.show_and_raise()
-
+        """Open the workbay (creating/toggling as needed) and open a chain in it."""
+        if self._workspace_root is None:
+            return
+        self._open_or_toggle_drone_workbay()
+        if self._drone_workbay_window is not None:
+            self._drone_workbay_window.chain_editor.open_chain(chain_id)
     # ----- Drone Run lifecycle (Phase 2) --------------------------------
 
     def _on_launch_drone(self, drone_id: str, folder: str = "") -> None:

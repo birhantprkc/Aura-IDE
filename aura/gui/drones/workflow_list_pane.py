@@ -186,7 +186,7 @@ class WorkflowListPane(QWidget):
         row_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         # -- Name (fixed width) --
-        name_label = QLabel(chain.name)
+        name_label = QLabel(chain.name or "Untitled")
         name_label.setStyleSheet(
             f"font-size: 13px; font-weight: 700; color: {FG};"
             " background: transparent;"

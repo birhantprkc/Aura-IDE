@@ -488,7 +488,7 @@ class ChainEditor(QWidget):
         self._auto_save_timer = QTimer(self)
         self._auto_save_timer.setSingleShot(True)
         self._auto_save_timer.setInterval(self._AUTO_SAVE_MS)
-        self._auto_save_timer.timeout.connect(self._save_chain)
+        self._auto_save_timer.timeout.connect(lambda: self._save_chain(auto=True))
 
     # ------------------------------------------------------------------
     # Layout
@@ -647,68 +647,104 @@ class ChainEditor(QWidget):
     # ------------------------------------------------------------------
     # Tab management
     # ------------------------------------------------------------------
-    def _on_tab_changed(self, index: int) -> None:
-        num_tabs = len(self._tabs)
+    # ------------------------------------------------------------------
+    # Tab helpers
+    # ------------------------------------------------------------------
 
-        # "+" tab clicked — create a new one
-        if index == num_tabs:
-            self._add_new_tab()
+    def _save_outgoing_tab_to_dict(self) -> None:
+        """Snapshot current canvas + chain metadata into self._tabs[current_tab_index].
+        Does NOT call _save_chain. Only runs if _current_tab_index is valid."""
+        cti = self._current_tab_index
+        if cti is None or cti >= len(self._tabs):
             return
+        self._tabs[cti]["canvas_data"] = self._snapshot_chain()
+        self._tabs[cti]["dirty"] = self._dirty
+        self._tabs[cti]["name"] = self._chain_name
+        self._tabs[cti]["description"] = self._chain_desc
+        self._tabs[cti]["auto_route"] = self._auto_route
 
-        if index < 0 or index >= num_tabs:
-            return
+    def _commit_outgoing_tab(self) -> None:
+        """Persist outgoing tab to disk (if dirty + chain_id), then snapshot into dict."""
+        if self._dirty and self._chain_id:
+            self._save_chain()
+        self._save_outgoing_tab_to_dict()
 
-        # No-op if already on this tab
-        if index == self._current_tab_index:
-            return
-
-        # Save current tab state before switching
-        if self._current_tab_index is not None and self._current_tab_index < num_tabs:
-            self._tabs[self._current_tab_index]["canvas_data"] = self._snapshot_chain()
-            self._tabs[self._current_tab_index]["dirty"] = self._dirty
-            self._tabs[self._current_tab_index]["name"] = self._chain_name
-            self._tabs[self._current_tab_index]["description"] = self._chain_desc
-            self._tabs[self._current_tab_index]["auto_route"] = self._auto_route
-
-        # Switch to target tab
+    def _activate_tab(self, index: int) -> None:
+        """Switch to tab at *index*: set current index, load chain data, update label, restart auto-save if dirty."""
         self._current_tab_index = index
         tab = self._tabs[index]
-
         if tab["chain_id"]:
             self._load_or_create_chain(tab["chain_id"])
         else:
             self._load_or_create_chain(None, canvas_data=tab.get("canvas_data"))
+        self._update_tab_label()
+        if self._dirty:
+            self._auto_save_timer.start()
 
-        # Sync tab label with current name
-        name = self._chain_name or "Untitled"
-        suffix = " *" if self._dirty else ""
-        self._tab_bar.setTabText(index, f"{name}{suffix}")
+    # ------------------------------------------------------------------
+    # Tab management
+    # ------------------------------------------------------------------
+
+    def _on_tab_changed(self, index: int) -> None:
+        self._auto_save_timer.stop()
+        num_tabs = len(self._tabs)
+        if index == num_tabs:
+            self._add_new_tab()
+            return
+        if index < 0 or index >= num_tabs:
+            return
+        if index == self._current_tab_index:
+            return
+        self._commit_outgoing_tab()
+        self._activate_tab(index)
 
     def _add_new_tab(self) -> None:
-        # Save current tab state
-        if self._current_tab_index is not None and self._current_tab_index < len(self._tabs):
-            self._tabs[self._current_tab_index]["canvas_data"] = self._snapshot_chain()
-            self._tabs[self._current_tab_index]["dirty"] = self._dirty
-            self._tabs[self._current_tab_index]["name"] = self._chain_name
-            self._tabs[self._current_tab_index]["description"] = self._chain_desc
-            self._tabs[self._current_tab_index]["auto_route"] = self._auto_route
-
+        self._auto_save_timer.stop()
+        self._commit_outgoing_tab()
         tab_data = {
-            "chain_id": None,
-            "name": "",
-            "description": "",
-            "auto_route": False,
+            "chain_id": None, "name": "", "description": "",
+            "auto_route": False, "dirty": False, "canvas_data": None,
+        }
+        self._tabs.append(tab_data)
+        idx = len(self._tabs) - 1
+        self._tab_bar.blockSignals(True)
+        self._tab_bar.insertTab(idx, "Untitled")
+        self._tab_bar.setCurrentIndex(idx)
+        self._tab_bar.blockSignals(False)
+        self._activate_tab(idx)
+        self._hide_plus_close_button()
+
+    def open_chain(self, chain_id: str | None) -> None:
+        """Open a chain in a tab. If chain_id is None, creates a new blank tab.
+        If the chain is already open in a tab, switches to that tab.
+        Otherwise loads it from disk into a new tab."""
+        if chain_id is None:
+            self._add_new_tab()
+            return
+        for i, t in enumerate(self._tabs):
+            if t.get("chain_id") == chain_id:
+                self._tab_bar.setCurrentIndex(i)
+                return
+        chain_data = load_chain(self._workspace_root, chain_id)
+        if not chain_data:
+            return
+        self._auto_save_timer.stop()
+        self._commit_outgoing_tab()
+        tab_data = {
+            "chain_id": chain_id,
+            "name": chain_data.get("name", ""),
+            "description": chain_data.get("description", ""),
+            "auto_route": chain_data.get("auto_route", False),
             "dirty": False,
             "canvas_data": None,
         }
         self._tabs.append(tab_data)
         idx = len(self._tabs) - 1
-
-        # Insert tab before the "+" tab
-        self._tab_bar.insertTab(idx, "Untitled")
+        self._tab_bar.blockSignals(True)
+        self._tab_bar.insertTab(idx, tab_data["name"] or "Untitled")
         self._tab_bar.setCurrentIndex(idx)
-        self._current_tab_index = idx
-        self._load_or_create_chain(None)
+        self._tab_bar.blockSignals(False)
+        self._activate_tab(idx)
         self._hide_plus_close_button()
 
     # ------------------------------------------------------------------
@@ -848,9 +884,9 @@ class ChainEditor(QWidget):
             self._tabs.append(tab_data)
             self._tab_bar.blockSignals(True)
             self._tab_bar.insertTab(0, "Untitled")
+            self._tab_bar.setCurrentIndex(0)
             self._tab_bar.blockSignals(False)
-            self._current_tab_index = 0
-            self._load_or_create_chain(None)
+            self._activate_tab(0)
         elif self._current_tab_index is None:
             self._tab_bar.blockSignals(True)
             self._tab_bar.setCurrentIndex(0)
@@ -914,6 +950,8 @@ class ChainEditor(QWidget):
                     dialog.accept()
                     return
             # New tab
+            self._auto_save_timer.stop()
+            self._commit_outgoing_tab()
             tab_data = {
                 "chain_id": selected_id,
                 "name": selected.get("name", "Untitled"),
@@ -926,10 +964,9 @@ class ChainEditor(QWidget):
             idx = len(self._tabs) - 1
             self._tab_bar.blockSignals(True)
             self._tab_bar.insertTab(idx, tab_data["name"])
-            self._tab_bar.blockSignals(False)
             self._tab_bar.setCurrentIndex(idx)
-            self._current_tab_index = idx
-            self._load_or_create_chain(selected_id)
+            self._tab_bar.blockSignals(False)
+            self._activate_tab(idx)
             self._hide_plus_close_button()
             dialog.accept()
 
@@ -939,8 +976,18 @@ class ChainEditor(QWidget):
 
         dialog.exec()
 
-    def _save_chain(self) -> None:
+    def _save_chain(self, auto: bool = False) -> None:
         data = self._snapshot_chain()
+
+        # Auto-save guard: don't create phantom entries for blank tabs
+        if auto and not self._chain_id:
+            nodes = data.get("nodes", [])
+            has_real_content = any(
+                n.get("drone_id", "") not in ("", "__draft__")
+                for n in nodes
+            ) or data.get("mission_core") is not None
+            if not has_real_content:
+                return
 
         if self._chain_id:
             save_chain(self._workspace_root, self._chain_id, data)
