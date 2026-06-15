@@ -431,7 +431,7 @@ class DroneArchitectController:
         *,
         failure_detail: Any = None,
     ):
-        """Called after Worker finishes building. Triggers installation."""
+        """Called after Worker finishes building. Marks the Drone ready."""
         if self._active_workspace is None:
             return ErrorResult(message="No active Drone")
 
@@ -519,9 +519,9 @@ class DroneArchitectController:
                     )
                 # Text provided — route to phase handler.
                 phase = ws.phase
-                if phase == WorkspacePhase.WORKSHOP.value:
+                if phase in {WorkspacePhase.WORKSHOP.value, WorkspacePhase.BUILDING.value, WorkspacePhase.ITERATING.value, WorkspacePhase.READY.value}:
                     return self._handle_workshop_message(text)
-                # Terminal/unusable phases — start fresh.
+                # Terminal/unusable phases (discarded, build_failed) — start fresh.
                 result = self.create_workspace("New Drone")
                 if result.kind == "error":
                     return result
