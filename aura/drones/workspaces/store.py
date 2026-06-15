@@ -47,6 +47,30 @@ def _safe_run_timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
 
 
+def _recover_workspace_from_candidate(
+    project_root: Path, folder: Path, candidate_manifest: Path
+) -> DroneWorkspace:
+    """Recover a DroneWorkspace from candidate/drone.json when workspace.json is missing or invalid."""
+    data = json.loads(candidate_manifest.read_text(encoding="utf-8"))
+    name = str(data.get("name") or "").strip() or folder.name
+    now = _utc_iso()
+    ws = DroneWorkspace(
+        workspace_id=folder.name,
+        display_name=name,
+        project_root=str(project_root),
+        workspace_root=str(folder),
+        mode="new",
+        phase="build_failed",
+        candidate_drone_id=data.get("id"),
+        last_error="Workspace manifest was missing or invalid. Recovered from candidate folder.",
+        created_at=now,
+        updated_at=now,
+    )
+    DroneWorkspaceStore.save_workspace(ws)
+    logger.info("Recovered workspace %s from candidate manifest", folder.name)
+    return ws
+
+
 class DroneWorkspaceStore:
     """Persistent store for DroneWorkspace state and folders.
 
@@ -77,16 +101,32 @@ class DroneWorkspaceStore:
             if not entry.is_dir():
                 continue
             manifest = entry / "workspace.json"
-            if not manifest.exists():
-                continue
-            try:
-                ws = DroneWorkspaceStore.load_workspace(
-                    project_root, entry.name
-                )
-                if ws is not None:
-                    results.append(ws)
-            except Exception:
-                logger.warning("Skipping invalid workspace: %s", entry.name)
+            ws: DroneWorkspace | None = None
+            if manifest.exists():
+                try:
+                    ws = DroneWorkspaceStore.load_workspace(
+                        project_root, entry.name
+                    )
+                except Exception:
+                    logger.warning("Failed to load workspace %s", entry.name)
+
+            if ws is None:
+                # Try recovery from candidate/drone.json
+                candidate_manifest = entry / "candidate" / "drone.json"
+                if candidate_manifest.exists():
+                    try:
+                        ws = _recover_workspace_from_candidate(
+                            project_root, entry, candidate_manifest
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to recover workspace from candidate: %s",
+                            entry.name,
+                        )
+                if ws is None:
+                    continue
+
+            results.append(ws)
         results.sort(key=lambda w: w.updated_at, reverse=True)
         return results
 
@@ -100,7 +140,7 @@ class DroneWorkspaceStore:
             return None
         try:
             data = json.loads(manifest.read_text(encoding="utf-8"))
-            return DroneWorkspace(**data)
+            return DroneWorkspace.from_dict(data)
         except Exception:
             logger.warning("Failed to load workspace %s", workspace_id)
             return None
