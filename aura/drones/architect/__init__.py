@@ -8,7 +8,6 @@ from aura.drones.architect.commands import DroneCommand, parse_drone_command
 from aura.drones.architect.controller import DroneArchitectController
 from aura.drones.architect.installer import install_or_reinstall
 from aura.drones.architect.results import (
-    AwaitingDecision,
     BuildCompleted,
     BuildFailed,
     BuildStarted,
@@ -16,9 +15,6 @@ from aura.drones.architect.results import (
     ErrorResult,
     Installed,
     ModeEntered,
-    ReadinessFailed,
-    ReadinessPassed,
-    ReadinessRunning,
     ThreadCreated,
     ThreadSwitched,
     WorkshopClarifying,
@@ -44,10 +40,6 @@ __all__ = [
     "BuildStarted",
     "BuildCompleted",
     "BuildFailed",
-    "ReadinessRunning",
-    "ReadinessPassed",
-    "ReadinessFailed",
-    "AwaitingDecision",
     "Installed",
     "Discarded",
     "ErrorResult",

@@ -44,7 +44,7 @@ _HELP_PATTERNS = [
     r"^commands\??\s*$",
 ]
 
-_DECISION_COMMAND_PHASES = {"awaiting_decision", "readiness_failed"}
+_DECISION_COMMAND_PHASES = {"build_failed"}
 
 
 def parse_drone_command(text: str, phase: str) -> tuple[DroneCommand, str | None]:
@@ -76,12 +76,6 @@ def parse_drone_command(text: str, phase: str) -> tuple[DroneCommand, str | None
         for pattern in _DISCARD_PATTERNS:
             if re.search(pattern, lowered):
                 return DroneCommand.DISCARD, None
-
-        # In awaiting_decision, any non-command text is a revision.
-        if phase == "awaiting_decision":
-            return DroneCommand.REVISE, text.strip()
-
-        # For readiness_failed, non-command text is unknown.
         return DroneCommand.UNKNOWN, None
 
     # In workshop, building, iterating:

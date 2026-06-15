@@ -93,9 +93,9 @@ def _builder_status_for_phase(phase: str) -> str:
         return "Draft"
     if phase in {"building", "iterating"}:
         return "Building"
-    if phase in {"readiness_running", "installing", "awaiting_decision"}:
-        return "Testing"
-    if phase == "readiness_failed":
+    if phase in {"installing"}:
+        return "Installing"
+    if phase == "build_failed":
         return "Needs Fix"
     if phase == "installed":
         return "Ready"
@@ -251,7 +251,7 @@ class DroneStore:
         """Update the manifest for an already registered folder-backed Drone.
 
         This is not a creation endpoint. New Drones must be installed with
-        register_drone_folder so their code and readiness check are present.
+        register_drone_folder so their code is present.
         """
         _ = workspace_root
         DroneStore.validate_drone(drone)
@@ -308,19 +308,11 @@ class DroneStore:
     def register_drone_folder(
         workspace_root: Path,
         source_folder: Path,
-        *,
-        readiness_result: dict | None = None,
     ) -> DroneDefinition:
         """Validate and install a folder-backed Drone into global storage."""
         _ = workspace_root
         source_folder = source_folder.resolve()
         drone = DroneStore.load_drone_from_folder(source_folder)
-        if readiness_result is None:
-            from aura.drones.folder_runner import run_drone_readiness
-
-            readiness_result = run_drone_readiness(source_folder, drone, workspace_root)
-        if not bool(readiness_result.get("ok")):
-            raise ValueError(f"Drone readiness check failed: {readiness_result}")
 
         target_folder = _global_drones_root() / drone.id
         target_folder.parent.mkdir(parents=True, exist_ok=True)

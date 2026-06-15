@@ -80,7 +80,7 @@ def test_first_real_description_creates_visible_builder_entry(tmp_path: Path) ->
 @pytest.mark.parametrize(
     "phase",
     [
-        WorkspacePhase.READINESS_FAILED.value,
+        WorkspacePhase.BUILD_FAILED.value,
         WorkspacePhase.INSTALLED.value,
         WorkspacePhase.DISCARDED.value,
     ],
@@ -112,7 +112,7 @@ def test_drone_enter_mode_ignores_stale_failed_or_terminal_active_workspace(
 
 @pytest.mark.parametrize(
     "phase",
-    [WorkspacePhase.READINESS_FAILED.value],
+    [WorkspacePhase.BUILD_FAILED.value],
 )
 def test_explicitly_selected_failed_builder_drone_accepts_revision(
     tmp_path: Path,
@@ -137,24 +137,21 @@ def test_explicitly_selected_failed_builder_drone_accepts_revision(
 def test_builder_candidate_entry_is_visible_but_not_runnable(tmp_path: Path) -> None:
     workspace = DroneWorkspaceStore.create_workspace(tmp_path, "Repo Scout")
     _write_drone_folder(candidate_dir(tmp_path, workspace.workspace_id))
-    workspace.phase = WorkspacePhase.AWAITING_DECISION.value
+    workspace.phase = WorkspacePhase.BUILDING.value
     workspace.candidate_drone_id = "repo-scout"
     DroneWorkspaceStore.save_workspace(workspace)
 
     entries = DroneStore.list_drone_entries(tmp_path)
 
     assert [(entry.name, entry.status, entry.ready) for entry in entries] == [
-        ("Repo Scout", "Testing", False)
+        ("Repo Scout", "Building", False)
     ]
     assert DroneStore.load_drone(tmp_path, "repo-scout") is None
 
 
 def test_ready_step_promotes_builder_entry_to_ready_drone(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    block_real_subprocess,
 ) -> None:
-    monkeypatch.setattr("aura.drones.folder_runner.subprocess.run", block_real_subprocess)
     workspace = DroneWorkspaceStore.create_workspace(tmp_path, "Repo Scout")
     _write_drone_folder(candidate_dir(tmp_path, workspace.workspace_id))
 
@@ -169,10 +166,10 @@ def test_ready_step_promotes_builder_entry_to_ready_drone(
 
 
 def test_install_and_register_are_not_user_commands() -> None:
-    assert parse_drone_command("register it", "awaiting_decision")[0] is DroneCommand.REVISE
-    assert parse_drone_command("register the drone", "awaiting_decision")[0] is DroneCommand.REVISE
-    assert parse_drone_command("install", "awaiting_decision")[0] is DroneCommand.REVISE
-    assert parse_drone_command("install the drone", "readiness_failed")[0] is DroneCommand.UNKNOWN
+    assert parse_drone_command("register it", "build_failed")[0] is DroneCommand.UNKNOWN
+    assert parse_drone_command("register the drone", "build_failed")[0] is DroneCommand.UNKNOWN
+    assert parse_drone_command("install", "build_failed")[0] is DroneCommand.UNKNOWN
+    assert parse_drone_command("install the drone", "build_failed")[0] is DroneCommand.UNKNOWN
 
 
 def test_build_failure_uses_dispatch_metadata_error(tmp_path: Path) -> None:

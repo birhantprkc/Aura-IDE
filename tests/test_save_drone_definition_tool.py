@@ -75,15 +75,15 @@ def test_register_drone_folder_creates_and_loads_drone(tmp_path: Path) -> None:
     assert folder.exists()
 
 
-def test_register_drone_folder_rejects_broken_entrypoint(tmp_path: Path) -> None:
+def test_register_drone_folder_rejects_missing_entrypoint(tmp_path: Path) -> None:
     folder = _write_folder(tmp_path)
-    # Overwrite main.py so it returns invalid JSON (crashes readiness)
-    (folder / "main.py").write_text(
-        "import sys\n"
-        "sys.stderr.write('boom')\n"
-        "sys.exit(1)\n",
-        encoding="utf-8",
-    )
+    # Use ./ prefix so validation checks the file exists in the folder
+    drone_json_path = folder / "drone.json"
+    data = json.loads(drone_json_path.read_text(encoding="utf-8"))
+    data["entrypoint"]["command"] = ["./main.py"]
+    drone_json_path.write_text(json.dumps(data), encoding="utf-8")
+    (folder / "main.py").unlink()
+
     registry = ToolRegistry(workspace_root=tmp_path, mode="worker")
 
     result = registry.execute(

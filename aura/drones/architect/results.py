@@ -57,32 +57,6 @@ class BuildFailed:
 
 
 @dataclass(frozen=True)
-class ReadinessRunning:
-    kind: str = "readiness_running"
-
-
-@dataclass(frozen=True)
-class ReadinessPassed:
-    kind: str = "readiness_passed"
-    result: dict = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class ReadinessFailed:
-    kind: str = "readiness_failed"
-    error: str = ""
-    detail: dict | None = None
-
-
-@dataclass(frozen=True)
-class AwaitingDecision:
-    kind: str = "awaiting_decision"
-    workspace_id: str = ""
-    drone_name: str = ""
-    ready_message: str = ""
-
-
-@dataclass(frozen=True)
 class Installed:
     kind: str = "installed"
     drone_id: str = ""
@@ -120,6 +94,3 @@ class ThreadRenamed:
 class ErrorResult:
     kind: str = "error"
     message: str = ""
-
-
-

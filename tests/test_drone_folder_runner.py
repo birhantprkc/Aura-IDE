@@ -26,11 +26,8 @@ def _register_cancellable_drone(workspace: Path):
     (folder / "main.py").write_text(
         "import json, sys, time\n"
         "payload = json.loads(sys.stdin.read())\n"
-        "if payload.get('readiness'):\n"
-        "    print(json.dumps({'ok': True, 'ready': True}))\n"
-        "else:\n"
-        "    time.sleep(30)\n"
-        "    print(json.dumps({'ok': True, 'finished': True}))\n",
+        "time.sleep(30)\n"
+        "print(json.dumps({'ok': True, 'finished': True}))\n",
         encoding="utf-8",
     )
     (folder / "drone.json").write_text(

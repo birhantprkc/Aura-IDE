@@ -79,5 +79,6 @@ through their folder entrypoint, not through an LLM tool menu.
 Use `/drone` to enter Drone Architect mode, then describe the Drone you want in
 the next normal chat message. Aura may use the Planner/Worker harness to author
 the folder, but registration goes through `register_drone_folder`, which
-validates the manifest and runs a safe readiness launch (trial run) before
-installing the Drone globally.
+validates the folder structure (drone.json must parse, entrypoint files must exist)
+before copying the Drone into Aura's global directory. Real Drone behavior is
+checked when the user runs the Drone from Workbay.

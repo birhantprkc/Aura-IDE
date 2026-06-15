@@ -188,7 +188,7 @@ class DroneWorkspaceStore:
             if ws.phase in {
                 "discarded",
                 "installed",
-                "readiness_failed",
+                "build_failed",
             }:
                 return None
             return ws
@@ -244,7 +244,7 @@ class DroneWorkspaceStore:
         target_folder = candidate_dir(project_root, workspace.workspace_id)
         shutil.copytree(source_folder, target_folder, dirs_exist_ok=True)
 
-        workspace.phase = "awaiting_decision"
+        workspace.phase = "building"
         workspace.build_brief = drone.description or ""
         workspace.candidate_drone_id = drone_id
         DroneWorkspaceStore.save_workspace(workspace)

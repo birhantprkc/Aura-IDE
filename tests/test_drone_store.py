@@ -101,24 +101,14 @@ def test_allowed_tools_defaults_empty_and_does_not_make_valid_drone() -> None:
 
 def test_register_requires_entrypoint_module(tmp_path: Path) -> None:
     source = _write_drone_folder(tmp_path / "build")
+    # Use ./ prefix so validation checks the file exists in the folder
+    drone_json_path = source / "drone.json"
+    data = json.loads(drone_json_path.read_text(encoding="utf-8"))
+    data["entrypoint"]["command"] = ["./main.py"]
+    drone_json_path.write_text(json.dumps(data), encoding="utf-8")
     (source / "main.py").unlink()
 
-    with pytest.raises(ValueError, match="readiness"):
-        DroneStore.register_drone_folder(tmp_path, source)
-
-
-def test_register_rejects_broken_readiness(tmp_path: Path) -> None:
-    source = _write_drone_folder(tmp_path / "build")
-    # Corrupt main.py so readiness fails
-    (source / "main.py").write_text(
-        "import json, sys\n"
-        "payload = json.loads(sys.stdin.read())\n"
-        "result = {'ok': False, 'error': 'not ready'}\n"
-        "print(json.dumps(result))\n",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="readiness"):
+    with pytest.raises(ValueError, match="not found"):
         DroneStore.register_drone_folder(tmp_path, source)
 
 

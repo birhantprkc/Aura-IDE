@@ -8,13 +8,11 @@ from typing import Self
 class WorkspacePhase(Enum):
     WORKSHOP = "workshop"
     BUILDING = "building"
-    READINESS_RUNNING = "readiness_running"
-    READINESS_FAILED = "readiness_failed"
-    AWAITING_DECISION = "awaiting_decision"
     ITERATING = "iterating"
     INSTALLING = "installing"
     INSTALLED = "installed"
     DISCARDED = "discarded"
+    BUILD_FAILED = "build_failed"
 
 
 @dataclass
@@ -29,11 +27,27 @@ class DroneWorkspace:
     installed_drone_id: str | None = None
     build_brief: str = ""
     last_build_run: str | None = None
-    last_readiness_result: dict | None = None
     active_thread_id: str | None = None
     last_error: str | None = None
     created_at: str = ""
     updated_at: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Self:
+        """Create workspace from JSON dict, handling old/stale keys."""
+        # Drop stale keys that existed in older workspace versions.
+        data = {k: v for k, v in data.items() if k not in ("last_readiness_result",)}
+        # Map old phase strings to current equivalents.
+        phase = str(data.get("phase", "")).lower()
+        if phase == "readiness_running":
+            data["phase"] = "building"
+        elif phase == "readiness_failed":
+            data["phase"] = "build_failed"
+        elif phase == "awaiting_decision":
+            data["phase"] = "building"
+        return cls(
+            **{k: v for k, v in data.items() if k in {f.name for f in __import__("dataclasses").fields(cls)}}
+        )
 
 
 @dataclass

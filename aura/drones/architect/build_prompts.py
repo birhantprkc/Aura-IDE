@@ -24,8 +24,7 @@ Write the following files:
   entrypoint (dict with kind/command/protocol), route, input_contract, cargo_contract,
   permissions, secrets, dependencies, manifest_version, scope, runtime
 - An entrypoint program (e.g. main.py) — a self-contained script that reads JSON from
-  stdin, calls an internal run(payload) function, prints JSON to stdout, and handles
-  trial_run/readiness safely without mutating external state.
+  stdin, calls an internal run(payload) function, prints JSON to stdout.
 - requirements.txt — only if dependencies beyond stdlib are needed.
 - Optional README.md.
 

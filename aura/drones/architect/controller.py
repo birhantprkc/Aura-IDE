@@ -18,8 +18,6 @@ from aura.drones.architect.results import (
     ErrorResult,
     Installed,
     ModeEntered,
-    ReadinessFailed,
-    ReadinessPassed,
     ThreadCreated,
     ThreadRenamed,
     ThreadSwitched,
@@ -41,7 +39,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _AUTO_RESUME_BLOCKED_PHASES = {
-    WorkspacePhase.READINESS_FAILED.value,
+    WorkspacePhase.BUILD_FAILED.value,
     WorkspacePhase.INSTALLED.value,
     WorkspacePhase.DISCARDED.value,
 }
@@ -357,11 +355,8 @@ class DroneArchitectController:
         if phase == WorkspacePhase.BUILDING.value:
             return ErrorResult(message="Build already in progress")
 
-        if phase == WorkspacePhase.READINESS_FAILED.value:
+        if phase == WorkspacePhase.BUILD_FAILED.value:
             return self._handle_failed_phase_message(text)
-
-        if phase == WorkspacePhase.AWAITING_DECISION.value:
-            return self._handle_decision_message(text)
 
         if phase == WorkspacePhase.ITERATING.value:
             return self._handle_iterating_message(text)
@@ -432,12 +427,12 @@ class DroneArchitectController:
         *,
         failure_detail: Any = None,
     ):
-        """Called after Worker finishes building. Triggers readiness."""
+        """Called after Worker finishes building. Triggers installation."""
         if self._active_workspace is None:
             return ErrorResult(message="No active Drone")
 
         if success:
-            self._active_workspace.phase = WorkspacePhase.READINESS_RUNNING.value
+            self._active_workspace.phase = WorkspacePhase.INSTALLING.value
             DroneWorkspaceStore.save_workspace(self._active_workspace)
 
             # Extract drone_id from candidate drone.json.
@@ -472,31 +467,12 @@ class DroneArchitectController:
                 summary=error,
                 metadata=failure_detail,
             )
-            self._active_workspace.phase = WorkspacePhase.READINESS_FAILED.value
+            self._active_workspace.phase = WorkspacePhase.BUILD_FAILED.value
             self._active_workspace.last_error = failure_error
             DroneWorkspaceStore.save_workspace(self._active_workspace)
             return BuildFailed(error=failure_error)
 
-    def on_readiness_completed(self, result: dict):
-        """Called after readiness check. Moves to awaiting_decision on success."""
-        if self._active_workspace is None:
-            return ErrorResult(message="No active Drone")
 
-        if result.get("ok"):
-            self._active_workspace.phase = WorkspacePhase.AWAITING_DECISION.value
-            self._active_workspace.last_readiness_result = result
-            DroneWorkspaceStore.save_workspace(self._active_workspace)
-            return ReadinessPassed(result=result)
-        else:
-            self._active_workspace.phase = WorkspacePhase.READINESS_FAILED.value
-            self._active_workspace.last_error = result.get(
-                "error", "Unknown readiness error"
-            )
-            self._active_workspace.last_readiness_result = result
-            DroneWorkspaceStore.save_workspace(self._active_workspace)
-            return ReadinessFailed(
-                error=result.get("error", ""), detail=result
-            )
 
     # ------------------------------------------------------------------
     # Terminal actions
@@ -519,10 +495,10 @@ class DroneArchitectController:
             )
         else:
             self._active_workspace.last_error = result.get("error", "")
-            self._active_workspace.phase = WorkspacePhase.READINESS_FAILED.value
+            self._active_workspace.phase = WorkspacePhase.BUILD_FAILED.value
             DroneWorkspaceStore.save_workspace(self._active_workspace)
             return ErrorResult(
-                message=f"Could not make Drone Ready: {result.get('error', '')}"
+                message=f"Could not install Drone: {result.get('error', '')}"
             )
 
     def mark_ready_step_started(self) -> None:
@@ -567,8 +543,6 @@ class DroneArchitectController:
                 phase = ws.phase
                 if phase == WorkspacePhase.WORKSHOP.value:
                     return self._handle_workshop_message(text)
-                if phase == WorkspacePhase.AWAITING_DECISION.value:
-                    return self._handle_decision_message(text)
                 # Terminal/unusable phases — start fresh.
                 result = self.create_workspace("New Drone")
                 if result.kind == "error":
@@ -615,7 +589,7 @@ class DroneArchitectController:
         return WorkshopRequested(messages=messages)
 
     def _handle_failed_phase_message(self, text: str):
-        """Handle messages in readiness_failed phase."""
+        """Handle messages in build_failed phase."""
         cmd, arg = parse_drone_command(text, self._active_workspace.phase)
 
         if cmd == DroneCommand.NEW:
@@ -634,36 +608,6 @@ class DroneArchitectController:
         DroneWorkspaceStore.save_workspace(self._active_workspace)
 
         repair_spec = build_repair_dispatch_prompt(self._active_workspace, text)
-        self._pending_dispatch_spec = repair_spec
-
-        return BuildStarted(
-            build_brief=self._active_workspace.build_brief,
-            dispatch_spec=repair_spec,
-        )
-
-    def _handle_decision_message(self, text: str):
-        """Handle messages in awaiting_decision phase."""
-        cmd, arg = parse_drone_command(text, self._active_workspace.phase)
-
-        if cmd == DroneCommand.DISCARD:
-            return self.discard_workspace()
-
-        if cmd == DroneCommand.NEW:
-            return self.create_workspace(arg or "New Drone")
-
-        if cmd == DroneCommand.LOAD:
-            if arg:
-                return self.load_workspace(arg)
-            return ErrorResult(message="Load requires a Drone name")
-
-        # REVISE or UNKNOWN — implicit revision.
-        revision_text = arg if cmd == DroneCommand.REVISE else text
-        self._active_workspace.phase = WorkspacePhase.ITERATING.value
-        DroneWorkspaceStore.save_workspace(self._active_workspace)
-
-        repair_spec = build_repair_dispatch_prompt(
-            self._active_workspace, revision_text
-        )
         self._pending_dispatch_spec = repair_spec
 
         return BuildStarted(

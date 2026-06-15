@@ -268,7 +268,7 @@ class PlannerHandlersMixin:
         approval_cb: Any,
         reject_all: bool,
     ) -> ToolExecResult:
-        """Validate, readiness-test, and install a folder-backed Drone."""
+        """Validate and register a completed folder-backed Drone."""
         folder_raw = str(args.get("folder_path") or "").strip()
         if not folder_raw:
             return ToolExecResult(
@@ -283,24 +283,7 @@ class PlannerHandlersMixin:
                     payload={"ok": False, "error": f"Drone folder does not exist: {folder_raw}"},
                 )
 
-            from aura.drones.folder_runner import run_drone_readiness
-
-            drone = DroneStore.load_drone_from_folder(folder)
-            readiness_result = run_drone_readiness(folder, drone)
-            if not bool(readiness_result.get("ok")):
-                return ToolExecResult(
-                    ok=False,
-                    payload={
-                        "ok": False,
-                        "error": "Drone readiness check failed",
-                        "readiness_result": readiness_result,
-                    },
-                )
-            drone = DroneStore.register_drone_folder(
-                self._root,
-                folder,
-                readiness_result=readiness_result,
-            )
+            drone = DroneStore.register_drone_folder(self._root, folder)
             return ToolExecResult(
                 ok=True,
                 payload={
@@ -313,7 +296,6 @@ class PlannerHandlersMixin:
                     "runtime": drone.runtime,
                     "entrypoint": drone.entrypoint,
                     "permissions": drone.permissions,
-                    "readiness_result": readiness_result,
                 },
                 extras={
                     "drone_saved": True,
