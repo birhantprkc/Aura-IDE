@@ -157,31 +157,45 @@ class DroneModeCoordinator(QObject):
         )
 
     def _attach_drone_ui(self) -> bool:
-        """Swap project left pane for drone workspace pane in the splitter.
-
-        Returns True on success, False if the left pane wasn't found.
-        """
-        idx = self._main_splitter.indexOf(self._left_pane)
-        if idx < 0:
-            logger.error("Cannot attach drone UI: left pane not found in splitter")
-            return False
-        self._left_pane.hide()
-        self._main_splitter.replaceWidget(idx, self._workspace_pane)
+        """Idempotent and recoverable — always returns True."""
+        if self._main_splitter.indexOf(self._workspace_pane) >= 0:
+            self._workspace_pane.show()
+            self._left_pane.hide()
+            return True
+        if self._main_splitter.indexOf(self._left_pane) >= 0:
+            idx = self._main_splitter.indexOf(self._left_pane)
+            self._left_pane.hide()
+            self._main_splitter.replaceWidget(idx, self._workspace_pane)
+            self._workspace_pane.show()
+            return True
+        logger.warning(
+            "Neither left pane nor workspace pane found in splitter "
+            "— inserting workspace pane at index 0"
+        )
+        self._main_splitter.insertWidget(0, self._workspace_pane)
         self._workspace_pane.show()
+        self._left_pane.hide()
         return True
 
     def _attach_project_ui(self) -> bool:
-        """Swap drone workspace pane back to project left pane in the splitter.
-
-        Returns True on success, False if the workspace pane wasn't found.
-        """
-        idx = self._main_splitter.indexOf(self._workspace_pane)
-        if idx < 0:
-            logger.error("Cannot attach project UI: workspace pane not found in splitter")
-            return False
-        self._workspace_pane.hide()
-        self._main_splitter.replaceWidget(idx, self._left_pane)
+        """Idempotent and recoverable — always returns True."""
+        if self._main_splitter.indexOf(self._left_pane) >= 0:
+            self._left_pane.show()
+            self._workspace_pane.hide()
+            return True
+        if self._main_splitter.indexOf(self._workspace_pane) >= 0:
+            idx = self._main_splitter.indexOf(self._workspace_pane)
+            self._workspace_pane.hide()
+            self._main_splitter.replaceWidget(idx, self._left_pane)
+            self._left_pane.show()
+            return True
+        logger.warning(
+            "Neither left pane nor workspace pane found in splitter "
+            "— inserting left pane at index 0"
+        )
+        self._main_splitter.insertWidget(0, self._left_pane)
         self._left_pane.show()
+        self._workspace_pane.hide()
         return True
 
     def _restore_project_chat(self) -> None:
