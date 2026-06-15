@@ -202,7 +202,7 @@ class DroneModeCoordinator(QObject):
         """Restore suspended project messages into bridge and chat, then clear the saved copy."""
         if self._suspended_project_messages is not None:
             self._bridge.reset_history()
-            self._bridge.history().messages = copy.deepcopy(self._suspended_project_messages)
+            self._bridge.history.messages = copy.deepcopy(self._suspended_project_messages)
             self._chat.reset()
             self._chat.replay_messages(self._suspended_project_messages)
             self._suspended_project_messages = None
@@ -222,7 +222,7 @@ class DroneModeCoordinator(QObject):
         else:
             entering_fresh = True
             # Save/suspend the current project conversation before swapping to Drone mode
-            self._suspended_project_messages = copy.deepcopy(self._bridge.history().messages)
+            self._suspended_project_messages = copy.deepcopy(self._bridge.history.messages)
             self._bridge.reset_history()
             self._chat.reset()
 
@@ -470,7 +470,7 @@ class DroneModeCoordinator(QObject):
         if ws is None:
             return
         project_root = Path(ws.project_root)
-        messages = copy.deepcopy(self._bridge.history().messages)
+        messages = copy.deepcopy(self._bridge.history.messages)
         thread = DroneWorkspaceStore.load_thread(
             project_root, ws.workspace_id, self._active_thread_id
         )
@@ -488,7 +488,7 @@ class DroneModeCoordinator(QObject):
         if thread is None:
             return
         self._bridge.reset_history()
-        self._bridge.history().messages = copy.deepcopy(thread.messages)
+        self._bridge.history.messages = copy.deepcopy(thread.messages)
         self._chat.reset()
         self._chat.replay_messages(thread.messages)
 
