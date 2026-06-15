@@ -461,7 +461,6 @@ class DroneArchitectController:
 
         if success:
             self._active_workspace.phase = WorkspacePhase.READY.value
-            DroneWorkspaceStore.save_workspace(self._active_workspace)
 
             # Extract drone_id from candidate drone.json.
             drone_id = ""
@@ -484,6 +483,22 @@ class DroneArchitectController:
                     logger.warning(
                         "Could not load drone.json from candidate %s", cand
                     )
+
+                # Install into global storage so the Drone appears as runnable.
+                if drone_id:
+                    try:
+                        DroneStore.register_drone_folder(
+                            self._workspace_root, cand
+                        )
+                        self._active_workspace.installed_drone_id = drone_id
+                        self._active_workspace.edit_source_folder = str(
+                            DroneStore.drone_folder(drone_id)
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to install drone into global storage: %s",
+                            exc,
+                        )
 
             self._last_candidate_path = candidate_path
             self._last_drone_id = drone_id
