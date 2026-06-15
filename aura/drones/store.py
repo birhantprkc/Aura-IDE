@@ -190,7 +190,7 @@ class DroneStore:
                 if workspace.edit_source_folder:
                     drone_folder_path = Path(workspace.edit_source_folder)
                 else:
-                    drone_folder_path = candidate_dir(Path(workspace.project_root), workspace.workspace_id)
+                    drone_folder_path = candidate_dir(workspace_root, workspace.workspace_id)
                 drone_json_path = drone_folder_path / "drone.json"
 
                 if drone_json_path.is_file():
@@ -237,7 +237,7 @@ class DroneStore:
 
             # ── No valid drone.json — fall through to phase-based draft row ──
 
-            candidate_folder = candidate_dir(Path(workspace.project_root), workspace.workspace_id)
+            candidate_folder = candidate_dir(workspace_root, workspace.workspace_id)
             candidate = _read_candidate_manifest_summary(candidate_folder)
             installed_drone = (
                 installed.get(workspace.installed_drone_id)
