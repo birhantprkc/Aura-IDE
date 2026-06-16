@@ -34,6 +34,16 @@ CRITICAL RULES:
 - Use "python" as the first entrypoint command element (or "node" for JS).
 - The build brief below is the source of truth for what to build.
 
+- input_contract and cargo_contract each take the shape:
+  {{"type": "<PascalCaseName>", "description": "...", "schema": {{<field>: "<string|number|bool|list|object|any>"}}}}
+  cargo_contract.schema lists the top-level fields the drone prints to stdout.
+  input_contract.schema lists the top-level fields the drone requires from its stdin.
+  When the build brief says this drone consumes another drone's output,
+  input_contract.schema must name the fields it reads with coarse types,
+  so the chain validator can match shapes structurally.
+  A pure source drone may leave input_contract empty (or omit it);
+  a pure sink may leave cargo_contract empty (or omit it).
+
 BUILD BRIEF:
 {brief.build_brief}
 """
@@ -43,6 +53,9 @@ BUILD BRIEF:
 2. Verify drone.json is valid JSON with the required fields: id, name, description,
    instructions, write_policy, output_contract, entrypoint.
 3. Verify the entrypoint command points to a file that exists in the candidate folder.
+4. drone.json includes both input_contract and cargo_contract keys. Each non-empty
+   contract contains a "schema" object whose values are drawn from the coarse type set
+   (string|number|bool|list|object|any).
 """
 
     return {

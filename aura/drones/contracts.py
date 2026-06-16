@@ -48,6 +48,27 @@ BUILTIN_TYPES: dict[str, ArtifactType] = {
 }
 
 
+def resolve_contract_type(contract: dict) -> ArtifactType | None:
+    """Resolve a contract dict to an ArtifactType.
+
+    Priority:
+    1. Non-empty schema \u2192 return inline ArtifactType (name from "type" or "inline")
+    2. Non-empty type name \u2192 look up in BUILTIN_TYPES registry
+    3. Otherwise \u2192 None
+    """
+    schema = contract.get("schema") or {}
+    if schema:  # non-empty dict
+        return ArtifactType(
+            name=contract.get("type") or "inline",
+            schema=schema,
+            description=contract.get("description") or "",
+        )
+    type_name = contract.get("type") or ""
+    if type_name:
+        return BUILTIN_TYPES.get(type_name)
+    return None
+
+
 # ── Contract validation ────────────────────────────────────────────
 
 

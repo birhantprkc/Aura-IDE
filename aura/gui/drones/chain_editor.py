@@ -447,6 +447,11 @@ class ChainEditor(QWidget):
 
         self._build_layout()
 
+        self._auto_save_timer = QTimer(self)
+        self._auto_save_timer.setSingleShot(True)
+        self._auto_save_timer.setInterval(self._AUTO_SAVE_MS)
+        self._auto_save_timer.timeout.connect(lambda: self._save_chain(auto=True))
+
         # Populate tabs from saved workflows
         self._tab_bar.blockSignals(True)
         chains = list_chains(self._workspace_root)
@@ -484,11 +489,6 @@ class ChainEditor(QWidget):
             self._on_tab_changed(0)
 
         self._roster.populate()
-
-        self._auto_save_timer = QTimer(self)
-        self._auto_save_timer.setSingleShot(True)
-        self._auto_save_timer.setInterval(self._AUTO_SAVE_MS)
-        self._auto_save_timer.timeout.connect(lambda: self._save_chain(auto=True))
 
     # ------------------------------------------------------------------
     # Layout

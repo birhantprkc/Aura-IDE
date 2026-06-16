@@ -817,7 +817,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _open_or_toggle_drone_workbay(self) -> None:
         """Open the Drone Workbay as a standalone window or focus it."""
+        print(f"[DRONE] clicked. workspace_root={self._workspace_root!r} existing_window={self._drone_workbay_window!r}")
         if self._workspace_root is None:
+            print("[DRONE] BAILING — workspace_root is None")
             return
         if self._drone_workbay_window is not None:
             if self._drone_workbay_window.is_open():
@@ -827,16 +829,22 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 self._drone_workbay_window.show_and_raise()
             return
 
-        self._drone_workbay_window = DroneWorkbayWindow(
-            workspace_root=self._workspace_root,
-            chain_id=None,
-            provider_id=self._settings.planner_provider,
-            model=self.current_model(),
-            thinking=self.current_thinking(),
-            temperature=self._settings.temperature,
-            initial_geometry=self._settings.drone_workbay_window_geometry,
-            parent=self,
-        )
+        try:
+            self._drone_workbay_window = DroneWorkbayWindow(
+                workspace_root=self._workspace_root,
+                chain_id=None,
+                provider_id=self._settings.planner_provider,
+                model=self.current_model(),
+                thinking=self.current_thinking(),
+                temperature=self._settings.temperature,
+                initial_geometry=self._settings.drone_workbay_window_geometry,
+                parent=self,
+            )
+            print("[DRONE] window constructed OK")
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
         workbay = self._drone_workbay_window
         editor = workbay.chain_editor
         editor.goBackRequested.connect(workbay.hide)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from aura.drones.contracts import BUILTIN_TYPES, is_compatible
+from aura.drones.contracts import BUILTIN_TYPES, is_compatible, resolve_contract_type
 from aura.drones.definition import DroneDefinition
 
 
@@ -160,47 +160,50 @@ def validate(
         if not producer_drone or not consumer_drone:
             continue
 
-        producer_type_name = (producer_drone.cargo_contract or {}).get("type", "")
-        consumer_type_name = (consumer_drone.input_contract or {}).get("type", "")
+        producer_contract = producer_drone.cargo_contract or {}
+        consumer_contract = consumer_drone.input_contract or {}
 
-        # Free-form consumer accepts anything
-        if not consumer_type_name:
-            continue
+        producer_type = resolve_contract_type(producer_contract)
+        consumer_type = resolve_contract_type(consumer_contract)
 
-        # Producer has no type but consumer requires one
-        if not producer_type_name:
-            errors.append(
-                f"Edge from '{edge.from_node}' to '{edge.to_node}': "
-                f"producer drone '{producer_drone.id}' has no produces type "
-                f"but consumer '{consumer_drone.id}' requires "
-                f"'{consumer_type_name}'."
-            )
-            continue
+        producer_type_name = producer_contract.get("type") or ""
+        consumer_type_name = consumer_contract.get("type") or ""
 
-        producer_type = BUILTIN_TYPES.get(producer_type_name)
-        consumer_type = BUILTIN_TYPES.get(consumer_type_name)
-
-        if producer_type is None:
-            errors.append(
-                f"Edge from '{edge.from_node}' to '{edge.to_node}': "
-                f"producer type '{producer_type_name}' is not recognized."
-            )
-            continue
-
-        if consumer_type is None:
+        # Consumer type not recognized (name given but no schema and not in registry)
+        if consumer_type is None and consumer_type_name:
             errors.append(
                 f"Edge from '{edge.from_node}' to '{edge.to_node}': "
                 f"consumer type '{consumer_type_name}' is not recognized."
             )
             continue
 
+        # Free-form consumer (no type requested at all)
+        if consumer_type is None:
+            continue
+
+        # Producer has no compatible output
+        if producer_type is None:
+            if producer_type_name:
+                errors.append(
+                    f"Edge from '{edge.from_node}' to '{edge.to_node}': "
+                    f"producer type '{producer_type_name}' is not recognized."
+                )
+            else:
+                errors.append(
+                    f"Edge from '{edge.from_node}' to '{edge.to_node}': "
+                    f"producer drone '{producer_drone.id}' has no produces type "
+                    f"but consumer '{consumer_drone.id}' requires "
+                    f"'{consumer_type.name}'."
+                )
+            continue
+
+        # Type mismatch
         if not is_compatible(producer_type, consumer_type):
             errors.append(
                 f"Edge from '{edge.from_node}' to '{edge.to_node}': "
-                f"type mismatch — '{producer_type_name}' is not compatible "
-                f"with '{consumer_type_name}'."
+                f"type mismatch \u2014 '{producer_type.name}' is not compatible "
+                f"with '{consumer_type.name}'."
             )
-
     # 7 + 8. Multi-goal goal_id checks
     if len(chain.goals) > 1:
         goal_ids = {g.id for g in chain.goals}
