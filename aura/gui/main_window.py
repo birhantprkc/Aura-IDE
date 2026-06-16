@@ -856,6 +856,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         editor.runDroneRequested.connect(self._on_launch_drone)
         editor.editDroneRequested.connect(self._on_edit_drone)
         editor.deleteDroneRequested.connect(self._on_delete_drone)
+        editor.newDroneRequested.connect(self._on_new_drone)
         workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
         if hooks.is_registered('query_mission_workbay_state'):
             hooks.unregister('query_mission_workbay_state')

@@ -413,10 +413,10 @@ class ChainEditor(QWidget):
     goBackRequested = Signal()
     runDroneRequested = Signal(str, str)  # drone_id, folder
     editDroneRequested = Signal(str, str)  # action_id, folder
-    deleteDroneRequested = Signal(str)
+    deleteDroneRequested = Signal()
+    newDroneRequested = Signal()
 
     _AUTO_SAVE_MS = 1200
-
     def __init__(
         self,
         workspace_root: Path,
@@ -641,6 +641,28 @@ class ChainEditor(QWidget):
         # Roster
         self._roster = _DroneRosterWidget(self._workspace_root, self)
         layout.addWidget(self._roster, 1)
+
+        # New Drone button pinned at bottom
+        self._new_drone_btn = QPushButton("+ New Drone")
+        self._new_drone_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: rgba(196, 181, 253, 0.12);"
+            f"  border: 1px solid rgba(196, 181, 253, 0.18);"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color(ACCENT)};"
+            f"  padding: 4px 8px;"
+            f"  font-size: 11px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background: rgba(196, 181, 253, 0.22);"
+            f"  border-color: rgba(196, 181, 253, 0.35);"
+            f"  color: {_qss_color(FG)};"
+            f"}}"
+        )
+        self._new_drone_btn.setCursor(Qt.PointingHandCursor)
+        self._new_drone_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._new_drone_btn.clicked.connect(self.newDroneRequested.emit)
+        layout.addWidget(self._new_drone_btn)
 
         self._splitter.addWidget(container)
 
