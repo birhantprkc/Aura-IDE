@@ -39,13 +39,21 @@ Aura wrote most of itself. During May 2026 it processed **1.1 billion DeepSeek t
 
 The harness produces the quality, not the model. Swap models, swap providers, change thinking depth — the workflow stays the same and the output stays consistent.
 
+**Your agents, your workflows.**
+
+Aura turns useful agent work into visible, reusable machinery. Drones are reusable workers you build from natural language. They show up in the main UI, run with one click, and can be dragged into Workbay — a visual canvas where you chain them into automations. Read-only drones run in parallel for safe background investigations. Write-capable drones follow the same diff-approval cycle as any Worker. Every drone is project-local, version-controlled, and ready to reuse.
+
+<p align="center">
+  <img src="media/drone-workbay.png" alt="Drones and Workbay" width="900">
+</p>
+<p align="center"><em>Drones in Workbay — reusable agents you can run, chain, and automate.</em></p>
+
 ---
 
 **What you get.**
 
 **Planner/Worker architecture** — Two specialized agents. One plans, one executes. The spec is a token firewall between them. You review every dispatch before it runs.
-
-**Drones** — Reusable AI workers you create from natural language descriptions and save per project. Each drone has a write policy: read-only (parallel-safe), ask-before-writes, or normal diff approval. Save any useful Worker run as a new drone. The Planner can summon saved drones when it detects a match.
+**Drones** — Reusable AI workers you create from natural language and save per project. They appear in the main UI, run with one click, and can be dragged into Workbay to build multi-step workflows. Each drone has a write policy: read-only (parallel-safe), ask-before-writes, or normal diff approval. Save any useful Worker run as a new drone. The Planner can summon saved drones when it detects a match.
 
 **Mobile companion** — A relay server lets you chat with your Planner from your phone. Dispatch specs remotely, watch the desktop stream the execution live. No separate mobile app needed — it works through your browser.
 
