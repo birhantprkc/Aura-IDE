@@ -19,9 +19,11 @@ def _is_safe_drone_id(drone_id: str) -> bool:
     return bool(_DRONE_ID_RE.fullmatch(str(drone_id or "")))
 
 
-def _global_drones_root(workspace_root: Path) -> Path:
-    """Return the workspace-relative drones storage directory."""
-    return workspace_root / ".aura" / "drones"
+def _global_drones_root(workspace_root: Path | None = None) -> Path:
+    """Return the fixed drones storage directory (repo root / drones)."""
+    d = Path(__file__).resolve().parent.parent.parent / "drones"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def _drone_from_dict(data: dict) -> DroneDefinition:

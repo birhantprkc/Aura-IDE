@@ -38,8 +38,6 @@ class ChatView(QScrollArea):
     retry_requested = Signal()
     mermaid_detected = Signal(str)  # emits the raw mermaid code
     _CODE_TOOL_NAMES = {"write_file", "apply_edit_transaction", "edit_file", "edit_symbol", "edit_line_range", "patch_file"}
-    # Internal execution tools that always use compact badge (never create cards)
-    _INTERNAL_TOOLS = {"run_terminal_command", "run_diagnostic_command"}
     _BOTTOM_THRESHOLD_PX = 64
     _BOTTOM_SAFE_MARGIN_PX = 44
 
@@ -262,11 +260,9 @@ class ChatView(QScrollArea):
                             card.append_content(part["text"])
                 self.assistant_done()
             elif role == "tool":
-                content = msg.get("content", "")
-                if isinstance(content, str) and content:
-                    self._add_tool_result_card(
-                        msg.get("tool_call_id", ""), content[:2000]
-                    )
+                # Tool messages are for model continuity and Worker Log,
+                # not the human transcript — skip during replay.
+                pass
 
     def _add_tool_result_card(self, tool_call_id: str, content: str) -> None:
         """Add a compact card showing a tool result during history replay."""
@@ -491,60 +487,14 @@ class ChatView(QScrollArea):
         if self._current_aura is not None:
             self._current_aura.set_glow_state("coding")
 
-        # Heavy tools that should always show a card, even in compact mode.
-        is_heavy = name in (
-            "write_file",
-            "apply_edit_transaction",
-            "edit_file",
-            "edit_symbol",
-            "edit_line_range",
-            "patch_file",
-            "dispatch_to_worker",
-            "run_research",
-        )
-
-        # Internal execution tools always use compact badge, never create cards
-        if name in self._INTERNAL_TOOLS:
-            ac = self.current_assistant()
-            ac.notify_compact_tool_start(name)
-            self._compact_tool_names[tool_call_id] = name
-            self._scroll_to_bottom()
-            return
-
-        if self._compact_tools and not is_heavy:
-            ac = self.current_assistant()
-            ac.notify_compact_tool_start(name)
-            self._compact_tool_names[tool_call_id] = name
-            self._scroll_to_bottom()
-            return
-
-        # Reuse existing controller if this ID was already started (uncommon but possible in replay/retry)
-        controller = self._controllers.get(tool_call_id)
-        if controller is None:
-            controller = ToolStreamController(name, parent=self)
-            self._controllers[tool_call_id] = controller
-
         ac = self.current_assistant()
-        if name in self._CODE_TOOL_NAMES:
-            self._tool_owner[tool_call_id] = ac
+        if name in ("dispatch_to_worker", "run_research"):
+            # Reuse existing controller if this ID was already started (uncommon but possible in replay/retry)
+            controller = self._controllers.get(tool_call_id)
+            if controller is None:
+                controller = ToolStreamController(name, parent=self)
+                self._controllers[tool_call_id] = controller
 
-            # Defer visible card creation until the target path is known. Once
-            # resolved, multiple tool calls for the same path share one card.
-            controller.path_resolved.connect(
-                lambda path, tid=tool_call_id, tool=name, owner=ac: self._resolve_code_card(
-                    tid, tool, path, owner
-                )
-            )
-            controller.content_updated.connect(
-                lambda content, tid=tool_call_id: self._update_code_content(
-                    tid, content
-                )
-            )
-            controller.state_changed.connect(
-                lambda s, tid=tool_call_id: self._set_code_result(tid, s == "done")
-            )
-
-        elif name == "dispatch_to_worker" or name == "run_research":
             card = PlanWriterCard(parent=self)
             self._plan_writer_cards[tool_call_id] = card
             if not ac._tool_cluster.isVisible():
@@ -559,14 +509,9 @@ class ChatView(QScrollArea):
             controller.result_finalized_text.connect(
                 lambda text, c=controller, card=card: card.set_result(c._state == "done", text)
             )
-
         else:
-            card = ac.add_tool_card(tool_call_id, name)
-            self._tool_owner[tool_call_id] = ac
-            if card is not None:
-                # Wire generic tool card signals
-                controller.args_updated.connect(card.update_args)
-                controller.result_finalized_text.connect(lambda text: card.set_result(controller._state == "done", text))
+            ac.notify_compact_tool_start(name)
+            self._compact_tool_names[tool_call_id] = name
 
         self._scroll_to_bottom()
 

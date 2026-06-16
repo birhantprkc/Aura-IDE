@@ -25,6 +25,7 @@ from aura.config import (
     ProviderId,
     ThinkingMode,
 )
+from aura.drones.store import _global_drones_root
 from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, FG_DIM, FG_MUTED, LABEL_PROJECTS, LABEL_THREAD
 from aura.projects.store import ProjectStore
 from aura.providers.registry import provider_registry
@@ -558,7 +559,7 @@ class LeftPane(QFrame):
             self._drones_layout.addStretch(1)
             return
 
-        global_root = ws_root / ".aura" / "drones"
+        global_root = _global_drones_root(ws_root)
         active_resolved = active_root.resolve() if active_root is not None else None
 
         for entry in entries:
