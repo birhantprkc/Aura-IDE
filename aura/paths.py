@@ -54,3 +54,8 @@ def safe_is_relative_to(path: Path | str, root: Path | str) -> bool:
         except Exception:
             return False
 
+
+def aura_root() -> Path:
+    """Return the Aura source repository root directory."""
+    return Path(__file__).resolve().parent.parent
+

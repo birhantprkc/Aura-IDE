@@ -11,9 +11,9 @@ from aura.drones.store import DroneStore, _drone_from_dict, _global_drones_root
 
 
 @pytest.fixture(autouse=True)
-def _patch_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(aura_paths, "data_dir", lambda: tmp_path / "data")
-    monkeypatch.setattr("aura.drones.store.data_dir", lambda: tmp_path / "data")
+def _patch_drones_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(aura_paths, "aura_root", lambda: tmp_path / "aura_root")
+    monkeypatch.setattr("aura.drones.store.aura_root", lambda: tmp_path / "aura_root")
 
 
 def _write_drone_folder(

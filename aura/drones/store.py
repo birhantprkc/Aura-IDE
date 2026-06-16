@@ -10,7 +10,7 @@ from pathlib import Path
 
 from aura.drones.definition import DroneBudget, DroneDefinition, slugify
 from aura.drones.receipt import DroneReceipt
-from aura.paths import data_dir
+from aura.paths import aura_root
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +21,8 @@ def _is_safe_drone_id(drone_id: str) -> bool:
 
 
 def _global_drones_root() -> Path:
-    """Return the global drones storage directory."""
-    return data_dir() / "drones"
+    """Return the global drones storage directory — the repo-root/drones/ folder."""
+    return aura_root() / "drones"
 
 
 def _drone_from_dict(data: dict) -> DroneDefinition:
