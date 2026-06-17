@@ -410,7 +410,11 @@ def _execute_node(
     node_dir.mkdir(parents=True, exist_ok=True)
     output_path = node_dir / "output.json"
 
-    output_data = result
+    output_data = {
+        "ok": result.get("ok", False),
+        "summary": result.get("summary", ""),
+        "cargo": result.get("cargo", {}),
+    }
 
     # Atomic write (tempfile → replace)
     fd, tmp_path = tempfile.mkstemp(
