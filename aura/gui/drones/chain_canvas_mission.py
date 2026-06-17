@@ -7,7 +7,6 @@ from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QGraphicsItem
 
 from aura.drones.definition import DroneDefinition
-from aura.gui.drones.chain_canvas_items import PortItem, ChainEdgeItem
 from aura.gui.drones.chain_node_item import ChainNodeItem, NODE_WIDTH, NODE_HEIGHT
 from aura.gui.drones.mission_core_item import MissionCoreItem
 
@@ -38,6 +37,8 @@ class ChainCanvasMissionMixin:
         self._scene.addItem(item)
         self._mission_core = item
         item.runRequested.connect(self.runMissionRequested.emit)
+        item.loopToggled.connect(self.loopToggled.emit)
+        item.loopToggled.connect(self._line_renderer.update_loop_state)
         self._update_empty_text()
         self.canvasChanged.emit()
 
@@ -83,57 +84,11 @@ class ChainCanvasMissionMixin:
         return item
 
     def _rewire_linear_ring(self) -> None:
-        """Remove all edges and rebuild a linear ring:
-        MC.output -> n0.input -> n0.output -> n1.input ... -> nN.output -> MC.input
-        """
         mc = self._mission_core
         if mc is None:
+            self._line_renderer.clear()
             return
-
-        # Remove all existing edges
-        for edge in list(self._edges):
-            self._scene.removeItem(edge)
-        self._edges.clear()
-
-        order = list(self._nodes.values())  # insertion order = run order
-        if not order:
-            return
-
-        from aura.gui.drones.chain_canvas_items import PortItem, ChainEdgeItem
-
-        # Give MC output and input ports if it doesn't have them yet
-        if not hasattr(mc, 'output_port') or mc.output_port is None:
-            mc.output_port = PortItem(mc, is_input=False)
-            mc.output_port.setPos(MISSION_CORE_WIDTH / 2, 0)
-        if not hasattr(mc, 'input_port') or mc.input_port is None:
-            mc.input_port = PortItem(mc, is_input=True)
-            mc.input_port.setPos(-MISSION_CORE_WIDTH / 2, 0)
-
-        # MC.output -> order[0].input
-        if order[0].input_port:
-            e = ChainEdgeItem(
-                source_port=mc.output_port,
-                target_port=order[0].input_port,
-                canvas=self,
-            )
-            self._scene.addItem(e)
-            self._edges.append(e)
-
-        # order[i].output -> order[i+1].input
-        for i in range(len(order) - 1):
-            src = order[i].output_port
-            tgt = order[i + 1].input_port
-            if src and tgt:
-                e = ChainEdgeItem(source_port=src, target_port=tgt, canvas=self)
-                self._scene.addItem(e)
-                self._edges.append(e)
-
-        # order[-1].output -> MC.input (loop-back)
-        if order[-1].output_port and mc.input_port:
-            e = ChainEdgeItem(
-                source_port=order[-1].output_port,
-                target_port=mc.input_port,
-                canvas=self,
-            )
-            self._scene.addItem(e)
-            self._edges.append(e)
+        order = list(self._nodes.values())
+        loop_enabled = mc.loop_enabled
+        self._line_renderer.set_context(mc, order, loop_enabled)
+        self._line_renderer.rebuild()

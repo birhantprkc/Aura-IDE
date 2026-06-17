@@ -34,6 +34,7 @@ from aura.gui.drones.chain_node_item import ChainNodeItem
 from aura.gui.drones.mission_core_item import MissionCoreItem
 from aura.gui.drones.chain_canvas_background import build_space_cache
 from aura.gui.drones.chain_canvas_mission import ChainCanvasMissionMixin
+from aura.gui.drones.workflow_line_renderer import WorkflowLineRenderer
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,7 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
 
         self._scene = QGraphicsScene(-2000, -2000, 4000, 4000, self)
         self.setScene(self._scene)
+        self._line_renderer = WorkflowLineRenderer(self._scene)
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
@@ -129,7 +131,9 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
 
     def load_chain(self, chain: ChainDefinition, drone_lookup: dict[str, DroneDefinition], mission_core_data: dict | None = None) -> None:
         """Populate canvas from a ChainDefinition."""
+        self._line_renderer.clear()
         self._scene.clear()
+        self._line_renderer = WorkflowLineRenderer(self._scene)
         self._empty_text = None  # scene.clear() deleted the C++ object
         self._nodes.clear()
         self._edges.clear()
@@ -182,12 +186,16 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
             self._mission_core = mission_item
             mission_item.runRequested.connect(self.runMissionRequested.emit)
             mission_item.loopToggled.connect(self.loopToggled.emit)
+            mission_item.loopToggled.connect(self._line_renderer.update_loop_state)
 
         self._update_empty_text()
 
         # Auto-create default mission core for empty chains
         if self._mission_core is None and not self._nodes:
             self._canvas_add_mission_core(QPointF(-160, 0))
+
+        # Rebuild the visual workflow line from loaded state
+        self._rewire_linear_ring()
 
         # Auto-fit after a short delay
         QTimer.singleShot(100, self._fit_view)
@@ -421,6 +429,7 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
         for item in to_remove:
             if isinstance(item, MissionCoreItem):
                 self._mission_core = None
+                self._line_renderer.clear()
                 self._scene.removeItem(item)
                 self._update_empty_text()
                 self.canvasChanged.emit()
@@ -445,6 +454,7 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
         self._scene.removeItem(node)
         self._update_empty_text()
         self.canvasChanged.emit()
+        self._rewire_linear_ring()
 
     def _remove_edge(self, edge: ChainEdgeItem) -> None:
         if edge in self._edges:
@@ -457,6 +467,7 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
     def _on_node_moved(self) -> None:
         for edge in self._edges:
             edge._adjust()
+        self._line_renderer.update_positions()
         self.canvasChanged.emit()
 
     def _on_selection_changed(self) -> None:
