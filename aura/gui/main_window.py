@@ -757,6 +757,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if self._settings.restore_last_conversation and restore_last:
             QTimer.singleShot(0, lambda: self._persistence.restore_last(root_path))
 
+        # One-time recovery for broken nested drone folders
+        self._recover_nested_drone_folders()
+
     def _on_project_selected(self, root_path: Path, *, restore_last: bool = True) -> None:
         from aura.projects.store import ProjectStore
         project = ProjectStore().create_or_update_project(root_path)
@@ -768,34 +771,182 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._left_pane.refresh_drones(self._workspace_root)
 
     def _on_drone_folder_selected(self, folder: Path) -> None:
-        self._retarget_workspace(folder, restore_last=False)
+        # Resolve the owning project root — if the folder is inside .aura/drones,
+        # this returns the project root above it; otherwise returns the folder itself.
+        from aura.drones.store import _project_root_for_drone_storage
+        project_root = _project_root_for_drone_storage(folder)
+        project_resolved = project_root.resolve()
+
+        # If Aura is currently rooted inside .aura/drones/<id>, retarget once back
+        current = self._workspace_root.resolve() if self._workspace_root else None
+        if current is None or current != project_resolved:
+            self._retarget_workspace(project_root, restore_last=False)
+
+        # Refresh drone sidebar (pass the drone folder for highlight)
         self._left_pane.refresh_drones(folder)
+
+        # Mark construction context
         enter_drone_construction("existing", folder.name)
-        # Deliberately does NOT touch ProjectStore and does NOT call save_workspace_root,
-        # so a drone is never registered as a project and Aura never boots into one.
 
     def _on_create_drone(self) -> None:
         import json
+        from datetime import datetime, timezone
         from uuid import uuid4
 
-        from aura.drones.store import _global_drones_root
+        from aura.drones.definition import DroneBudget, DroneDefinition
+        from aura.drones.store import (
+            _global_drones_root,
+            _is_safe_drone_id,
+            _project_root_for_drone_storage,
+            DroneStore,
+        )
+
+        # One-time recovery: promote nested drone folders from a previous broken state
+        self._recover_nested_drone_folders()
+
+        # Ensure workspace is rooted at the project root
+        project_root = _project_root_for_drone_storage(self._workspace_root)
+        project_resolved = project_root.resolve()
+        current = self._workspace_root.resolve() if self._workspace_root else None
+        if current is None or current != project_resolved:
+            self._retarget_workspace(project_root, restore_last=False)
 
         drone_id = f"drone-{uuid4().hex[:8]}"
         drone_dir = _global_drones_root(self._workspace_root) / drone_id
         drone_dir.mkdir(parents=True, exist_ok=True)
 
-        manifest = {
-            "id": drone_id,
-            "name": "New Drone",
-            "description": "",
-        }
-        (drone_dir / "drone.json").write_text(
-            json.dumps(manifest, indent=2), encoding="utf-8"
+        # ── Write valid drone.json ──
+        now = datetime.now(timezone.utc).isoformat()
+        drone = DroneDefinition(
+            id=drone_id,
+            name="New Drone",
+            description="A new Drone scaffold",
+            instructions="You are a helpful Drone. Follow the user's instructions to complete the task.",
+            write_policy="read_only",
+            runtime="python",
+            entrypoint={
+                "kind": "command",
+                "command": ["python", "main.py"],
+                "protocol": "json-stdio",
+            },
+            budget=DroneBudget(timeout_seconds=60),
+            scope="global",
+            manifest_version="1",
+            input_contract={
+                "type": "object",
+                "description": "Standard drone input",
+                "properties": {},
+            },
+            cargo_contract={
+                "type": "object",
+                "description": "Standard drone cargo",
+                "properties": {},
+            },
+            output_contract={
+                "description": "Standard drone output",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "summary": {"type": "string"},
+                },
+                "required": ["ok", "summary"],
+            },
+            created_at=now,
+            updated_at=now,
+            created_by="user",
         )
+        DroneStore._write_manifest(drone_dir, drone)
 
+        # ── Write scaffold main.py ──
+        main_py = (
+            '"""Scaffold Drone: ' + drone_id + '"""\n'
+            'import json\n'
+            'import sys\n\n'
+            'def main() -> None:\n'
+            '    raw = sys.stdin.read()\n'
+            '    payload = json.loads(raw) if raw.strip() else {}\n'
+            '    goal = payload.get("goal", "")\n'
+            '    cargo = payload.get("cargo", {})\n'
+            '    result = {\n'
+            '        "ok": True,\n'
+            '        "summary": "New Drone scaffold is ready.",\n'
+            '        "cargo": {\n'
+            '            "drone_id": "' + drone_id + '",\n'
+            '            "ready": True,\n'
+            '        },\n'
+            '    }\n'
+            '    sys.stdout.write(json.dumps(result))\n\n'
+            'if __name__ == "__main__":\n'
+            '    main()\n'
+        )
+        (drone_dir / "main.py").write_text(main_py, encoding="utf-8")
+
+        # Keep Aura rooted at the project root — do NOT call _on_drone_folder_selected.
+        # Refresh left Drone list with the new drone highlighted.
         self._left_pane.refresh_drones(drone_dir)
-        self._on_drone_folder_selected(drone_dir)
+
+        # Enter Drone construction mode
         enter_drone_construction("new", drone_id)
+
+        # Refresh Workbay roster when Workbay is open
+        if self._drone_workbay_window is not None and self._drone_workbay_window.is_open():
+            self._drone_workbay_window.chain_editor.refresh_roster()
+
+    def _recover_nested_drone_folders(self) -> None:
+        """One-time recovery: promote nested drone folders from a previous broken state.
+
+        If a valid Drone folder exists nested under .aura/drones/<temp>/<real>/,
+        promote <real> to .aura/drones/<real>/. After promotion, refresh the
+        left sidebar and Workbay roster.
+        """
+        if getattr(self, "_drone_recovery_done", False):
+            return
+        self._drone_recovery_done = True
+
+        import json
+        import shutil
+
+        from aura.drones.store import _global_drones_root, _is_safe_drone_id
+
+        drones_root = _global_drones_root(self._workspace_root)
+        if not drones_root.exists():
+            return
+
+        promoted = False
+        for subdir in list(drones_root.iterdir()):
+            if not subdir.is_dir():
+                continue
+            # Check for nested drone folders one level deep
+            for nested in list(subdir.iterdir()):
+                if not nested.is_dir():
+                    continue
+                drone_json = nested / "drone.json"
+                if not drone_json.exists():
+                    continue
+                try:
+                    data = json.loads(drone_json.read_text(encoding="utf-8"))
+                    real_id = data.get("id", nested.name)
+                    if not _is_safe_drone_id(real_id):
+                        continue
+                    target = drones_root / real_id
+                    if target.exists():
+                        shutil.rmtree(target, ignore_errors=True)
+                    shutil.copytree(nested, target, dirs_exist_ok=True)
+                    logger.info("Promoted nested drone %s -> %s", nested, target)
+                    promoted = True
+                except Exception as exc:
+                    logger.warning("Failed to promote nested drone %s: %s", nested, exc)
+                    continue
+            # Remove the now-empty temporary parent folder
+            try:
+                if subdir.exists() and not any(subdir.iterdir()):
+                    shutil.rmtree(subdir, ignore_errors=True)
+            except Exception:
+                logger.warning("Failed to remove empty temp folder %s", subdir)
+
+        if promoted:
+            self._left_pane.refresh_drones(self._workspace_root)
+            if self._drone_workbay_window is not None and self._drone_workbay_window.is_open():
+                self._drone_workbay_window.chain_editor.refresh_roster()
 
     def _on_new_project(self) -> None:
         start = str(self._workspace_root) if self._workspace_root else str(Path.home())
