@@ -7,13 +7,11 @@ from pathlib import Path
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QBrush,
     QColor,
     QFont,
     QPainter,
     QPen,
     QPixmap,
-    QRadialGradient,
 )
 from PySide6.QtWidgets import (
     QGraphicsItem,
@@ -36,6 +34,7 @@ from aura.gui.drones.chain_canvas_items import PortItem, ChainEdgeItem
 from aura.gui.drones.chain_node_item import ChainNodeItem
 from aura.gui.drones.mission_core_item import MissionCoreItem
 from aura.gui.drones.goal_planet_item import GoalPlanetItem
+from aura.gui.drones.chain_canvas_background import build_space_cache
 
 logger = logging.getLogger(__name__)
 
@@ -692,7 +691,7 @@ class ChainCanvas(QGraphicsView):
 
         cache = self._space_bg_cache
         if cache is None or cache.size() != viewport_rect.size():
-            cache = self._build_space_cache(viewport_rect.size())
+            cache = build_space_cache(viewport_rect.size())
             self._space_bg_cache = cache
         painter.drawPixmap(viewport_rect.topLeft(), cache)
         painter.restore()
@@ -753,53 +752,4 @@ class ChainCanvas(QGraphicsView):
         except Exception:
             logger.exception("drawForeground error — suppressed to protect Qt paint cycle")
 
-    def _build_space_cache(self, size) -> QPixmap:
-        import random
-        pixmap = QPixmap(size)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        p = QPainter(pixmap)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = size.width(), size.height()
 
-        # Radial gas clouds (layered additive)
-        # Violet main bloom
-        g1 = QRadialGradient(QPointF(0.30 * w, 0.58 * h), 0.46 * w)
-        g1.setColorAt(0.0, QColor(157, 124, 216, 72))
-        g1.setColorAt(0.45, QColor(150, 115, 205, 34))
-        g1.setColorAt(1.0, QColor(157, 124, 216, 0))
-        p.fillRect(0, 0, w, h, g1)
-
-        # Warm magenta pocket
-        g2 = QRadialGradient(QPointF(0.52 * w, 0.68 * h), 0.40 * w)
-        g2.setColorAt(0.0, QColor(247, 118, 142, 55))
-        g2.setColorAt(0.5, QColor(205, 95, 140, 24))
-        g2.setColorAt(1.0, QColor(247, 118, 142, 0))
-        p.fillRect(0, 0, w, h, g2)
-
-        # Blue upper drift
-        g3 = QRadialGradient(QPointF(0.62 * w, 0.34 * h), 0.42 * w)
-        g3.setColorAt(0.0, QColor(122, 162, 247, 40))
-        g3.setColorAt(0.5, QColor(110, 140, 220, 18))
-        g3.setColorAt(1.0, QColor(122, 162, 247, 0))
-        p.fillRect(0, 0, w, h, g3)
-
-        # Cyan accent
-        g4 = QRadialGradient(QPointF(0.80 * w, 0.55 * h), 0.28 * w)
-        g4.setColorAt(0.0, QColor(125, 207, 255, 28))
-        g4.setColorAt(1.0, QColor(125, 207, 255, 0))
-        p.fillRect(0, 0, w, h, g4)
-
-        # Subtle static stars
-        rng = random.Random(42)
-        for _ in range(250):
-            sx = rng.uniform(0, w)
-            sy = rng.uniform(0, h)
-            sr = rng.uniform(0.4, 1.5)
-            sa = rng.randint(20, 80)
-            c = QColor(200, 208, 240, sa)
-            p.setBrush(QBrush(c))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(QPointF(sx, sy), sr, sr)
-
-        p.end()
-        return pixmap
