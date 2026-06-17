@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import (
     QColor,
@@ -12,6 +14,8 @@ from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsScene
 
 from aura.gui.drones.chain_node_item import NODE_HEIGHT, NODE_WIDTH
 from aura.gui.drones.mission_core_item import MISSION_CORE_WIDTH
+
+logger = logging.getLogger(__name__)
 
 
 class _WorkflowLineSegment(QGraphicsPathItem):
@@ -123,15 +127,17 @@ class _WorkflowLineSegment(QGraphicsPathItem):
         # Glow underlay — two passes
         glow_color = QColor("#7aa2f7") if is_bright else QColor("#6e7382")
 
-        glow1_pen = QPen(glow_color, 6)
-        glow1_pen.setAlpha(10 if is_bright else 6)
+        glow1_color = QColor(glow_color)
+        glow1_color.setAlpha(10 if is_bright else 6)
+        glow1_pen = QPen(glow1_color, 6)
         glow1_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         glow1_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(glow1_pen)
         painter.drawPath(self.path())
 
-        glow2_pen = QPen(glow_color, 3)
-        glow2_pen.setAlpha(22 if is_bright else 12)
+        glow2_color = QColor(glow_color)
+        glow2_color.setAlpha(22 if is_bright else 12)
+        glow2_pen = QPen(glow2_color, 3)
         glow2_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         glow2_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(glow2_pen)
@@ -212,6 +218,8 @@ class WorkflowLineRenderer:
             seg = _WorkflowLineSegment(start, end, is_return=False)
             self._segments.append(seg)
             self._scene.addItem(seg)
+
+        logger.debug("WorkflowLineRenderer rebuilt %s segments", len(self._segments))
 
         # Return segment: last node output → MC left edge center
         last = nodes[-1]
