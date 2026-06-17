@@ -717,16 +717,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._left_pane.refresh_drones(self._workspace_root)
 
     def _on_drone_folder_selected(self, folder: Path) -> None:
-        # Resolve the owning project root — if the folder is inside .aura/drones,
-        # this returns the project root above it; otherwise returns the folder itself.
-        from aura.drones.store import _project_root_for_drone_storage
-        project_root = _project_root_for_drone_storage(folder)
-        project_resolved = project_root.resolve()
-
-        # If Aura is currently rooted inside .aura/drones/<id>, retarget once back
-        current = self._workspace_root.resolve() if self._workspace_root else None
-        if current is None or current != project_resolved:
-            self._retarget_workspace(project_root, restore_last=False)
+        # Root workspace at the drone's own folder — scoping its conversation thread.
+        target = folder
+        if self._workspace_root is None or self._workspace_root.resolve() != target.resolve():
+            self._retarget_workspace(target, restore_last=True)
 
         # Refresh drone sidebar (pass the drone folder for highlight)
         self._left_pane.refresh_drones(folder)
@@ -826,8 +820,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         (drone_dir / "main.py").write_text(main_py, encoding="utf-8")
 
-        # Keep Aura rooted at the project root — do NOT call _on_drone_folder_selected.
-        # Refresh left Drone list with the new drone highlighted.
+        # Retarget to the drone directory so the new drone opens its own scope.
+        self._retarget_workspace(drone_dir, restore_last=True)
         self._left_pane.refresh_drones(drone_dir)
 
         # Enter Drone construction mode
