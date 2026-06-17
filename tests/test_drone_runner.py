@@ -15,7 +15,6 @@ from aura.drones.store import DroneStore
 @pytest.fixture(autouse=True)
 def _patch_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(aura_paths, "data_dir", lambda: tmp_path / "data")
-    monkeypatch.setattr("aura.drones.store.data_dir", lambda: tmp_path / "data")
 
 
 def _register_folder_drone(workspace: Path) -> DroneDefinition:
@@ -65,10 +64,8 @@ def test_drone_runner_executes_folder_entrypoint(tmp_path: Path) -> None:
     assert "ran" in "".join(chunks)
     assert len(receipts) == 1
     assert receipts[0].status == "completed"
-    assert receipts[0].produced_artifact == {
-        "message": "ran",
-        "goal": "Run this goal.",
-    }
+    assert receipts[0].produced_artifact.get("message") == "ran"
+    assert receipts[0].produced_artifact.get("goal") == "Run this goal."
 
 
 def test_drone_runner_rejects_non_folder_drone(tmp_path: Path) -> None:

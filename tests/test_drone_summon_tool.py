@@ -13,7 +13,6 @@ from aura.drones.store import DroneStore
 @pytest.fixture(autouse=True)
 def _patch_data_dir(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(aura_paths, "data_dir", lambda: tmp_path / "data")
-    monkeypatch.setattr("aura.drones.store.data_dir", lambda: tmp_path / "data")
 
 
 def _register_drone(tmp_path) -> None:

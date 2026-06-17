@@ -19,9 +19,27 @@ def _is_safe_drone_id(drone_id: str) -> bool:
     return bool(_DRONE_ID_RE.fullmatch(str(drone_id or "")))
 
 
+def _project_root_for_drone_storage(workspace_root: Path | None = None) -> Path:
+    """Walk up from the given path to find the project root (the .aura/drones parent).
+
+    If the path is already inside a .aura/drones directory, return the path
+    above it (the project root). Otherwise return the path itself.
+    """
+    root = Path(workspace_root) if workspace_root is not None else Path.cwd()
+    root = root.resolve()
+
+    parts = root.parts
+    for i in range(len(parts) - 1):
+        if parts[i] == ".aura" and parts[i + 1] == "drones":
+            return Path(*parts[:i]).resolve()
+
+    return root
+
+
 def _global_drones_root(workspace_root: Path | None = None) -> Path:
-    """Return the fixed drones storage directory (repo root / drones)."""
-    d = Path(__file__).resolve().parent.parent.parent / "drones"
+    """Return the active project's .aura/drones directory, creating it if needed."""
+    project_root = _project_root_for_drone_storage(workspace_root)
+    d = project_root / ".aura" / "drones"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

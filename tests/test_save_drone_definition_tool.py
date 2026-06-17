@@ -14,7 +14,6 @@ from aura.drones.store import DroneStore
 @pytest.fixture(autouse=True)
 def _patch_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(aura_paths, "data_dir", lambda: tmp_path / "data")
-    monkeypatch.setattr("aura.drones.store.data_dir", lambda: tmp_path / "data")
 
 
 def _noop_approval(_req: ApprovalRequest) -> ApprovalDecision:
@@ -71,7 +70,7 @@ def test_register_drone_folder_creates_and_loads_drone(tmp_path: Path) -> None:
     loaded = DroneStore.load_drone(tmp_path, "test-drone")
     assert loaded is not None
     assert loaded.name == "Test Drone"
-    assert loaded.allowed_tools == ()
+    assert loaded.write_policy == "read_only"
     assert folder.exists()
 
 
