@@ -218,9 +218,8 @@ def _execute_node(
     # ── Build goal lookup map ───────────────────────────
     goal_map = {g.id: g for g in chain.goals}
 
-    # ── Resolve inbound artifact ─────────────────────────
-    inbound_artifacts: dict[str, Any] = {}
-    inbound_summaries: dict[str, str] = {}
+    # ── Resolve upstream cargo ───────────────────────────
+    upstream: dict[str, Any] = {}
     for edge in chain.edges:
         if edge.to_node == node_id:
             upstream_output = (
@@ -229,55 +228,24 @@ def _execute_node(
                 )
                 / "output.json"
             )
-            if not upstream_output.exists():
-                continue
-            try:
-                data = json.loads(
-                    upstream_output.read_text(encoding="utf-8")
-                )
-                if not isinstance(data, dict):
-                    data = {"artifact": data}
-                upstream_node = node_map.get(edge.from_node)
-                upstream_drone = (
-                    drone_lookup.get(upstream_node.drone_id)
-                    if upstream_node
-                    else None
-                )
-                if upstream_drone and upstream_drone.cargo_contract.get("type"):
-                    # Structured artifact
-                    inbound_artifacts[edge.from_node] = data
-                else:
-                    # Free-form — extract summary
-                    summary = data.get("summary", "")
-                    if summary:
-                        inbound_summaries[edge.from_node] = summary
-            except Exception as exc:
-                logger.warning(
-                    "Failed to read artifact from %s: %s",
-                    upstream_output,
-                    exc,
-                )
+            if upstream_output.exists():
+                try:
+                    data = json.loads(
+                        upstream_output.read_text(encoding="utf-8")
+                    )
+                    if isinstance(data, dict):
+                        upstream[edge.from_node] = data.get("cargo", {})
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to read upstream cargo from %s: %s",
+                        upstream_output,
+                        exc,
+                    )
 
     # ── Build goal text ────────────────────────────────
     goal_text = node.goal_template.strip()
     if not goal_text:
         goal_text = f"Execute the {drone.name} step."
-
-    if inbound_artifacts:
-        goal_text += "\n\n## Input Artifact\n```json\n"
-        if len(inbound_artifacts) == 1:
-            goal_text += json.dumps(
-                next(iter(inbound_artifacts.values())), indent=2
-            )
-        else:
-            goal_text += json.dumps(inbound_artifacts, indent=2)
-        goal_text += "\n```"
-
-    for upstream_nid, summary in inbound_summaries.items():
-        if summary:
-            goal_text += (
-                f"\n\n## Input from {upstream_nid}\n{summary}"
-            )
 
     # ── Mission Objective (Goal Planet) ────────────────
     if node.is_assignment:
@@ -387,6 +355,7 @@ def _execute_node(
                 goal=goal_text,
                 timeout_seconds=timeout_seconds,
                 max_tool_rounds=max_tool_rounds,
+                upstream=upstream,
             )
         else:
             node_approval_cb = (
@@ -405,6 +374,7 @@ def _execute_node(
                 approval_callback=node_approval_cb,
                 timeout_seconds=timeout_seconds,
                 max_tool_rounds=max_tool_rounds,
+                upstream=upstream,
             )
     except Exception as exc:
         logger.exception("Chain node '%s' crashed", node_id)
@@ -423,7 +393,6 @@ def _execute_node(
     run_status = result.get("status", "failed")
     met = receipt_dict.get("met")
     evidence = receipt_dict.get("evidence", "")
-    produced_artifact = receipt_dict.get("produced_artifact")
     rejected_write_actions = result.get("rejected_write_actions", 0)
 
     # If write-capable node had rejected writes, mark met as ambivalent
@@ -441,11 +410,7 @@ def _execute_node(
     node_dir.mkdir(parents=True, exist_ok=True)
     output_path = node_dir / "output.json"
 
-    if drone.cargo_contract.get("type") and produced_artifact is not None:
-        output_data = produced_artifact
-    else:
-        # Free-form or unmet: save the full receipt dict
-        output_data = receipt_dict
+    output_data = result
 
     # Atomic write (tempfile → replace)
     fd, tmp_path = tempfile.mkstemp(

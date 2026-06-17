@@ -1390,7 +1390,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             instructions="",
             write_policy="read_only",
             allowed_tools=(),
-            output_contract="",
+            output_contract={},
         )
 
         run_card = DroneRunCard(minimal_drone, parent=self._drone_reports_window, readonly=True)

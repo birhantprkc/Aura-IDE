@@ -88,8 +88,8 @@ def _populate_planet_from_drone(drone: DroneDefinition) -> tuple[str, str]:
 
     if drone.description:
         objective = drone.description
-    elif drone.output_contract:
-        objective = drone.output_contract
+    elif drone.output_contract and drone.output_contract.get("description"):
+        objective = drone.output_contract["description"]
     elif drone.instructions:
         objective = drone.instructions
     elif drone.name:

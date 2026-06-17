@@ -33,6 +33,7 @@ def run_folder_drone_sync(
     *,
     input_payload: dict[str, Any] | None = None,
     run: DroneRun | None = None,
+    upstream: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute a registered folder-backed Drone and persist a receipt."""
     run = run or DroneRun(drone=drone)
@@ -47,12 +48,14 @@ def run_folder_drone_sync(
     errors: list[str] = []
     cargo: Any = None
     summary = ""
+    _raw_result: dict[str, Any] | None = None
 
     payload = {
         "goal": goal,
         "input": input_payload or {},
         "workspace_root": str(workspace_root),
         "drone_id": drone.id,
+        "upstream": upstream or {},
     }
 
     try:
@@ -63,7 +66,8 @@ def run_folder_drone_sync(
             timeout_seconds=drone.budget.timeout_seconds,
             cancel_event=run.cancel_event,
         )
-        cargo = result
+        _raw_result = result
+        cargo = result.get("cargo", {})
         if isinstance(result, dict) and (
             result.get("cancelled") or result.get("status") == "cancelled"
         ):
@@ -87,7 +91,9 @@ def run_folder_drone_sync(
             errors.append(str(error))
 
     ended_at = dt.datetime.now(dt.timezone.utc).isoformat()
-    if isinstance(cargo, (dict, list)):
+    if isinstance(_raw_result, dict) and _raw_result.get("summary"):
+        summary = _raw_result["summary"]
+    elif isinstance(cargo, (dict, list)):
         summary = json.dumps(cargo, indent=2, ensure_ascii=False)
     elif cargo is not None:
         summary = str(cargo)
@@ -99,6 +105,11 @@ def run_folder_drone_sync(
             route_used = cargo["route_used"]
         elif isinstance(cargo.get("route"), dict):
             route_used = cargo["route"]
+    if route_used is None and isinstance(_raw_result, dict):
+        if isinstance(_raw_result.get("route_used"), dict):
+            route_used = _raw_result["route_used"]
+        elif isinstance(_raw_result.get("route"), dict):
+            route_used = _raw_result["route"]
     if route_used is None and isinstance(drone.route, dict) and drone.route:
         route_used = drone.route
 

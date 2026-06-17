@@ -75,7 +75,7 @@ def test_drone_runner_rejects_non_folder_drone(tmp_path: Path) -> None:
         description="Old",
         instructions="Use tools.",
         write_policy="read_only",
-        output_contract="Summary.",
+        output_contract={"description": "Summary.", "properties": {"ok": {"type": "boolean"}, "summary": {"type": "string"}}, "required": ["ok", "summary"]},
     )
     runner = DroneRunner(tmp_path, drone)
     errors: list[tuple[int, str]] = []

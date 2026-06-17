@@ -37,7 +37,7 @@ def _make_drone(
         instructions="Do the thing",
         write_policy="read_only",
         allowed_tools=(),
-        output_contract="Output",
+        output_contract={"description": "Output", "properties": {"ok": {"type": "boolean"}, "summary": {"type": "string"}}, "required": ["ok", "summary"]},
         enabled=enabled,
         accepts=accepts,
         produces=produces,

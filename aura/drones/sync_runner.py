@@ -80,6 +80,7 @@ def run_read_only_drone_sync(
     drone: DroneDefinition,
     goal: str,
     timeout_seconds: int = 120,
+    upstream: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run a registered folder-backed Drone synchronously."""
     _ = timeout_seconds
@@ -92,7 +93,7 @@ def run_read_only_drone_sync(
             write_enabled=False,
             timeout_seconds=timeout_seconds,
         )
-    return run_folder_drone_sync(workspace_root, drone_id, drone, goal)
+    return run_folder_drone_sync(workspace_root, drone_id, drone, goal, upstream=upstream)
 
 
 def run_write_capable_drone_sync(
@@ -103,6 +104,7 @@ def run_write_capable_drone_sync(
     *,
     approval_callback: Callable[[ApprovalRequest], ApprovalDecision] | None = None,
     timeout_seconds: int = 120,
+    upstream: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run a registered folder-backed Drone synchronously.
 
@@ -120,4 +122,4 @@ def run_write_capable_drone_sync(
             approval_callback=approval_callback,
             timeout_seconds=timeout_seconds,
         )
-    return run_folder_drone_sync(workspace_root, drone_id, drone, goal)
+    return run_folder_drone_sync(workspace_root, drone_id, drone, goal, upstream=upstream)
