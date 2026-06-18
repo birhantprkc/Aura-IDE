@@ -1161,17 +1161,19 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._edge_rail.remove_drone_run_pip(run_id)
         self._position_edge_tabs()
 
+    def _drone_is_running(self, drone_id: str) -> bool:
+        return any(
+            r.get("loop_drone_id") == drone_id or r["drone"].id == drone_id
+            for r in self._drone_runs.values()
+        )
+
     def _on_loop_drone_toggled(self, drone_id: str, enabled: bool, interval_seconds: int = 60) -> None:
         """Enable or disable looping for a single drone."""
         if enabled:
             self._looping_drones[drone_id] = interval_seconds
             logger.info("[DroneLoop] loop enabled for drone=%s interval=%ds", drone_id, interval_seconds)
             # If the drone isn't currently running, start it
-            already_running = any(
-                r.get("loop_drone_id") == drone_id or r["drone"].id == drone_id
-                for r in self._drone_runs.values()
-            )
-            if not already_running:
+            if not self._drone_is_running(drone_id):
                 drone = DroneStore.load_drone(self._workspace_root, drone_id)
                 if drone is not None:
                     self._start_drone_run(drone, loop_drone_id=drone_id)
@@ -1183,6 +1185,33 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if drone_id in self._looping_drones:
             self._looping_drones[drone_id] = interval_seconds
             logger.debug("[DroneLoop] interval updated for drone=%s to %ds", drone_id, interval_seconds)
+
+    def _start_next_loop_lap(self, drone_id: str) -> None:
+        """Start the next loop lap for a Drone, with full guards.
+
+        Must be called from the main thread.  Checks all preconditions
+        before starting so that stale QTimer callbacks never launch
+        a run after Loop has been disabled, the Drone deleted, etc.
+        """
+        # Loop still enabled?
+        if drone_id not in self._looping_drones:
+            logger.debug("[DroneLoop] _start_next_loop_lap: loop disabled for drone=%s, skipping", drone_id)
+            return
+        # Workspace available?
+        if self._workspace_root is None:
+            logger.debug("[DroneLoop] _start_next_loop_lap: no workspace root, skipping")
+            return
+        # Already running?
+        if self._drone_is_running(drone_id):
+            logger.debug("[DroneLoop] _start_next_loop_lap: drone=%s already running, skipping", drone_id)
+            return
+        # Load fresh definition — handles delete/edit between laps
+        drone = DroneStore.load_drone(self._workspace_root, drone_id)
+        if drone is None:
+            logger.debug("[DroneLoop] _start_next_loop_lap: drone=%s no longer exists, removing from loop state", drone_id)
+            self._looping_drones.pop(drone_id, None)
+            return
+        self._start_drone_run(drone, loop_drone_id=drone_id)
 
     def _on_drone_finished(self, run_id: str) -> None:
         """UI/bookkeeping cleanup after a drone run.
@@ -1216,11 +1245,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         loop_drone_id = record.get("loop_drone_id", "")
         if loop_drone_id and loop_drone_id in self._looping_drones:
             interval = self._looping_drones[loop_drone_id]
-            logger.debug("[DroneLoop] loop active for drone=%s, scheduling next run in %ds", loop_drone_id, interval)
-            # Re-read the drone definition in case it changed
-            drone_def = DroneStore.load_drone(self._workspace_root, loop_drone_id)
-            if drone_def is not None:
-                QTimer.singleShot(interval * 1000, lambda d=drone_def, lid=loop_drone_id: self._start_drone_run(d, loop_drone_id=lid))
+            logger.debug("[DroneLoop] loop active for drone=%s, scheduling next lap in %ds", loop_drone_id, interval)
+            QTimer.singleShot(
+                interval * 1000,
+                lambda lid=loop_drone_id: self._start_next_loop_lap(lid),
+            )
 
     def _on_drone_receipt(self, receipt: object) -> None:
         """Handle completed drone receipt — save to disk."""
