@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 import logging
 from pathlib import Path
 
@@ -170,6 +171,20 @@ class _DroneCard(QFrame):
         pill_row.addStretch()
         layout.addLayout(pill_row)
 
+        # Run state indicator (hidden by default)
+        self._run_state_label = QLabel()
+        self._run_state_label.setMaximumHeight(32)
+        self._run_state_label.setStyleSheet(
+            "font-size: 10px; background: transparent; border: none; padding: 0px;"
+        )
+        self._run_state_label.hide()
+        layout.addWidget(self._run_state_label)
+
+        self._countdown_timer = QTimer(self)
+        self._countdown_timer.setInterval(1000)
+        self._countdown_timer.timeout.connect(self._update_countdown)
+        self._wait_until: float = 0.0
+
         # Description (max 2 lines)
         self._desc = QLabel(description if description else "")
         self._desc.setWordWrap(True)
@@ -336,6 +351,62 @@ class _DroneCard(QFrame):
             f"font-size: 10px;"
         )
 
+    # -- Run state indicator ------------------------------------------------
+
+    def set_run_state(self, state: str, detail: str = "") -> None:
+        """Update the run state indicator label."""
+        if state == "idle":
+            self._run_state_label.hide()
+            self._countdown_timer.stop()
+        elif state == "running":
+            self._run_state_label.setText("Running lap...")
+            self._run_state_label.setStyleSheet(
+                "font-size: 10px; background: transparent; border: none; padding: 0px;"
+                "color: #4ec9b0; font-weight: bold;"
+            )
+            self._run_state_label.show()
+            self._countdown_timer.stop()
+        elif state == "completed":
+            self._run_state_label.setText(f"Last run: {detail}")
+            self._run_state_label.setStyleSheet(
+                f"font-size: 10px; background: transparent; border: none; padding: 0px;"
+                f"color: {SUCCESS};"
+            )
+            self._run_state_label.show()
+            self._countdown_timer.stop()
+        elif state == "failed":
+            self._run_state_label.setText(f"Failed: {detail}")
+            self._run_state_label.setStyleSheet(
+                f"font-size: 10px; background: transparent; border: none; padding: 0px;"
+                f"color: {DANGER};"
+            )
+            self._run_state_label.show()
+            self._countdown_timer.stop()
+        elif state == "waiting_for_loop":
+            remaining = float(detail) if detail else 0
+            self._wait_until = time.time() + remaining
+            self._update_countdown()
+            self._run_state_label.show()
+            self._countdown_timer.start()
+
+    def _update_countdown(self) -> None:
+        remaining = max(0, self._wait_until - time.time())
+        if remaining <= 0:
+            self._countdown_timer.stop()
+            self._run_state_label.hide()
+            return
+        if remaining < 60:
+            self._run_state_label.setText(f"Waiting for next loop: {int(remaining)}s")
+        else:
+            mins = int(remaining // 60)
+            secs = int(remaining % 60)
+            self._run_state_label.setText(f"Waiting for next loop: {mins}m {secs}s")
+        self._run_state_label.setStyleSheet(
+            f"font-size: 10px; background: transparent; border: none; padding: 0px;"
+            f"color: {WARN};"
+        )
+        self._run_state_label.show()
+
 
 class DroneWorkbayWindow(QDialog):
     """Non-modal window showing a scrollable card menu of saved Drones.
@@ -487,6 +558,7 @@ class DroneWorkbayWindow(QDialog):
                 card.loop_toggled = lambda did, enabled, interval: self._on_card_loop_toggled(did, enabled, interval)
                 card.interval_changed = lambda did, interval: self._on_card_loop_interval_changed(did, interval)
                 self._cards[d.id] = card
+                card.set_run_state("idle")
                 self._card_layout.insertWidget(self._card_layout.count() - 1, card)
                 # Restore loop state if this drone was looping before refresh
                 if d.id in self._loop_intervals:
@@ -509,6 +581,12 @@ class DroneWorkbayWindow(QDialog):
                 self._loop_intervals[drone_id] = interval_seconds or card.interval_seconds
             else:
                 self._loop_intervals.pop(drone_id, None)
+
+    def set_card_run_state(self, drone_id: str, state: str, detail: str = "") -> None:
+        """Update the run state indicator on a drone card."""
+        card = self._cards.get(drone_id)
+        if card is not None:
+            card.set_run_state(state, detail)
 
     def _on_card_loop_toggled(self, drone_id: str, enabled: bool, interval_seconds: int) -> None:
         self._loop_intervals[drone_id] = interval_seconds

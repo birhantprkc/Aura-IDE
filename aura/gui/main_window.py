@@ -7,7 +7,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from PySide6.QtCore import QByteArray, QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QByteArray, Qt, QThread, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
@@ -64,7 +64,6 @@ from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.window_chrome import WindowChromeMixin
 from aura.gui.worker_handler import WorkerEventHandler
 from aura.handoff import extract_handoff_text, generate_handoff_prompt, save_handoff
-from aura.hooks import hooks
 from aura.prompts import SINGLE_SYSTEM_PROMPT
 from aura.updater import UpdateStatus
 
@@ -863,6 +862,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             return
         self._start_drone_run(drone)
 
+    def _update_workbay_card_run_state(self, drone_id: str, state: str, detail: str = "") -> None:
+        if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
+            self._drone_workbay_window.set_card_run_state(drone_id, state, detail)
+
     def _start_drone_run(self, drone: DroneDefinition, summon_goal: str = "", loop_drone_id: str = "") -> None:
         """Start a Drone run from a saved Drone or an Aura-summoned goal."""
         if self._workspace_root is None:
@@ -909,7 +912,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         runner.toolResult.connect(run_card.on_tool_result)
         runner.apiError.connect(run_card.on_api_error)
         runner.receiptReady.connect(run_card.on_receipt_ready)
-        runner.receiptReady.connect(self._on_drone_receipt)
+        runner.receiptReady.connect(lambda receipt, rid=run_id: self._on_drone_receipt(receipt, rid))
         runner.finished.connect(lambda rid=run_id: self._on_drone_finished(rid))
 
         # Standard Qt worker lifetime cleanup — no blocking wait on GUI thread.
@@ -937,6 +940,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         run_card.cancelRequested.connect(lambda rid=run_id: self._on_cancel_drone_run(rid))
 
         self._edge_rail.add_drone_run_pip(run_id, run_drone.name)
+        # Notify workbay card that this drone is running
+        card_id = loop_drone_id if loop_drone_id else run_drone.id
+        self._update_workbay_card_run_state(card_id, "running")
         self._position_edge_tabs()
 
         # Start the thread.
@@ -1092,6 +1098,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_drone_status_changed(self, run_id: str, drone_name: str, status: str) -> None:
         self._edge_rail.set_drone_run_pip_state(run_id, drone_name, status)
+        # Also update the workbay card run state
+        record = self._drone_runs.get(run_id)
+        if record is not None:
+            card_id = record.get("loop_drone_id", "") or record["drone"].id
+            if status == "running":
+                self._update_workbay_card_run_state(card_id, "running")
+            elif status in ("completed", "failed", "cancelled", "timed_out"):
+                # Receipt may already be stored; summary update happens in _on_drone_finished
+                pass
 
     def _remove_drone_run_pip(self, run_id: str) -> None:
         logger.debug("[DroneRun] remove_drone_run_pip run_id=%s", run_id)
@@ -1109,8 +1124,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if enabled:
             self._looping_drones[drone_id] = interval_seconds
             logger.info("[DroneLoop] loop enabled for drone=%s interval=%ds", drone_id, interval_seconds)
-            # If the drone isn't currently running, start it
-            if not self._drone_is_running(drone_id):
+            if self._drone_is_running(drone_id):
+                # Tag active run records so _on_drone_finished sees loop_drone_id
+                for r in self._drone_runs.values():
+                    if r.get("loop_drone_id") == drone_id or r["drone"].id == drone_id:
+                        r["loop_drone_id"] = drone_id
+                self._update_workbay_card_run_state(drone_id, "running")
+            else:
                 drone = DroneStore.load_drone(self._workspace_root, drone_id)
                 if drone is not None:
                     self._start_drone_run(drone, loop_drone_id=drone_id)
@@ -1148,6 +1168,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             logger.debug("[DroneLoop] _start_next_loop_lap: drone=%s no longer exists, removing from loop state", drone_id)
             self._looping_drones.pop(drone_id, None)
             return
+        # Notify workbay card that a new lap is starting
+        self._update_workbay_card_run_state(drone_id, "running")
         self._start_drone_run(drone, loop_drone_id=drone_id)
 
     def _on_drone_finished(self, run_id: str) -> None:
@@ -1188,11 +1210,56 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 lambda lid=loop_drone_id: self._start_next_loop_lap(lid),
             )
 
-    def _on_drone_receipt(self, receipt: object) -> None:
+        # Update workbay card with final run state
+        card_id = loop_drone_id if loop_drone_id else drone.id
+        final_status = drone.status if hasattr(drone, 'status') else ""
+        # Check for stored receipt
+        receipt = record.get("receipt")
+        if receipt is not None:
+            final_status = receipt.status
+            if final_status == "completed":
+                summary = (receipt.summary or "").strip()
+                if len(summary) > 80:
+                    summary = summary[:77] + "..."
+                self._update_workbay_card_run_state(card_id, "completed", summary)
+            elif final_status == "failed":
+                error = (receipt.errors or ["Unknown error"])[0]
+                if len(error) > 80:
+                    error = error[:77] + "..."
+                self._update_workbay_card_run_state(card_id, "failed", error)
+            else:
+                self._update_workbay_card_run_state(card_id, "idle")
+        else:
+            # No receipt - infer from what we know
+            runner_status = ""
+            try:
+                runner_status = runner.run_state.status
+            except RuntimeError:
+                pass
+            if runner_status in ("failed", "timed_out"):
+                self._update_workbay_card_run_state(card_id, "failed", "Unknown error")
+            elif runner_status == "cancelled":
+                self._update_workbay_card_run_state(card_id, "idle")
+            else:
+                self._update_workbay_card_run_state(card_id, "idle")
+        
+        # If loop is active, switch to waiting_for_loop after showing completion briefly
+        if loop_drone_id and loop_drone_id in self._looping_drones:
+            interval = self._looping_drones[loop_drone_id]
+            # Show the completion/failure summary for 3 seconds, then switch to waiting countdown
+            QTimer.singleShot(
+                3000,
+                lambda lid=loop_drone_id, iv=interval: self._update_workbay_card_run_state(lid, "waiting_for_loop", str(iv)),
+            )
+
+    def _on_drone_receipt(self, receipt: object, run_id: str = "") -> None:
         """Handle completed drone receipt — save to disk."""
         if not isinstance(receipt, DroneReceipt):
             return
         self._drone_receipt = receipt
+        # Store receipt in the record so _on_drone_finished can use it
+        if run_id and run_id in self._drone_runs:
+            self._drone_runs[run_id]["receipt"] = receipt
         if self._workspace_root is not None:
             RunHistoryStore.save_run(self._workspace_root, receipt)
 
