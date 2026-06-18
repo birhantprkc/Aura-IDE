@@ -10,9 +10,9 @@ from PySide6.QtCore import QByteArray, Qt, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -192,10 +192,7 @@ class _DroneCard(QFrame):
         )
         interval_layout.addWidget(every_label)
 
-        self._interval_spin = QSpinBox()
-        self._interval_spin.setRange(5, 3600)
-        self._interval_spin.setValue(60)
-        self._interval_spin.setStyleSheet(
+        _SPIN_STYLE = (
             "QSpinBox {"
             "  background: rgba(255,255,255,0.05);"
             "  border: 1px solid rgba(255,255,255,0.08);"
@@ -213,31 +210,39 @@ class _DroneCard(QFrame):
             "QSpinBox::up-arrow { image: none; }"
             "QSpinBox::down-arrow { image: none; }"
         )
-        interval_layout.addWidget(self._interval_spin)
 
-        self._interval_unit = QComboBox()
-        self._interval_unit.addItems(["seconds", "minutes"])
-        self._interval_unit.setCurrentText("seconds")
-        self._interval_unit.setStyleSheet(
-            "QComboBox {"
-            "  background: rgba(255,255,255,0.05);"
-            "  border: 1px solid rgba(255,255,255,0.08);"
-            "  border-radius: 4px;"
-            "  color: #eaecef;"
-            "  padding: 2px 6px;"
-            "  font-size: 11px;"
-            "}"
-            "QComboBox::drop-down { border: none; width: 16px; }"
-            "QComboBox::down-arrow { image: none; }"
+        self._interval_minutes_spin = QSpinBox()
+        self._interval_minutes_spin.setRange(0, 999)
+        self._interval_minutes_spin.setValue(1)
+        self._interval_minutes_spin.setStyleSheet(_SPIN_STYLE)
+        interval_layout.addWidget(self._interval_minutes_spin)
+
+        min_label = QLabel("min")
+        min_label.setStyleSheet(
+            f"color: {_qss_color(FG_DIM)}; font-size: 11px; background: transparent; border: none;"
         )
-        interval_layout.addWidget(self._interval_unit)
+        interval_layout.addWidget(min_label)
 
-        self._interval_spin.valueChanged.connect(self._on_interval_changed)
-        self._interval_unit.currentIndexChanged.connect(self._on_interval_changed)
+        self._interval_seconds_spin = QSpinBox()
+        self._interval_seconds_spin.setRange(0, 59)
+        self._interval_seconds_spin.setValue(0)
+        self._interval_seconds_spin.setStyleSheet(_SPIN_STYLE)
+        interval_layout.addWidget(self._interval_seconds_spin)
+
+        sec_label = QLabel("sec")
+        sec_label.setStyleSheet(
+            f"color: {_qss_color(FG_DIM)}; font-size: 11px; background: transparent; border: none;"
+        )
+        interval_layout.addWidget(sec_label)
+
+        self._interval_minutes_spin.valueChanged.connect(self._on_interval_changed)
+        self._interval_seconds_spin.valueChanged.connect(self._on_interval_changed)
 
         interval_layout.addStretch()
 
-        self._interval_container.setVisible(loop_enabled)
+        self._dim_effect = QGraphicsOpacityEffect(self._interval_container)
+        self._dim_effect.setOpacity(1.0 if loop_enabled else 0.5)
+        self._interval_container.setGraphicsEffect(self._dim_effect)
         layout.addWidget(self._interval_container)
 
         # Action row
@@ -293,26 +298,25 @@ class _DroneCard(QFrame):
 
     def _on_loop_toggled(self, state: int) -> None:
         enabled = bool(state)
-        self._interval_container.setVisible(enabled)
+        self._dim_effect.setOpacity(1.0 if enabled else 0.5)
         if self.loop_toggled is not None:
             self.loop_toggled(self.drone_id, enabled, self.interval_seconds)
 
     @property
     def interval_seconds(self) -> int:
-        value = self._interval_spin.value()
-        unit = self._interval_unit.currentText()
-        if unit == "minutes":
-            return value * 60
-        return value
+        return max(5, self._interval_minutes_spin.value() * 60 + self._interval_seconds_spin.value())
 
     @interval_seconds.setter
     def interval_seconds(self, seconds: int) -> None:
-        if seconds >= 60 and seconds % 60 == 0:
-            self._interval_unit.setCurrentText("minutes")
-            self._interval_spin.setValue(seconds // 60)
-        else:
-            self._interval_unit.setCurrentText("seconds")
-            self._interval_spin.setValue(max(5, seconds))
+        clamped = max(5, seconds)
+        mins = clamped // 60
+        secs = clamped % 60
+        self._interval_minutes_spin.blockSignals(True)
+        self._interval_seconds_spin.blockSignals(True)
+        self._interval_minutes_spin.setValue(mins)
+        self._interval_seconds_spin.setValue(secs)
+        self._interval_minutes_spin.blockSignals(False)
+        self._interval_seconds_spin.blockSignals(False)
 
     def _on_interval_changed(self) -> None:
         if self._loop_toggle.isChecked() and self.interval_changed is not None:
@@ -484,13 +488,21 @@ class DroneWorkbayWindow(QDialog):
                 card.interval_changed = lambda did, interval: self._on_card_loop_interval_changed(did, interval)
                 self._cards[d.id] = card
                 self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+                # Restore loop state if this drone was looping before refresh
+                if d.id in self._loop_intervals:
+                    saved_interval = self._loop_intervals[d.id]
+                    card.interval_seconds = saved_interval
+                    card._loop_toggle.blockSignals(True)
+                    card._loop_toggle.setChecked(True)
+                    card._loop_toggle.blockSignals(False)
 
     def set_card_loop_state(self, drone_id: str, enabled: bool, interval_seconds: int = 0) -> None:
         """Update the loop state on a drone card."""
         card = self._cards.get(drone_id)
         if card is not None:
             card._loop_toggle.setChecked(enabled)
-            card._interval_container.setVisible(enabled)
+            if card._dim_effect is not None:
+                card._dim_effect.setOpacity(1.0 if enabled else 0.5)
             if interval_seconds > 0:
                 card.interval_seconds = interval_seconds
             if enabled:
