@@ -44,11 +44,11 @@ Every manifest MUST include these fields:
 
 ### Runtime payload vs. contracts
 
-Two different things flow into a Drone. Don't weld them.
+Two different things flow into a Drone. Don't confuse them.
 
-**Runtime payload (always injected, never declared).** The runner hands every Drone a stdin object with `goal`, `workspace_root`, `drone_id`, and `upstream`. Read them with `.get()`. They are guaranteed plumbing — never list them in any contract.
+**Runtime payload (always injected, never declared).** The runner hands every Drone a stdin object with `goal`, `workspace_root`, `drone_id`, `input`, and `upstream`. Read them with `.get()`. They are guaranteed plumbing — never list them in any contract. `upstream` is a legacy compatibility field; treat it as plumbing, not as a design surface. Do not design Drones around upstream contracts.
 
-**Cargo (the chain data).** `upstream` holds the `cargo` emitted by the Drones feeding this one, keyed by node id. `input_contract` is the cargo you need from upstream; `cargo_contract` is the cargo you emit. These two — and only these — are what the chain validator type-checks against each other.
+**Contracts (declared metadata).** `input_contract`, `cargo_contract`, and `output_contract` are declared in the manifest to document what the Drone expects and produces. They are informational schemas, not routing contracts.
 
 ### Field rules
 - **id**: lowercase slug, hyphens only. Must match the folder name.
@@ -56,8 +56,8 @@ Two different things flow into a Drone. Don't weld them.
 - **description**: one sentence. What it does, not how.
 - **instructions**: operational detail. What the goal string should contain, what formats it accepts, what the output shape means. The runner and the planner both read this to know how to invoke the Drone.
 - **write_policy**: `read_only` for pure reads/analysis. `normal_diff_approval` for anything that modifies files, pushes, or has side effects. `ask_before_writes` for sensitive writes that need per-action confirmation.
-- **input_contract**: JSON Schema fragment describing ONLY the cargo this Drone consumes from upstream — the fields it expects to find in `upstream`. Same vocabulary as a producer's `cargo_contract`, viewed from the receiving end. Do NOT include runtime fields (`goal`, `workspace_root`, `drone_id`, `upstream`) — the runner always injects those; they are never part of a contract. A chain-head Drone that consumes no upstream cargo leaves this `{}`.
-- **cargo_contract**: JSON Schema fragment describing the structured output the Drone produces. This is what downstream Drones in a chain consume. Be precise — typed fields, required arrays, enums where values are known.
+- **input_contract**: optional JSON Schema describing expected input shape. Do NOT include runtime fields (`goal`, `workspace_root`, `drone_id`, `upstream`) — the runner always injects those; they are never part of a contract.
+- **cargo_contract**: optional JSON Schema describing structured intermediate data. This is informational metadata, not a routing contract.
 - **output_contract**: JSON Schema fragment describing the full stdout output shape, including ok/error envelopes. Use `oneOf` for success vs failure shapes.
 
 ### Contract quality
@@ -140,7 +140,7 @@ if __name__ == "__main__":
 
 8. **Timeout-aware.** The budget gives you N seconds. For operations that could hang (subprocess, network), set timeouts shorter than the budget. A Drone that times out is killed — make sure partial work doesn't leave corruption.
 
-9. **Idempotent when possible.** Running the same Drone twice on the same input should produce the same output (or at minimum, not corrupt state). This matters for chains that retry.
+9. **Idempotent when possible.** Running the same Drone twice on the same input should produce the same output (or at minimum, not corrupt state). This matters when runs overlap or the user re-runs.
 
 ## Design principles
 
@@ -148,16 +148,22 @@ if __name__ == "__main__":
 
 - **Typed over prose.** Contracts, output fields, error shapes — use typed schemas everywhere. Prose descriptions are for humans reading the manifest; schemas are for machines routing the data.
 
-- **Chainable by default.** Your `cargo_contract` is another Drone's input. Make the output shape clean enough that a downstream Drone can consume it without parsing prose out of a summary string.
+- **Small is right.** A 50-line Drone that does one thing perfectly is better than a 300-line Drone that handles three cases. If a Drone would need multiple modes, split into separate Drones.
 
-- **Small is right.** A 50-line Drone that does one thing perfectly is better than a 300-line Drone that handles three cases. Split the cases into three Drones and chain them.
+## Loop-aware rules
+
+- A loop repeats normal single Drone runs. The Drone itself should not implement an infinite outer loop.
+- Each run is one bounded lap. The Drone should be safe to re-run.
+- If no useful work is found, return ok true with a clear summary and enough receipt detail for a human to understand what happened.
+- Maintenance Drones that write should prefer one small change per lap, then stop.
+- Every run should produce enough receipt detail for a human to understand what happened.
 
 ## Reference: good Drone (Remora Snapshot)
 
 This Drone captures a file baseline — hash, line count, git state, parse validity, optional test run. Study it as the reference for how to build.
 
 Key things it does right:
-- Typed JSON Schema contracts on input, output, and cargo
+- Typed JSON Schema contracts on input and output
 - Single verb: snapshot (read-only, no mutations)
 - Goal string parsing for parameters (`target_file:`, `test_command:`)
 - Path traversal protection

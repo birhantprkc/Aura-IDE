@@ -194,7 +194,7 @@ class SendHandler(QObject):
         )
         return True
 
-    # ---- drone architect --------------------------------------------------
+    # ---- drone construction --------------------------------------------------
 
     # ---- undo --------------------------------------------------------------
     def _handle_built_in_action(self, action: str) -> None:

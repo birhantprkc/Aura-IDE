@@ -1,84 +1,90 @@
 # Drones
 
 Drones are reusable folder-backed workers. A Drone is registered from a folder
-that contains:
+that contains a manifest (`drone.json`) and an entrypoint program. Any language
+that reads JSON from stdin and writes JSON to stdout works.
 
-- `drone.json` (the manifest)
-- an entrypoint program (e.g. `main.py`)
-- optional support files such as `requirements.txt` and `README.md`
+## How they work
 
-Drones declare a command entrypoint in their manifest. Aura launches the
-command, sends JSON payload on stdin, and reads JSON cargo from stdout.
-Any language that accepts JSON on stdin and returns JSON on stdout works
-with a simple command change. `route`, `input_contract`, and
-`cargo_contract` are optional but recommended for new Drones. Existing Drones
-without them still work.
+A Drone declares a command entrypoint in its manifest. When you run it, Aura
+launches the command, sends one JSON object on stdin, and reads one JSON result
+from stdout. That result is also the Drone's **receipt** — it proves what
+happened and includes enough detail to judge the work without re-running.
+
+## Running Drones
+
+- **Run** — Start a single Drone run from the main UI or the Drone Workbay.
+- **Loop** — Toggle looping to run a Drone repeatedly until stopped. Each lap
+  is one bounded run. The Drone should be safe to re-run.
+- **Delete** — Remove the Drone from the project roster. The folder stays on
+  disk until you explicitly clean it up.
+
+## Drone Workbay
+
+The Drone Workbay shows standalone saved Drone cards. From each card you can
+Run the Drone once, toggle Loop for repeated runs, or Delete it. Each run
+produces a receipt you can browse from the Workbay. Read-only Drones run in
+parallel for safe background investigation. Write-capable Drones follow the
+same diff-approval cycle as any Worker.
+
+## Manifest example
+
+Every Drone needs a `drone.json` manifest with at minimum these fields:
 
 ```json
 {
   "id": "source-scout",
   "name": "Source Scout",
-  "description": "Collects source candidates.",
+  "description": "Collects source candidates matching a topic.",
+  "instructions": "Given a topic string, search public sources and return matching candidates.",
+  "write_policy": "read_only",
   "entrypoint": {
     "kind": "command",
     "command": ["python", "main.py"],
     "protocol": "json-stdio"
   },
-  "instructions": "Collect candidates and return cargo.",
-  "write_policy": "read_only",
-  "allowed_tools": [],
-  "output_contract": "Return candidate cargo.",
-  "route": {
-    "type": "feed",
-    "targets": ["https://www.reddit.com/r/.../.rss", "https://hn.algolia.com/api/v1/search"],
-    "auth": "none",
-    "reason": "Reddit RSS and HN Algolia provide public, machine-readable sources.",
-    "fallback": "HN Algolia if Reddit RSS is rate-limited"
-  },
-  "cargo_contract": {
-    "type": "candidate_list",
-    "description": "List of source candidates matching the query",
-    "schema": {
-      "type": "object",
-      "properties": {
-        "candidates": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "title": {"type": "string"},
-              "source": {"type": "string"},
-              "url": {"type": "string"},
-              "snippet": {"type": "string"},
-              "timestamp": {"type": "string"},
-              "matched_topic": {"type": "string"},
-              "reason": {"type": "string"}
+  "output_contract": {
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "ok": {"const": true},
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {"type": "string"},
+                "source": {"type": "string"},
+                "url": {"type": "string"},
+                "snippet": {"type": "string"}
+              }
             }
-          }
-        }
+          },
+          "summary": {"type": "string"}
+        },
+        "required": ["ok", "candidates", "summary"]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "ok": {"const": false},
+          "error": {"type": "string"},
+          "summary": {"type": "string"}
+        },
+        "required": ["ok", "error", "summary"]
       }
-    }
-  },
-  "input_contract": {
-    "type": "search_query",
-    "description": "Topic or keywords to search for",
-    "schema": {
-      "type": "object",
-      "properties": {
-        "query": {"type": "string"},
-        "max_results": {"type": "integer", "default": 20}
-      }
-    }
+    ]
   }
 }
 ```
 
-`allowed_tools` is a compatibility field for older UI surfaces. New Drones run
-through their folder entrypoint, not through an LLM tool menu.
+Optional manifest fields such as `input_contract` and `cargo_contract` can
+document expected input shape and structured intermediate data. See
+`aura/drones/drone_construction.md` for the full construction spec.
 
-Use `/drone` to enter Drone Architect mode, then describe the Drone you want in
-the next normal chat message. Aura may use the Planner/Worker harness to author
-the folder, but registration goes through `register_drone_folder`, which
-validates the folder structure (drone.json must parse, entrypoint files must exist)
-before copying the Drone into Aura's global directory. Real Drone behavior is
-checked when the user runs the Drone from Workbay.
+## Receipts
+
+Every run produces a receipt — the Drone's stdout JSON object. Receipts are
+stored per project so you can review past runs, check summaries, and understand
+what the Drone accomplished without re-running it.

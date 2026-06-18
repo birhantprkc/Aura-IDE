@@ -898,7 +898,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         reply = QMessageBox.question(
             self,
             "Delete Drone",
-            "Are you sure you want to delete this drone?\n\nAny workflow that references this drone will show a missing node.",
+            "Are you sure you want to delete this drone?\n\nThis cannot be undone.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
