@@ -10,6 +10,7 @@ from pathlib import Path
 
 from aura.drones.definition import DroneBudget, DroneDefinition, slugify
 from aura.drones.receipt import DroneReceipt
+from aura.paths import aura_root
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +38,8 @@ def _project_root_for_drone_storage(workspace_root: Path | None = None) -> Path:
 
 
 def _global_drones_root(workspace_root: Path | None = None) -> Path:
-    """Return the active project's .aura/drones directory, creating it if needed."""
-    project_root = _project_root_for_drone_storage(workspace_root)
-    d = project_root / ".aura" / "drones"
+    """Return the global .aura/drones directory under aura_root, creating it if needed."""
+    d = aura_root() / ".aura" / "drones"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

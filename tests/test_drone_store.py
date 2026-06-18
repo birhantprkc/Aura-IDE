@@ -5,20 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from aura import paths as aura_paths
 from aura.drones.definition import DroneDefinition, slugify
 from aura.drones.store import DroneStore, _drone_from_dict, _global_drones_root
 
 
 @pytest.fixture(autouse=True)
 def _patch_drones_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Make _project_root_for_drone_storage return tmp_path so _global_drones_root
-    # resolves to tmp_path / ".aura" / "drones" naturally.
-    monkeypatch.setattr(aura_paths, "aura_root", lambda: tmp_path / "aura_root")
-    monkeypatch.setattr(
-        "aura.drones.store._project_root_for_drone_storage",
-        lambda workspace_root=None: tmp_path,
-    )
+    # Make aura.drones.store.aura_root redirect to a temp location so
+    # _global_drones_root resolves to tmp_path / ".aura" / "drones".
+    monkeypatch.setattr("aura.drones.store.aura_root", lambda: tmp_path / "aura_root")
 
 
 def _write_drone_folder(
