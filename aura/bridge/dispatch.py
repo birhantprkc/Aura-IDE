@@ -35,7 +35,6 @@ from aura.conversation import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
     WorkerMismatch,
-    WorkerOutcomeStatus,
     WorkerTaskSpec,
     normalize_worker_task,
 )

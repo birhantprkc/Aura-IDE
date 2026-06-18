@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.drones.definition import DroneDefinition
 from aura.drones.store import DroneStore
 from aura.gui.theme import ACCENT, BG, BG_ALT, BORDER, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 

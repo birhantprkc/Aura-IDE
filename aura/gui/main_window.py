@@ -75,6 +75,8 @@ MAX_PARALLEL_READ_ONLY_DRONES = 3
 
 class MainWindow(WindowChromeMixin, QMainWindow):
     droneRunFinishedOnUiThread = Signal(str)
+    droneStatusChangedOnUiThread = Signal(str, str, str)  # run_id, drone_name, status
+    droneReceiptReadyOnUiThread = Signal(object, str)     # receipt, run_id
 
     def __init__(self) -> None:
         super().__init__()
@@ -212,6 +214,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
 
         self.droneRunFinishedOnUiThread.connect(self._on_drone_finished, Qt.ConnectionType.QueuedConnection)
+        self.droneStatusChangedOnUiThread.connect(self._on_drone_status_changed)
+        self.droneReceiptReadyOnUiThread.connect(self._on_drone_receipt)
 
         # Worker event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
@@ -906,7 +910,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Connect signals.
         runner.statusChanged.connect(run_card.on_status_changed)
         runner.statusChanged.connect(
-            lambda status, rid=run_id, name=run_drone.name: self._on_drone_status_changed(rid, name, status)
+            lambda status, rid=run_id, name=run_drone.name: self.droneStatusChangedOnUiThread.emit(rid, name, status)
         )
         runner.contentDelta.connect(run_card.on_content_delta)
         runner.toolCallStart.connect(run_card.on_tool_call_start)
@@ -914,7 +918,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         runner.toolResult.connect(run_card.on_tool_result)
         runner.apiError.connect(run_card.on_api_error)
         runner.receiptReady.connect(run_card.on_receipt_ready)
-        runner.receiptReady.connect(lambda receipt, rid=run_id: self._on_drone_receipt(receipt, rid))
+        runner.receiptReady.connect(lambda receipt, rid=run_id: self.droneReceiptReadyOnUiThread.emit(receipt, rid))
         runner.finished.connect(lambda rid=run_id: self.droneRunFinishedOnUiThread.emit(rid))
 
         # Standard Qt worker lifetime cleanup — no blocking wait on GUI thread.
