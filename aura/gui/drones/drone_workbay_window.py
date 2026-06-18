@@ -9,6 +9,8 @@ from pathlib import Path
 from PySide6.QtCore import QByteArray, Qt, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QColor, QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -58,6 +61,8 @@ class _DroneCard(QFrame):
         super().__init__(parent)
         self.drone_id = drone_id
         self._loop_enabled = loop_enabled
+        self.loop_toggled = None  # callback(drone_id, enabled, interval_seconds)
+        self.interval_changed = None  # callback(drone_id, interval_seconds)
 
         self.setObjectName("workbay_card")
         self.setStyleSheet(
@@ -77,10 +82,10 @@ class _DroneCard(QFrame):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
 
-        # Title row: status dot + name
-        title_row = QHBoxLayout()
-        title_row.setContentsMargins(0, 0, 0, 0)
-        title_row.setSpacing(8)
+        # Header row: status dot + name + Loop toggle
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(8)
 
         dot_color = STATUS_COLORS.get(status, FG_MUTED)
         self._dot = QLabel()
@@ -90,7 +95,7 @@ class _DroneCard(QFrame):
             f"border-radius: 5px;"
             f"border: none;"
         )
-        title_row.addWidget(self._dot)
+        header_row.addWidget(self._dot)
 
         title = QLabel(name)
         title_font = QFont()
@@ -100,8 +105,35 @@ class _DroneCard(QFrame):
         title.setStyleSheet(
             f"color: {_qss_color(FG)}; background: transparent; border: none;"
         )
-        title_row.addWidget(title, 1)
-        layout.addLayout(title_row)
+        header_row.addWidget(title, 1)
+
+        loop_label = QLabel("Loop")
+        loop_label.setStyleSheet(
+            f"color: {_qss_color(FG_DIM)}; font-size: 11px; background: transparent; border: none;"
+        )
+        header_row.addWidget(loop_label)
+
+        self._loop_toggle = QCheckBox()
+        self._loop_toggle.setChecked(loop_enabled)
+        self._loop_toggle.setStyleSheet(
+            "QCheckBox::indicator {"
+            "  width: 34px; height: 18px;"
+            "  border-radius: 9px;"
+            "  border: 1px solid rgba(255,255,255,0.12);"
+            "  background: rgba(255,255,255,0.08);"
+            "}"
+            "QCheckBox::indicator:checked {"
+            "  background: #9ece6a;"
+            "  border-color: rgba(158,206,106,0.4);"
+            "}"
+            "QCheckBox::indicator:disabled {"
+            "  opacity: 0.4;"
+            "}"
+        )
+        self._loop_toggle.stateChanged.connect(self._on_loop_toggled)
+        header_row.addWidget(self._loop_toggle)
+
+        layout.addLayout(header_row)
 
         # Pill row: status + policy
         pill_row = QHBoxLayout()
@@ -148,9 +180,69 @@ class _DroneCard(QFrame):
         self._desc.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self._desc)
 
-        # Action buttons
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(6)
+        # Loop interval row (hidden when loop is OFF)
+        self._interval_container = QWidget()
+        interval_layout = QHBoxLayout(self._interval_container)
+        interval_layout.setContentsMargins(0, 0, 0, 0)
+        interval_layout.setSpacing(6)
+
+        every_label = QLabel("Every")
+        every_label.setStyleSheet(
+            f"color: {_qss_color(FG_DIM)}; font-size: 11px; background: transparent; border: none;"
+        )
+        interval_layout.addWidget(every_label)
+
+        self._interval_spin = QSpinBox()
+        self._interval_spin.setRange(5, 3600)
+        self._interval_spin.setValue(60)
+        self._interval_spin.setStyleSheet(
+            "QSpinBox {"
+            "  background: rgba(255,255,255,0.05);"
+            "  border: 1px solid rgba(255,255,255,0.08);"
+            "  border-radius: 4px;"
+            "  color: #eaecef;"
+            "  padding: 2px 6px;"
+            "  font-size: 11px;"
+            "  max-width: 60px;"
+            "}"
+            "QSpinBox::up-button, QSpinBox::down-button {"
+            "  width: 14px;"
+            "  border: none;"
+            "  background: transparent;"
+            "}"
+            "QSpinBox::up-arrow { image: none; }"
+            "QSpinBox::down-arrow { image: none; }"
+        )
+        interval_layout.addWidget(self._interval_spin)
+
+        self._interval_unit = QComboBox()
+        self._interval_unit.addItems(["seconds", "minutes"])
+        self._interval_unit.setCurrentText("seconds")
+        self._interval_unit.setStyleSheet(
+            "QComboBox {"
+            "  background: rgba(255,255,255,0.05);"
+            "  border: 1px solid rgba(255,255,255,0.08);"
+            "  border-radius: 4px;"
+            "  color: #eaecef;"
+            "  padding: 2px 6px;"
+            "  font-size: 11px;"
+            "}"
+            "QComboBox::drop-down { border: none; width: 16px; }"
+            "QComboBox::down-arrow { image: none; }"
+        )
+        interval_layout.addWidget(self._interval_unit)
+
+        self._interval_spin.valueChanged.connect(self._on_interval_changed)
+        self._interval_unit.currentIndexChanged.connect(self._on_interval_changed)
+
+        interval_layout.addStretch()
+
+        self._interval_container.setVisible(loop_enabled)
+        layout.addWidget(self._interval_container)
+
+        # Action row
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
 
         # Run
         self._btn_run = QPushButton("\u25b6 Run")
@@ -170,74 +262,61 @@ class _DroneCard(QFrame):
             f"}}"
         )
         self._btn_run.setCursor(Qt.PointingHandCursor)
-        btn_row.addWidget(self._btn_run)
+        action_row.addWidget(self._btn_run)
+
+        action_row.addStretch()
 
         # Delete
-        self._btn_delete = QPushButton("\u2715")
-        self._btn_delete.setFixedWidth(28)
+        self._btn_delete = QPushButton("\U0001f5d1 Delete")
         self._btn_delete.setStyleSheet(
             f"QPushButton {{"
             f"  background: transparent;"
-            f"  border: 1px solid transparent;"
+            f"  border: 1px solid rgba(248, 113, 113, 0.15);"
             f"  border-radius: 4px;"
-            f"  color: {_qss_color(FG_DIM)};"
-            f"  font-size: 12px;"
-            f"  padding: 3px;"
+            f"  color: {_qss_color(DANGER)};"
+            f"  font-size: 11px;"
+            f"  padding: 3px 12px;"
             f"}}"
             f"QPushButton:hover {{"
-            f"  color: {_qss_color(DANGER)};"
-            f"  border-color: rgba(248, 113, 113, 0.20);"
+            f"  background: rgba(248, 113, 113, 0.12);"
+            f"  border-color: rgba(248, 113, 113, 0.30);"
             f"}}"
         )
         self._btn_delete.setCursor(Qt.PointingHandCursor)
-        btn_row.addWidget(self._btn_delete)
+        action_row.addWidget(self._btn_delete)
 
-        # Loop toggle
-        self._btn_loop = QPushButton()
-        self._set_loop_button_state(loop_enabled)
-        self._btn_loop.setCursor(Qt.PointingHandCursor)
-        btn_row.addWidget(self._btn_loop)
-
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
-
-    def _set_loop_button_state(self, enabled: bool) -> None:
-        self._loop_enabled = enabled
-        if enabled:
-            self._btn_loop.setText("\U0001f504 Looping")
-            self._btn_loop.setStyleSheet(
-                f"QPushButton {{"
-                f"  background: rgba(158, 206, 106, 0.15);"
-                f"  border: 1px solid rgba(158, 206, 106, 0.30);"
-                f"  border-radius: 4px;"
-                f"  color: {_qss_color(SUCCESS)};"
-                f"  font-size: 10px;"
-                f"  padding: 3px 10px;"
-                f"}}"
-                f"QPushButton:hover {{"
-                f"  background: rgba(158, 206, 106, 0.25);"
-                f"}}"
-            )
-        else:
-            self._btn_loop.setText("\U0001f501 Loop")
-            self._btn_loop.setStyleSheet(
-                f"QPushButton {{"
-                f"  background: transparent;"
-                f"  border: 1px solid rgba(255, 255, 255, 0.06);"
-                f"  border-radius: 4px;"
-                f"  color: {_qss_color(FG_DIM)};"
-                f"  font-size: 10px;"
-                f"  padding: 3px 10px;"
-                f"}}"
-                f"QPushButton:hover {{"
-                f"  border-color: rgba(255, 255, 255, 0.15);"
-                f"  color: {_qss_color(FG)};"
-                f"}}"
-            )
+        layout.addLayout(action_row)
 
     @property
     def loop_enabled(self) -> bool:
-        return self._loop_enabled
+        return self._loop_toggle.isChecked()
+
+    def _on_loop_toggled(self, state: int) -> None:
+        enabled = bool(state)
+        self._interval_container.setVisible(enabled)
+        if self.loop_toggled is not None:
+            self.loop_toggled(self.drone_id, enabled, self.interval_seconds)
+
+    @property
+    def interval_seconds(self) -> int:
+        value = self._interval_spin.value()
+        unit = self._interval_unit.currentText()
+        if unit == "minutes":
+            return value * 60
+        return value
+
+    @interval_seconds.setter
+    def interval_seconds(self, seconds: int) -> None:
+        if seconds >= 60 and seconds % 60 == 0:
+            self._interval_unit.setCurrentText("minutes")
+            self._interval_spin.setValue(seconds // 60)
+        else:
+            self._interval_unit.setCurrentText("seconds")
+            self._interval_spin.setValue(max(5, seconds))
+
+    def _on_interval_changed(self) -> None:
+        if self._loop_toggle.isChecked() and self.interval_changed is not None:
+            self.interval_changed(self.drone_id, self.interval_seconds)
 
     def update_status(self, status: str) -> None:
         """Update the status dot and pill without recreating the card."""
@@ -265,7 +344,8 @@ class DroneWorkbayWindow(QDialog):
 
     runDroneRequested = Signal(str, str)  # drone_id, folder
     deleteDroneRequested = Signal(str)    # drone_id
-    loopDroneRequested = Signal(str, bool)  # drone_id, enabled
+    loopDroneRequested = Signal(str, bool, int)  # drone_id, enabled, interval_seconds
+    loopIntervalChanged = Signal(str, int)  # drone_id, interval_seconds
 
     def __init__(
         self,
@@ -284,6 +364,7 @@ class DroneWorkbayWindow(QDialog):
         self._geometry_restore_done = False
         self._initial_geometry = initial_geometry.strip()
         self._cards: dict[str, _DroneCard] = {}
+        self._loop_intervals: dict[str, int] = {}
 
         # Geometry save timer
         self._geometry_save_timer = QTimer(self)
@@ -398,23 +479,32 @@ class DroneWorkbayWindow(QDialog):
                 card._btn_delete.clicked.connect(
                     lambda checked, did=d.id: self.deleteDroneRequested.emit(did)
                 )
-                # Loop button wiring (must capture current loop state)
-                card._btn_loop.clicked.connect(
-                    lambda checked, did=d.id, c=card: self._on_card_loop_toggled(did, c)
-                )
+                # Loop wiring via callbacks
+                card.loop_toggled = lambda did, enabled, interval: self._on_card_loop_toggled(did, enabled, interval)
+                card.interval_changed = lambda did, interval: self._on_card_loop_interval_changed(did, interval)
                 self._cards[d.id] = card
                 self._card_layout.insertWidget(self._card_layout.count() - 1, card)
 
-    def set_card_loop_state(self, drone_id: str, enabled: bool) -> None:
-        """Update the loop button state on a drone card."""
+    def set_card_loop_state(self, drone_id: str, enabled: bool, interval_seconds: int = 0) -> None:
+        """Update the loop state on a drone card."""
         card = self._cards.get(drone_id)
         if card is not None:
-            card._set_loop_button_state(enabled)
+            card._loop_toggle.setChecked(enabled)
+            card._interval_container.setVisible(enabled)
+            if interval_seconds > 0:
+                card.interval_seconds = interval_seconds
+            if enabled:
+                self._loop_intervals[drone_id] = interval_seconds or card.interval_seconds
+            else:
+                self._loop_intervals.pop(drone_id, None)
 
-    def _on_card_loop_toggled(self, drone_id: str, card: _DroneCard) -> None:
-        enabled = not card.loop_enabled
-        card._set_loop_button_state(enabled)
-        self.loopDroneRequested.emit(drone_id, enabled)
+    def _on_card_loop_toggled(self, drone_id: str, enabled: bool, interval_seconds: int) -> None:
+        self._loop_intervals[drone_id] = interval_seconds
+        self.loopDroneRequested.emit(drone_id, enabled, interval_seconds)
+
+    def _on_card_loop_interval_changed(self, drone_id: str, interval_seconds: int) -> None:
+        self._loop_intervals[drone_id] = interval_seconds
+        self.loopIntervalChanged.emit(drone_id, interval_seconds)
 
     def show_and_raise(self) -> None:
         self.show()

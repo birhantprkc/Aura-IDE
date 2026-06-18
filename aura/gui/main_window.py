@@ -319,7 +319,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._write_drone_run_id: str | None = None
         self._drone_receipt: DroneReceipt | None = None
         self._pending_drone_summons: dict[str, dict[str, str]] = {}
-        self._looping_drones: set[str] = set()  # drone_ids whose loop is active
+        self._looping_drones: dict[str, int] = {}  # drone_id -> interval_seconds
 
         self._pending_handoff: bool = False
         self._tree = self._playground.file_tree()
@@ -882,6 +882,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         workbay.runDroneRequested.connect(self._on_launch_drone)
         workbay.deleteDroneRequested.connect(self._on_delete_drone)
         workbay.loopDroneRequested.connect(self._on_loop_drone_toggled)
+        workbay.loopIntervalChanged.connect(self._on_loop_interval_changed)
         workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
         workbay.show_and_raise()
 
@@ -1145,7 +1146,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # If this was a looped run, disable the loop
         loop_id = record.get("loop_drone_id", "")
         if loop_id:
-            self._looping_drones.discard(loop_id)
+            self._looping_drones.pop(loop_id, None)
             # Update the workbay card loop state if the window is open
             if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
                 self._drone_workbay_window.set_card_loop_state(loop_id, False)
@@ -1160,11 +1161,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._edge_rail.remove_drone_run_pip(run_id)
         self._position_edge_tabs()
 
-    def _on_loop_drone_toggled(self, drone_id: str, enabled: bool) -> None:
+    def _on_loop_drone_toggled(self, drone_id: str, enabled: bool, interval_seconds: int = 60) -> None:
         """Enable or disable looping for a single drone."""
         if enabled:
-            self._looping_drones.add(drone_id)
-            logger.info("[DroneLoop] loop enabled for drone=%s", drone_id)
+            self._looping_drones[drone_id] = interval_seconds
+            logger.info("[DroneLoop] loop enabled for drone=%s interval=%ds", drone_id, interval_seconds)
             # If the drone isn't currently running, start it
             already_running = any(
                 r.get("loop_drone_id") == drone_id or r["drone"].id == drone_id
@@ -1175,8 +1176,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 if drone is not None:
                     self._start_drone_run(drone, loop_drone_id=drone_id)
         else:
-            self._looping_drones.discard(drone_id)
+            self._looping_drones.pop(drone_id, None)
             logger.info("[DroneLoop] loop disabled for drone=%s", drone_id)
+
+    def _on_loop_interval_changed(self, drone_id: str, interval_seconds: int) -> None:
+        if drone_id in self._looping_drones:
+            self._looping_drones[drone_id] = interval_seconds
+            logger.debug("[DroneLoop] interval updated for drone=%s to %ds", drone_id, interval_seconds)
 
     def _on_drone_finished(self, run_id: str) -> None:
         """UI/bookkeeping cleanup after a drone run.
@@ -1209,11 +1215,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         loop_drone_id = record.get("loop_drone_id", "")
         if loop_drone_id and loop_drone_id in self._looping_drones:
-            logger.debug("[DroneRun] loop active for drone=%s, scheduling next run in 2s", loop_drone_id)
+            interval = self._looping_drones[loop_drone_id]
+            logger.debug("[DroneLoop] loop active for drone=%s, scheduling next run in %ds", loop_drone_id, interval)
             # Re-read the drone definition in case it changed
             drone_def = DroneStore.load_drone(self._workspace_root, loop_drone_id)
             if drone_def is not None:
-                QTimer.singleShot(2000, lambda d=drone_def, lid=loop_drone_id: self._start_drone_run(d, loop_drone_id=lid))
+                QTimer.singleShot(interval * 1000, lambda d=drone_def, lid=loop_drone_id: self._start_drone_run(d, loop_drone_id=lid))
 
     def _on_drone_receipt(self, receipt: object) -> None:
         """Handle completed drone receipt — save to disk."""
