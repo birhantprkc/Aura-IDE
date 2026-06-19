@@ -112,8 +112,7 @@ class MainWindowWorkspaceController(QObject):
         window._left_pane.refresh_projects(path)
         window._left_pane.refresh_drones(path)
         # Close drone workbay when workspace root changes
-        if window._drone_workbay_window is not None:
-            window._drone_workbay_window.hide()
+        window._drone_controller.hide_workbay()
         clear_drone_construction()
         window._refresh_status_bar()
         return str(path)
