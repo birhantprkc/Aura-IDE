@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Parallel read-only Drone limit — preserve existing project behaviour.
-MAX_PARALLEL_READ_ONLY_DRONES = 5
+MAX_PARALLEL_READ_ONLY_DRONES = 3
 
 
 class MainWindowDroneController(QObject):
@@ -566,8 +566,13 @@ class MainWindowDroneController(QObject):
         self._window._edge_rail.remove_drone_run_pip(run_id)
         self._window._position_edge_tabs()
 
-    def drone_is_running(self) -> bool:
-        return self._drone_runner_thread is not None and self._drone_runner_thread.isRunning()
+    def drone_is_running(self, drone_id: str) -> bool:
+        for run in self._drone_runs.values():
+            if run["drone"].id == drone_id or run.get("loop_drone_id") == drone_id:
+                thread = run.get("thread")
+                if thread is not None and thread.isRunning():
+                    return True
+        return False
 
     # -- looping --
 
@@ -582,7 +587,7 @@ class MainWindowDroneController(QObject):
                 drone_id,
                 interval_seconds,
             )
-            if self.drone_is_running():
+            if self.drone_is_running(drone_id):
                 # Tag active run records so on_drone_finished sees loop_drone_id
                 for r in self._drone_runs.values():
                     if (
@@ -631,7 +636,7 @@ class MainWindowDroneController(QObject):
             )
             return
         # Already running?
-        if self.drone_is_running():
+        if self.drone_is_running(drone_id):
             logger.debug(
                 "[DroneLoop] start_next_loop_lap: drone=%s already running, skipping",
                 drone_id,
@@ -745,10 +750,11 @@ class MainWindowDroneController(QObject):
                 ),
             )
 
-    def on_drone_receipt(self, receipt: object) -> None:
+    def on_drone_receipt(self, receipt: object, run_id: str = "") -> None:
         """Handle completed drone receipt."""
         self._drone_receipt = receipt
-        run_id = getattr(receipt, "run_id", "")
+        if not run_id:
+            run_id = getattr(receipt, "run_id", "")
         self._window._drone_reports_window.on_receipt_ready(run_id, receipt)
 
     def on_focus_drone_run(self, run_id: str = "") -> None:

@@ -70,7 +70,7 @@ from aura.updater import UpdateStatus
 class MainWindow(WindowChromeMixin, QMainWindow):
     droneRunFinishedOnUiThread = Signal(str)
     droneStatusChangedOnUiThread = Signal(str, str, str)  # run_id, drone_name, status
-    droneReceiptReadyOnUiThread = Signal(object)
+    droneReceiptReadyOnUiThread = Signal(object, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -130,6 +130,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._balance_controller = MainWindowBalanceController(self)
         self._balance_controller.balance_changed.connect(self._refresh_status_bar)
+
+        self._drone_controller = MainWindowDroneController(self)
 
         # ----- splitter ----
         self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -314,8 +316,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.stop_requested.connect(self._send_handler.handle_stop)
         self._input.retry_requested.connect(self._on_retry)
         self._input.handoff_requested.connect(self._on_handoff_requested)
-
-        self._drone_controller = MainWindowDroneController(self)
 
         self._pending_handoff: bool = False
         self._tree = self._playground.file_tree()
