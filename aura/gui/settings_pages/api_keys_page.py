@@ -67,6 +67,7 @@ class ApiKeysPage(QWidget):
 
         self._provider_rows: dict[str, dict[str, object]] = {}
         self._credit_threads: list[QThread] = []
+        self._credit_workers: list = []
 
         for pid in provider_registry.ids():
             spec = provider_registry.get(pid)
@@ -320,6 +321,7 @@ class ApiKeysPage(QWidget):
         thread = QThread(self)
         worker = CreditsCheckoutWorker(base_url=base_url, email=email, pack_id=pack_id)
         worker.moveToThread(thread)
+        self._credit_workers.append(worker)
 
         thread.started.connect(worker.run)
         worker.finished.connect(lambda url, sid, secret, err: self._on_checkout_completed(url, sid, secret, err, pack_id))
@@ -327,6 +329,16 @@ class ApiKeysPage(QWidget):
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         self._credit_threads.append(thread)
+
+        _thread = thread
+        _worker = worker
+        def _cleanup():
+            if _worker in self._credit_workers:
+                self._credit_workers.remove(_worker)
+            if _thread in self._credit_threads:
+                self._credit_threads.remove(_thread)
+        thread.finished.connect(_cleanup)
+
         thread.start()
 
     def _on_checkout_completed(self, checkout_url: str, session_id: str, claim_secret: str, error: str, pack_id: str) -> None:
@@ -390,6 +402,7 @@ class ApiKeysPage(QWidget):
         thread = QThread(self)
         worker = CreditsClaimWorker(base_url=base_url, session_id=session_id, claim_secret=claim_secret)
         worker.moveToThread(thread)
+        self._credit_workers.append(worker)
 
         thread.started.connect(worker.run)
         worker.finished.connect(lambda aid, bal, tok, err, tok_req: self._on_claim_completed(aid, bal, tok, err, tok_req))
@@ -397,6 +410,16 @@ class ApiKeysPage(QWidget):
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         self._credit_threads.append(thread)
+
+        _thread = thread
+        _worker = worker
+        def _cleanup():
+            if _worker in self._credit_workers:
+                self._credit_workers.remove(_worker)
+            if _thread in self._credit_threads:
+                self._credit_threads.remove(_thread)
+        thread.finished.connect(_cleanup)
+
         thread.start()
 
     def _on_claim_completed(self, account_id: str, balance_micros: int, token: str, error: str, token_required: bool) -> None:
@@ -453,6 +476,7 @@ class ApiKeysPage(QWidget):
             except RuntimeError:
                 pass
         self._credit_threads.clear()
+        self._credit_workers.clear()
 
     # --- Collect ---
 
