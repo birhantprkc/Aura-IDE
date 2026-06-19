@@ -346,16 +346,16 @@ class ConversationBridge(QObject):
         enriched = inject_tier1_context(prompt, self._tier1_context)
         self._history.set_system(enriched)
 
-    def _compute_and_cache_tier1(self) -> None:
+    def _compute_and_cache_tier1(self, force_repo_map: bool = False) -> None:
         """Recompute Tier 1 context from the current workspace root and cache it."""
         workspace_root = self._registry.workspace_root
         if workspace_root is not None:
-            self._tier1_context = build_tier1_context(workspace_root)
+            self._tier1_context = build_tier1_context(workspace_root, force=force_repo_map)
         self._dispatch_proxy.set_tier1_context(self._tier1_context)
 
-    def refresh_tier1_context(self) -> None:
+    def refresh_tier1_context(self, force_repo_map: bool = False) -> None:
         """Refresh workspace context and reapply the active system prompt."""
-        self._compute_and_cache_tier1()
+        self._compute_and_cache_tier1(force_repo_map=force_repo_map)
         if self._planner_worker_mode:
             sys_prompt = self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
         else:
@@ -506,6 +506,15 @@ class ConversationBridge(QObject):
         self._index_to_name.clear()
         self._active_model = str(model)
         self._dispatch_proxy.set_max_tool_rounds(max_tool_rounds)
+        if self._registry.workspace_root is not None:
+            if self._planner_worker_mode:
+                base_prompt = self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
+            else:
+                base_prompt = self._single_system_prompt if self._single_system_prompt else SINGLE_SYSTEM_PROMPT
+            self._manager.configure_for_planner(
+                base_prompt=base_prompt,
+                workspace_root=self._registry.workspace_root,
+            )
         self._thread = QThread()
         self._worker = _Worker(
             manager=self._manager,

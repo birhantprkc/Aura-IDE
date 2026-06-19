@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import subprocess
 import threading
@@ -226,8 +227,33 @@ class ConversationManager:
     def set_workspace_root(self, root: Path) -> None:
         self._tool_runner.set_workspace_root(root)
 
-    def send(
-        self,
+    _planner_base_system_prompt: str | None = None
+    _workspace_root_for_refresh: Path | None = None
+
+    def configure_for_planner(self, base_prompt: str, workspace_root: Path) -> None:
+        """Store the base system prompt template and workspace root for mid-turn refresh."""
+        self._planner_base_system_prompt = base_prompt
+        self._workspace_root_for_refresh = workspace_root
+
+    def _refresh_tier1_after_writes(self) -> None:
+        """Rebuild Tier 1 context with force-refreshed repo map and update system prompt.
+
+        Called after a worker dispatch completes with file writes. Forces repo map
+        regeneration so the planner's next LLM round sees updated code structure.
+        Does nothing if configure_for_planner was not called.
+        """
+        if self._planner_base_system_prompt is None or self._workspace_root_for_refresh is None:
+            return
+        from aura.prompts import build_tier1_context, inject_tier1_context
+        try:
+            tier1_text = build_tier1_context(self._workspace_root_for_refresh, force=True)
+            enriched = inject_tier1_context(self._planner_base_system_prompt, tier1_text)
+            self._history.set_system(enriched)
+        except Exception:
+            logger = logging.getLogger(__name__)
+            logger.warning("Failed to refresh Tier 1 context after worker writes", exc_info=True)
+
+    def send(        self,
         on_event: EventCallback,
         approval_cb: ApprovalCallback,
         cancel_event: threading.Event,
@@ -814,6 +840,7 @@ class ConversationManager:
                         self._history.append_user_text(
                             _planner_stale_read_notice(planner_stale_read_files)
                         )
+                        self._refresh_tier1_after_writes()
                     self._append_dispatch_blocker_message(
                         res["result"], str(res.get("blocker_reason", "")), on_event
                     )
@@ -833,6 +860,7 @@ class ConversationManager:
                 self._history.append_user_text(
                     _planner_stale_read_notice(planner_stale_read_files)
                 )
+                self._refresh_tier1_after_writes()
 
             if _worker_phase_boundary_info is not None:
                 worker_phase_boundary_info = _worker_phase_boundary_info
