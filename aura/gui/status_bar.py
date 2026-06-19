@@ -24,19 +24,27 @@ class AuraStatusBar(QStatusBar):
         self._status_cost.setObjectName("statusCost")
         self.addPermanentWidget(self._status_cost)
 
+        self._status_balance = QLabel("")
+        self._status_balance.setObjectName("statusBalance")
+        self.addPermanentWidget(self._status_balance)
+        self._status_balance.setVisible(False)
+
         # Monospace for numbers
         mono_font = QFont("Geist Mono, JetBrains Mono, Consolas, monospace")
         mono_font.setStyleHint(QFont.StyleHint.Monospace)
         mono_font.setPointSize(11)
         self._status_tokens.setFont(mono_font)
         self._status_cost.setFont(mono_font)
+        self._status_balance.setFont(mono_font)
 
     def refresh(
         self, 
         workspace_root: str, 
         model_id: str, 
         thinking: ThinkingMode,
-        session_usage: dict[str, dict[str, int]]
+        session_usage: dict[str, dict[str, int]],
+        show_balance: bool = False,
+        balance_micros: int | None = None,
     ) -> None:
         # Workspace path truncation
         ws = workspace_root
@@ -86,3 +94,13 @@ class AuraStatusBar(QStatusBar):
         else:
             self._status_cost.setText(f"${known_cost:.6f}")
             self._status_cost.setToolTip("")
+
+        # Balance display
+        if show_balance:
+            if balance_micros is not None:
+                self._status_balance.setText(f"Credits: ${balance_micros / 1_000_000:.2f}")
+            else:
+                self._status_balance.setText("Credits: $—")
+            self._status_balance.setVisible(True)
+        else:
+            self._status_balance.setVisible(False)
