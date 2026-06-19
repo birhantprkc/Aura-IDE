@@ -36,15 +36,15 @@ from aura.config import (
     load_settings,
     load_workspace_root,
     save_settings,
-    save_workspace_root,
 )
 from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
 from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.runner import DroneRunner
 from aura.drones.store import DroneStore, RunHistoryStore
-from aura.drones.construction_context import enter_drone_construction, clear_drone_construction
-from aura.git_ops import git_init, is_git_repo
+from aura.drones.construction_context import enter_drone_construction
+from aura.git_ops import is_git_repo
+from aura.gui.main_window_workspace import MainWindowWorkspaceController
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
@@ -147,9 +147,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Left pane: workspace label + change root + tree + model config.
         self._left_pane = LeftPane(self._workspace_root, parent=self)
         self._left_pane.populate_models(self._settings.planner_provider, self._settings.worker_provider)
-        self._left_pane.change_root_requested.connect(self._on_change_root)
-        self._left_pane.project_selected.connect(self._on_project_selected)
-        self._left_pane.new_project_requested.connect(self._on_new_project)
+        self._workspace_controller = MainWindowWorkspaceController(self)
+        self._left_pane.change_root_requested.connect(self._workspace_controller.on_change_root)
+        self._left_pane.project_selected.connect(self._workspace_controller._on_project_selected)
+        self._left_pane.new_project_requested.connect(self._workspace_controller.on_new_project)
         self._left_pane.planner_model_changed.connect(lambda: self._refresh_status_bar())
         self._left_pane.planner_thinking_changed.connect(lambda: self._refresh_status_bar())
         self._left_pane.worker_model_changed.connect(self._on_sidebar_worker_model_changed)
@@ -352,7 +353,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Mermaid diagram detection from chat → playground
         self._chat.mermaid_detected.connect(self._playground.add_mermaid_artifact)
 
-        self._update_workspace_label()
+        self._workspace_controller.update_workspace_label()
 
         # Wire project thread selection from left pane
         self._left_pane.thread_selected.connect(self._on_thread_selected)
@@ -501,7 +502,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         dlg = OnboardingDialog(
             self,
             workspace_path=str(self._workspace_root) if self._workspace_root else "",
-            on_change_workspace=self._onboarding_change_workspace,
+            on_change_workspace=self._workspace_controller.onboarding_change_workspace,
         )
         result = dlg.exec()
         if dlg.open_settings_requested:
@@ -517,33 +518,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             if dlg.selected_mission_text:
                 self._input.set_text(dlg.selected_mission_text)
 
-    def _onboarding_change_workspace(self) -> str | None:
-        """Called from onboarding dialog to change workspace. Returns new path or None."""
-        start = str(self._workspace_root) if self._workspace_root else str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(self, "Choose workspace root", start)
-        if not chosen:
-            return None
-        path = Path(chosen)
-        self._workspace_root = path
-        self._bridge.set_workspace_root(path)
-        self._input.set_workspace_root(path)
-        self._send_handler.set_workspace_root(path)
-        self._playground.set_workspace_root(path)
-        self._companion.set_workspace_root(str(self._workspace_root))
-        self._tree.set_root(path)
-        save_workspace_root(path)
-        from aura.projects.store import ProjectStore
-        _project = ProjectStore().create_or_update_project(path)
-        self._companion.set_current_project(_project.id, _project.name)
-        self._update_workspace_label()
-        self._left_pane.refresh_projects(path)
-        self._left_pane.refresh_drones(path)
-        # Close drone workbay when workspace root changes
-        if self._drone_workbay_window is not None:
-            self._drone_workbay_window.hide()
-        clear_drone_construction()
-        self._refresh_status_bar()
-        return str(path)
+
 
     # ----- provider-aware model combo helpers -----------------------------
 
@@ -610,71 +585,18 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     # ----- handlers -------------------------------------------------------
 
-    def _on_change_root(self) -> None:
-        start = str(self._workspace_root) if self._workspace_root else str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(self, "Choose workspace root", start)
-        if not chosen:
-            return
-        path = Path(chosen)
-        self._on_project_selected(path)
 
-        # Offer to initialize git if the workspace is not a git repo.
-        if not is_git_repo(path):
-            reply = QMessageBox.question(
-                self,
-                "Not a Git Repository",
-                "This workspace is not a git repository.\n\n"
-                "Aura uses git for auto-commit and undo.\n"
-                "Would you like to run 'git init' and create an initial commit?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if reply == QMessageBox.Yes:
-                ok, msg = git_init(path)
-                if ok:
-                    QMessageBox.information(
-                        self, "Git Repository", msg
-                    )
-                else:
-                    QMessageBox.warning(
-                        self, "Git Init Failed", msg
-                    )
 
-    def _retarget_workspace(self, root_path: Path, *, restore_last: bool = True) -> None:
-        from aura.drones.store import _project_root_for_drone_storage
-        storage_root = _project_root_for_drone_storage(root_path).resolve()
-        clear_drone_construction()
-        if self._workspace_root is not None and self._workspace_root.resolve() != storage_root:
-            self._persistence.new_conversation()
-        self._workspace_root = storage_root
-        self._checkpoint_dialog = None
-        self._bridge.set_workspace_root(storage_root)
-        self._input.set_workspace_root(storage_root)
-        self._send_handler.set_workspace_root(storage_root)
-        self._playground.set_workspace_root(storage_root)
-        self._companion.set_workspace_root(str(self._workspace_root))
-        self._tree.set_root(storage_root)
-        self._update_workspace_label()
-        self._refresh_status_bar()
-        if self._settings.restore_last_conversation and restore_last:
-            QTimer.singleShot(0, lambda: self._persistence.restore_last(storage_root))
 
-    def _on_project_selected(self, root_path: Path, *, restore_last: bool = True) -> None:
-        from aura.projects.store import ProjectStore
-        project = ProjectStore().create_or_update_project(root_path)
-        self._companion.set_current_project(project.id, project.name)
-        save_workspace_root(root_path)
 
-        self._retarget_workspace(root_path, restore_last=restore_last)
-        self._left_pane.refresh_projects(self._workspace_root)
-        self._left_pane.refresh_drones(self._workspace_root)
+
 
     def _on_drone_folder_selected(self, folder: Path) -> None:
         # Ensure workspace root is always the project root, never a drone folder.
         from aura.drones.store import _project_root_for_drone_storage
         project_root = _project_root_for_drone_storage(self._workspace_root)
         if self._workspace_root is None or self._workspace_root.resolve() != project_root.resolve():
-            self._retarget_workspace(project_root)
+            self._workspace_controller._retarget_workspace(project_root)
 
         # Only the tree view focuses on the drone folder.
         self._tree.set_root(folder)
@@ -702,7 +624,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         project_resolved = project_root.resolve()
         current = self._workspace_root.resolve() if self._workspace_root else None
         if current is None or current != project_resolved:
-            self._retarget_workspace(project_root, restore_last=False)
+            self._workspace_controller._retarget_workspace(project_root, restore_last=False)
 
         drone_id = f"drone-{uuid4().hex[:8]}"
         drone_dir = _global_drones_root(self._workspace_root) / drone_id
@@ -786,18 +708,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
 
 
-    def _on_new_project(self) -> None:
-        start = str(self._workspace_root) if self._workspace_root else str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(self, "Choose or Create Workspace Directory", start)
-        if not chosen:
-            return
-        chosen_path = Path(chosen)
-        from aura.projects.store import ProjectStore
-        ProjectStore().create_or_update_project(chosen_path)
-        self._on_project_selected(chosen_path)
 
-    def _update_workspace_label(self) -> None:
-        self._left_pane.update_workspace_label(self._workspace_root)
+
+
 
     def _on_read_only_toggled(self, checked: bool) -> None:
         self._bridge.set_read_only(checked)
