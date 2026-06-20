@@ -374,6 +374,68 @@ def snapshot(workspace_root: Path) -> str | None:
         return None
 
 
+def changes_since(
+    workspace_root: Path, sha: str | None
+) -> tuple[bool, tuple[str, ...]]:
+    """Check whether the repo differs from *sha* and list changed paths.
+
+    Uses the union of:
+      - git diff --name-only <sha>   (tracked changes since the snapshot —
+        covers commits, staged edits, and unstaged edits)
+      - git ls-files --others --exclude-standard  (untracked new files)
+
+    When *sha* is None (no commits at snapshot time), treat any
+    tracked-or-untracked change present now as the change set.
+    Empty union → (False, ()).
+
+    Returns (has_work, tuple_of_changed_paths).
+    """
+    if not is_git_repo(workspace_root):
+        return False, ()
+
+    changed: set[str] = set()
+
+    try:
+        if sha:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", sha],
+                cwd=str(workspace_root),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+                **get_subprocess_kwargs(),
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    p = line.strip()
+                    if p:
+                        changed.add(p)
+        # Untracked files (always include regardless of sha presence)
+        result = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            **get_subprocess_kwargs(),
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                p = line.strip()
+                if p:
+                    changed.add(p)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False, ()
+
+    if changed:
+        return True, tuple(sorted(changed))
+    return False, ()
+
+
 def restore_to_snapshot(workspace_root: Path, sha: str) -> tuple[bool, str]:
     """Hard-reset to the given SHA. Destructive — discards uncommitted changes.
     Returns (success, message)."""

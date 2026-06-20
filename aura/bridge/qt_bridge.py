@@ -16,6 +16,7 @@ Planner / worker mode:
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -35,10 +36,10 @@ from aura.backends import (
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.dispatch import _DispatchProxy
 from aura.client import (
-    ApiError,
     AgentProcessFinished,
     AgentProcessOutput,
     AgentProcessStarted,
+    ApiError,
     ContentDelta,
     Done,
     Event,
@@ -51,7 +52,6 @@ from aura.client import (
     Usage,
     WorkerDispatchRequested,
 )
-from aura.hooks import hooks
 from aura.config import (
     ModelId,
     ProviderId,
@@ -60,11 +60,11 @@ from aura.config import (
 from aura.conversation import (
     ConversationManager,
     History,
-    WorkerDispatchRequest,
 )
 from aura.conversation.tools import (
     ToolRegistry,
 )
+from aura.hooks import hooks
 from aura.prompts import (
     PLANNER_SYSTEM_PROMPT,
     SINGLE_SYSTEM_PROMPT,
@@ -180,6 +180,20 @@ class _Worker(QObject):
             self.agentProcessOutput.emit(ev.process_id, ev.text)
         elif isinstance(ev, AgentProcessFinished):
             self.agentProcessFinished.emit(ev.process_id, ev.exit_code)
+
+
+@dataclass(frozen=True)
+class LapResult:
+    """Result of one unattended planner→worker lap.
+
+    Attributes:
+        has_work: True if the git working tree changed during the pass.
+        summary: Human-readable one-line description of what changed.
+        changed_files: Tuple of workspace-relative paths that were modified.
+    """
+    has_work: bool
+    summary: str
+    changed_files: tuple[str, ...]
 
 
 class ConversationBridge(QObject):
@@ -435,7 +449,6 @@ class ConversationBridge(QObject):
         Returns:
             True if the backend is authenticated, False otherwise.
         """
-        root = self._registry.workspace_root
         return True  # 'default_api' is always authenticated
 
 
@@ -549,6 +562,132 @@ class ConversationBridge(QObject):
         self._thread.started.connect(self._worker.run)
         self.started.emit()
         self._thread.start()
+
+    def run_one_lap(self, want: str) -> LapResult:
+        if self.is_running():
+            return LapResult(
+                has_work=False,
+                summary="Bridge is already running.",
+                changed_files=(),
+            )
+
+        old_auto_dispatch = self._auto_dispatch
+        old_auto_approve = self._approval_proxy._approve_all_session
+        old_planner_worker_mode = self._planner_worker_mode
+        old_registry_mode = self._registry.mode
+
+        try:
+            self._auto_dispatch = True
+            self.set_auto_approve(True)
+            self._planner_worker_mode = True
+            self._registry.set_mode("planner")
+
+            self.reset_history()
+            self._history.append_user_text(want)
+
+            workspace_root = self._registry.workspace_root
+            if workspace_root is not None:
+                base_prompt = (
+                    self._planner_system_prompt
+                    if self._planner_system_prompt
+                    else PLANNER_SYSTEM_PROMPT
+                )
+                self._manager.configure_for_planner(
+                    base_prompt=base_prompt,
+                    workspace_root=workspace_root,
+                )
+                self._history.set_system(
+                    inject_tier1_context(base_prompt, self._tier1_context)
+                )
+
+            if workspace_root is not None:
+                from aura.git_ops import snapshot
+
+                self._pre_worker_sha = snapshot(workspace_root)
+            else:
+                self._pre_worker_sha = None
+
+            from aura.models import DEFAULT_PLANNER_THINKING
+            from aura.settings import resolve_role_default_model
+
+            model = resolve_role_default_model(
+                getattr(self, "_planner_provider", None), "planner"
+            )
+            thinking = DEFAULT_PLANNER_THINKING
+
+            self._cancel = threading.Event()
+            self._index_to_id.clear()
+            self._index_to_name.clear()
+            self._active_model = str(model)
+
+            from PySide6.QtCore import QEventLoop
+
+            thread = QThread()
+            worker = _Worker(
+                manager=self._manager,
+                approval_proxy=self._approval_proxy,
+                dispatch_proxy=self._dispatch_proxy,
+                cancel_event=self._cancel,
+                model=model,
+                thinking=thinking,
+                temperature=self._temperature,
+                workspace_root=workspace_root,
+                max_tool_rounds=None,
+            )
+
+            self._dispatch_proxy.showSpecCard.disconnect(
+                self.workerDispatchRequested
+            )
+            self._dispatch_proxy.showSpecCard.connect(
+                lambda tool_id, goal, files, spec, acceptance, summary: self.user_dispatched(
+                    tool_id, goal, list(files), spec, acceptance, summary
+                )
+            )
+
+            loop = QEventLoop()
+            worker.finished.connect(loop.quit)
+
+            thread.started.connect(worker.run)
+            thread.start()
+            loop.exec()
+
+            thread.wait(2000)
+            thread.deleteLater()
+            worker.deleteLater()
+
+            self._dispatch_proxy.showSpecCard.disconnect()
+            self._dispatch_proxy.showSpecCard.connect(
+                self.workerDispatchRequested
+            )
+
+            has_work = False
+            changed_files: tuple[str, ...] = ()
+            summary = ""
+
+            from aura.git_ops import changes_since
+
+            has_work, changed_files = changes_since(
+                workspace_root, self._pre_worker_sha
+            )
+            if has_work:
+                names = [p.split("/")[-1] for p in changed_files[:3]]
+                if len(changed_files) <= 3:
+                    summary = f"Changed {len(changed_files)} file(s): {', '.join(names)}"
+                else:
+                    summary = f"Changed {len(changed_files)} file(s): {', '.join(names)}, ..."
+            else:
+                summary = "No changes since lap start."
+
+            return LapResult(
+                has_work=has_work,
+                summary=summary,
+                changed_files=changed_files,
+            )
+        finally:
+            self._auto_dispatch = old_auto_dispatch
+            self._approval_proxy._approve_all_session = old_auto_approve
+            self._planner_worker_mode = old_planner_worker_mode
+            self._registry.set_mode(old_registry_mode)
 
     def request_cancel(self) -> None:
         self._cancel.set()

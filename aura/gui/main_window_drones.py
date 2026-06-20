@@ -696,21 +696,33 @@ class MainWindowDroneController(QObject):
         loop_drone_id = record.get("loop_drone_id", "")
         if loop_drone_id and loop_drone_id in self._looping_drones:
             interval = self._looping_drones[loop_drone_id]
-            logger.debug(
-                "[DroneLoop] loop active for drone=%s, scheduling next lap in %ds",
-                loop_drone_id,
-                interval,
-            )
-            QTimer.singleShot(
-                interval * 1000,
-                lambda lid=loop_drone_id: self.start_next_loop_lap(lid),
-            )
+            receipt_for_loop = record.get("receipt")
+            artifact = None
+            if receipt_for_loop is not None:
+                artifact = getattr(receipt_for_loop, "produced_artifact", None) or {}
+            if isinstance(artifact, dict) and artifact.get("has_work") is False:
+                self._looping_drones.pop(loop_drone_id, None)
+                record["_stop_loop_due_to_no_work"] = True
+                if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
+                    self._drone_workbay_window.set_card_loop_state(loop_drone_id, False)
+            else:
+                logger.debug(
+                    "[DroneLoop] loop active for drone=%s, scheduling next lap in %ds",
+                    loop_drone_id,
+                    interval,
+                )
+                QTimer.singleShot(
+                    interval * 1000,
+                    lambda lid=loop_drone_id: self.start_next_loop_lap(lid),
+                )
 
         # Update workbay card with final run state
         card_id = loop_drone_id if loop_drone_id else drone.id
         # Check for stored receipt
         receipt = record.get("receipt")
-        if receipt is not None:
+        if record.get("_stop_loop_due_to_no_work"):
+            self.update_workbay_card_run_state(card_id, "idle")
+        elif receipt is not None:
             final_status = receipt.status
             if final_status == "completed":
                 summary = (receipt.summary or "").strip()
@@ -755,6 +767,9 @@ class MainWindowDroneController(QObject):
         self._drone_receipt = receipt
         if not run_id:
             run_id = getattr(receipt, "run_id", "")
+        record = self._drone_runs.get(run_id)
+        if record is not None:
+            record["receipt"] = receipt
         self._window._drone_reports_window.on_receipt_ready(run_id, receipt)
 
     def on_focus_drone_run(self, run_id: str = "") -> None:

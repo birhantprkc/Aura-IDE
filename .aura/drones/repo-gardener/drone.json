@@ -1,0 +1,57 @@
+{
+  "id": "repo-gardener",
+  "name": "Repo Gardener",
+  "description": "Passively maps repo health, removes deterministic debris, and performs bounded refactors. One small verified lap per run.",
+  "kind": "harness-lap",
+  "instructions": "You are working in the Aura repository at its workspace root, tasked with keeping the aura/ package clean to its own standards. This is one bounded lap of that standing job. Survey aura/ for the single most worthwhile small improvement available right now — dead code, a muddled function that wants extracting, a leaky abstraction, duplication that should be shared, a stale comment lying about live behavior. Read the live code before deciding; do not work from memory. Pick exactly one. Make the smallest change that fully lands it — one file where possible, behavior-preserving by construction, matching the patterns already in the surrounding code. Do not rename public symbols, change public APIs, or touch anything outside aura/. No new dependencies. If nothing is genuinely worth touching this lap, change nothing and say so plainly — an empty lap is the correct, expected signal to stop, never a failure. Never invent work to look busy. Definition of done: either one bounded, behavior-preserving improvement to a single file in aura/ with existing tests still passing, or no file changed and a plain report that nothing met the bar.",
+  "write_policy": "normal_diff_approval",
+  "input_contract": {
+    "type": "object",
+    "properties": {
+      "goal": {"type": "string"},
+      "input": {"type": "object"}
+    },
+    "required": ["goal"]
+  },
+  "cargo_contract": {
+    "type": "object",
+    "properties": {
+      "has_work": {"type": "boolean"},
+      "changed_files": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["has_work", "changed_files"]
+  },
+  "output_contract": {
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "ok": {"const": true},
+          "summary": {"type": "string"},
+          "cargo": {"$ref": "#/cargo_contract"}
+        },
+        "required": ["ok", "summary", "cargo"]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "ok": {"const": false},
+          "summary": {"type": "string"},
+          "cargo": {
+            "type": "object",
+            "properties": {
+              "error": {"type": "string"}
+            },
+            "required": ["error"]
+          }
+        },
+        "required": ["ok", "summary", "cargo"]
+      }
+    ]
+  },
+  "manifest_version": "1",
+  "scope": "global",
+  "budget": {
+    "timeout_seconds": 120
+  }
+}
