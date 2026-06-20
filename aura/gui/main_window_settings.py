@@ -28,7 +28,7 @@ class MainWindowSettingsController(QObject):
         dlg = SettingsDialog(
             settings=window._settings,
             workspace_root=window._workspace_root,
-            on_change_root=window._on_change_root,
+            on_change_root=window._workspace_controller.on_change_root,
             parent=window,
             on_live_settings_applied=self._apply_settings,
         )
@@ -44,7 +44,7 @@ class MainWindowSettingsController(QObject):
         dlg = SettingsDialog(
             settings=window._settings,
             workspace_root=window._workspace_root,
-            on_change_root=window._on_change_root,
+            on_change_root=window._workspace_controller.on_change_root,
             parent=window,
             open_api_keys_tab=True,
             on_live_settings_applied=self._apply_settings,

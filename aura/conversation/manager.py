@@ -104,11 +104,18 @@ from aura.conversation.edit_recovery_state import (
 )
 from aura.conversation.worker_recovery_state import (
     record_reads_for_recovery,
-    record_worker_file_state,
     pop_normalized_recovery_key,
     normalized_state_value,
     pop_normalized_key,
     clear_patch_failed_shapes_for_path,
+)
+
+from aura.conversation.terminal_syntax import (
+    is_py_compile_error,
+    is_shell_failure,
+    py_compile_targets,
+    normalize_py_compile_path,
+    is_python_path,
 )
 
 EventCallback = Callable[[Event], None]
@@ -1235,7 +1242,7 @@ class ConversationManager:
                 pop_normalized_recovery_key(line_range_reread_required, path)
                 pop_normalized_key(worker_file_state, path)
                 clear_patch_failed_shapes_for_path(patch_failed_cycles, path, self._parse_patch_shape)
-                if self._is_python_path(path) and not _is_validation_scratch_path(path):
+                if is_python_path(path) and not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
                 state = syntax_repair_state_for_path(syntax_repair_required, path)
                 if state:
@@ -1349,34 +1356,6 @@ class ConversationManager:
 
         return content
 
-    @staticmethod
-    def _is_py_compile_error(output: str) -> bool:
-        """Check if output contains Python-level error markers (py_compile actually ran)."""
-        return bool(
-            re.search(r'\bFile ".*", line \d+', output)
-            and re.search(r"\b(?:SyntaxError|IndentationError|TabError)\b", output)
-        )
-
-    @staticmethod
-    def _is_shell_failure(output: str) -> bool:
-        """Check if output indicates a shell-level failure (command never reached py_compile)."""
-        shell_markers = [
-            "cannot find the path specified",
-            "not recognized as an internal or external command",
-            "No such file or directory",
-            "command not found",
-            "not found",
-        ]
-        output_lower = output.lower()
-        for marker in shell_markers:
-            if marker in output_lower:
-                return True
-        first_lines = output.split("\n")[:3]
-        for line in first_lines:
-            stripped = line.strip()
-            if stripped.startswith("cd:") or stripped.startswith("chdir:"):
-                return True
-        return False
 
     def _update_syntax_state_from_terminal(
         self,
@@ -1394,7 +1373,7 @@ class ConversationManager:
         workspace_root = Path(self._tools.workspace_root)
         targets = [
             _normalize_worker_path(path)
-            for path in self._py_compile_targets(command)
+            for path in py_compile_targets(command)
             if not _is_validation_scratch_path(path)
             and not (
                 "/" not in path
@@ -1417,7 +1396,7 @@ class ConversationManager:
             return
         # Only Python compiler syntax output should trigger syntax repair state.
         output = str(payload.get("output") or "")
-        if not self._is_py_compile_error(output):
+        if not is_py_compile_error(output):
             return
         for path in targets:
             prior = syntax_repair_state_for_path(syntax_repair_required, path)
@@ -1451,7 +1430,7 @@ class ConversationManager:
                 r"\s+-m\s+py_compile\b",
                 command,
             ):
-                targets = ConversationManager._py_compile_targets(command)
+                targets = py_compile_targets(command)
                 return bool(targets) and any(target in syntax_paths for target in targets)
             # pytest targeting a broken file (substring check)
             if re.search(
@@ -1464,33 +1443,6 @@ class ConversationManager:
                 return any(path in command for path in syntax_paths)
             return False
         return False
-
-    @staticmethod
-    def _py_compile_targets(command: str) -> list[str]:
-        if "py_compile" not in command:
-            return []
-        matches = re.findall(
-            r"(?<![\w.-])([A-Za-z0-9_./\\:\-]+\.py)(?![\w.-])",
-            command,
-        )
-        targets: list[str] = []
-        for match in matches:
-            target = _normalize_worker_path(match)
-            if target.endswith("py_compile.py"):
-                continue
-            targets.append(target)
-        return targets
-
-    @staticmethod
-    def _normalize_py_compile_path(raw: str) -> str:
-        p = raw.strip().replace("\\", "/")
-        if p.startswith("./"):
-            p = p[2:]
-        return p
-
-    @staticmethod
-    def _is_python_path(path: str) -> bool:
-        return path.replace("\\\\", "/").endswith(".py")
 
     @staticmethod
     def _tool_path(name: str, args: dict[str, Any], parsed: Any = None) -> str:
