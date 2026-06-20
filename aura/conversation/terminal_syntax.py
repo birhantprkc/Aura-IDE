@@ -39,7 +39,7 @@ def py_compile_targets(command: str) -> list[str]:
     if "py_compile" not in command:
         return []
     matches = re.findall(
-        r"(?<![\\w.-])([A-Za-z0-9_./\\\\:\\-]+\\.py)(?![\\w.-])",
+        r"(?<![\w.-])([A-Za-z0-9_./\\:\-]+\.py)(?![\w.-])",
         command,
     )
     targets: list[str] = []
