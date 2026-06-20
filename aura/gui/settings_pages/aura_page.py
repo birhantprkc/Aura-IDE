@@ -50,6 +50,7 @@ class AuraPage(QWidget):
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(10)
 
+
         # --- Aura API Key row ---
 
         title = QLabel("Aura Key")
@@ -84,6 +85,7 @@ class AuraPage(QWidget):
         self._key_status = QLabel("")
         self._key_status.setWordWrap(True)
         form.addRow("", self._key_status)
+
 
         # --- Aura Credits purchase UI ---
 

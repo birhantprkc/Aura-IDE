@@ -7,6 +7,7 @@ from PySide6.QtCore import QObject
 from aura.config import AppSettings, save_settings
 from aura.gui.settings_dialog import SettingsDialog
 
+
 if TYPE_CHECKING:
     from aura.gui.main_window import MainWindow
 

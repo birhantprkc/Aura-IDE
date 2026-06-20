@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import logging
 from pathlib import Path
 from typing import Callable
 
@@ -16,8 +15,6 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import APP_NAME, AppSettings, save_settings
-
-logger = logging.getLogger(__name__)
 
 
 class SettingsDialog(QDialog):
@@ -63,13 +60,20 @@ class SettingsDialog(QDialog):
         from aura.gui.settings_pages.vision_page import VisionPage
 
         self._models_page = ModelsPage(self._settings)
+
         self._aura_page = AuraPage(self._settings)
         self._aura_page.credits_claimed.connect(self.credits_claimed)
+
         self._api_keys_page = ApiKeysPage(self._settings)
+
         self._automation_page = AutomationPage(self._settings)
+
         self._companion_page = CompanionPage(self._settings)
+
         self._vision_page = VisionPage(self._settings)
+
         self._sandbox_page = SandboxPage(self._settings, workspace_root, on_change_root)
+
         self._prompts_page = PromptsPage(self._settings)
 
         self._pages = [
@@ -108,6 +112,7 @@ class SettingsDialog(QDialog):
                 if self._tabs.tabText(i) == "API Keys":
                     self._tabs.setCurrentIndex(i)
                     break
+
 
     def _apply_companion_settings_live(self) -> None:
         new_settings = self.result_settings()
