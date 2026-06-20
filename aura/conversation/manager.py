@@ -19,7 +19,6 @@ import hashlib
 import json
 import logging
 import re
-import subprocess
 import threading
 from pathlib import Path
 from typing import Any, Callable
@@ -102,6 +101,14 @@ from aura.conversation.edit_recovery_state import (
     default_edit_failure_class,
     worker_file_state_for_path,
     worker_path_is_existing_file,
+)
+from aura.conversation.worker_recovery_state import (
+    record_reads_for_recovery,
+    record_worker_file_state,
+    pop_normalized_recovery_key,
+    normalized_state_value,
+    pop_normalized_key,
+    clear_patch_failed_shapes_for_path,
 )
 
 EventCallback = Callable[[Event], None]
@@ -1189,7 +1196,7 @@ class ConversationManager:
         worker_file_state = worker_file_state if worker_file_state is not None else {}
         patch_failed_cycles = patch_failed_cycles if patch_failed_cycles is not None else {}
         parsed = parse_tool_payload(content)
-        self._record_reads_for_recovery(
+        record_reads_for_recovery(
             name,
             args,
             parsed,
@@ -1216,18 +1223,18 @@ class ConversationManager:
                     or (isinstance(parsed, dict) and parsed.get("deleted") is True)
                 )
                 if is_deletion:
-                    self._pop_normalized_recovery_key(edit_fallback_required, path)
-                    self._pop_normalized_recovery_key(line_range_reread_required, path)
-                    self._pop_normalized_key(worker_file_state, path)
-                    self._clear_patch_failed_shapes_for_path(patch_failed_cycles, path)
+                    pop_normalized_recovery_key(edit_fallback_required, path)
+                    pop_normalized_recovery_key(line_range_reread_required, path)
+                    pop_normalized_key(worker_file_state, path)
+                    clear_patch_failed_shapes_for_path(patch_failed_cycles, path, self._parse_patch_shape)
                     pop_syntax_repair_state(syntax_repair_required, path)
                     discard_syntax_validation_path(syntax_validation_required, path)
                     return content
 
-                self._pop_normalized_recovery_key(edit_fallback_required, path)
-                self._pop_normalized_recovery_key(line_range_reread_required, path)
-                self._pop_normalized_key(worker_file_state, path)
-                self._clear_patch_failed_shapes_for_path(patch_failed_cycles, path)
+                pop_normalized_recovery_key(edit_fallback_required, path)
+                pop_normalized_recovery_key(line_range_reread_required, path)
+                pop_normalized_key(worker_file_state, path)
+                clear_patch_failed_shapes_for_path(patch_failed_cycles, path, self._parse_patch_shape)
                 if self._is_python_path(path) and not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
                 state = syntax_repair_state_for_path(syntax_repair_required, path)
@@ -1314,7 +1321,7 @@ class ConversationManager:
                     "Repeated patch shape failed. This exact patch_file shape is blocked; "
                     "a different hunk shape for the same file is still valid."
                 )
-                self._pop_normalized_recovery_key(edit_fallback_required, path)
+                pop_normalized_recovery_key(edit_fallback_required, path)
             else:
                 edit_fallback_required[path] = parsed
                 parsed["recoverable"] = True
@@ -1423,134 +1430,6 @@ class ConversationManager:
                 "repair_failed": failed_after_repair,
             })
             discard_syntax_validation_path(syntax_validation_required, path)
-
-    @staticmethod
-    def _record_reads_for_recovery(
-        name: str,
-        args: dict[str, Any],
-        parsed: Any,
-        line_range_reread_required: dict[str, dict[str, Any]],
-        edit_fallback_required: dict[str, dict[str, Any]],
-        worker_file_state: dict[str, dict[str, Any]] | None = None,
-    ) -> None:
-        if name == "read_file":
-            path = str(args.get("path") or (parsed.get("path") if isinstance(parsed, dict) else ""))
-            if (
-                path
-                and isinstance(parsed, dict)
-                and parsed.get("ok") is True
-                and parsed.get("truncated") is not True
-            ):
-                recorded = ConversationManager._record_worker_file_state(
-                    worker_file_state,
-                    path,
-                    parsed,
-                    "read_file",
-                )
-                if recorded:
-                    ConversationManager._pop_normalized_recovery_key(line_range_reread_required, path)
-                    ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
-        elif name == "read_files":
-            files = parsed.get("files") if isinstance(parsed, dict) else None
-            if isinstance(files, dict):
-                for path_key, result in files.items():
-                    if not isinstance(result, dict):
-                        continue
-                    path = str(result.get("path") or path_key)
-                    if result.get("ok") is True and result.get("truncated") is not True:
-                        recorded = ConversationManager._record_worker_file_state(
-                            worker_file_state,
-                            path,
-                            result,
-                            "read_files",
-                        )
-                        if recorded:
-                            ConversationManager._pop_normalized_recovery_key(line_range_reread_required, path)
-                            ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
-        elif name == "read_file_range":
-            path = str(args.get("path") or (parsed.get("path") if isinstance(parsed, dict) else ""))
-            if path and isinstance(parsed, dict) and parsed.get("ok") is True:
-                recorded = ConversationManager._record_worker_file_state(
-                    worker_file_state,
-                    path,
-                    parsed,
-                    "read_file_range",
-                )
-                if recorded:
-                    prior = ConversationManager._normalized_state_value(edit_fallback_required, path)
-                    if (
-                        isinstance(prior, dict)
-                        and prior.get("failure_class") == "patch_file_hash_mismatch"
-                    ):
-                        ConversationManager._pop_normalized_recovery_key(edit_fallback_required, path)
-
-    @staticmethod
-    def _record_worker_file_state(
-        worker_file_state: dict[str, dict[str, Any]] | None,
-        path: str,
-        result: dict[str, Any],
-        tool_name: str,
-    ) -> bool:
-        if worker_file_state is None:
-            return False
-        content_hash = result.get("content_hash")
-        file_size = result.get("file_size")
-        if not isinstance(content_hash, str) or not content_hash:
-            return False
-        if not isinstance(file_size, int):
-            return False
-        normalized = _normalize_worker_path(str(result.get("path") or path))
-        worker_file_state[normalized] = {
-            "content_hash": content_hash,
-            "file_size": file_size,
-            "truncated": bool(result.get("truncated", False)),
-            "last_read_tool": tool_name,
-            "fresh_for_patch": result.get("truncated") is not True,
-        }
-        return True
-
-    @staticmethod
-    def _pop_normalized_recovery_key(
-        state: dict[str, dict[str, Any]],
-        path: str,
-    ) -> None:
-        ConversationManager._pop_normalized_key(state, path)
-
-    @staticmethod
-    def _normalized_state_value(
-        state: dict[str, Any],
-        path: str,
-    ) -> Any:
-        normalized = _normalize_worker_path(path)
-        if normalized in state:
-            return state[normalized]
-        for existing_path, value in state.items():
-            if _normalize_worker_path(existing_path) == normalized:
-                return value
-        return None
-
-    @staticmethod
-    def _pop_normalized_key(
-        state: dict[str, Any],
-        path: str,
-    ) -> None:
-        normalized = _normalize_worker_path(path)
-        state.pop(normalized, None)
-        for existing_path in list(state):
-            if _normalize_worker_path(existing_path) == normalized:
-                state.pop(existing_path, None)
-
-    @staticmethod
-    def _clear_patch_failed_shapes_for_path(
-        patch_failed_cycles: dict[str, int],
-        path: str,
-    ) -> None:
-        normalized = _normalize_worker_path(path)
-        for shape in list(patch_failed_cycles):
-            parsed = ConversationManager._parse_patch_shape(shape)
-            shape_path = _normalize_worker_path(str(parsed.get("path") or ""))
-            if shape_path == normalized:
-                patch_failed_cycles.pop(shape, None)
 
     @staticmethod
     def _syntax_repair_tool_allowed(
