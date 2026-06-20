@@ -64,6 +64,7 @@ from aura.conversation.tools.registry import ToolRegistry
 from aura.dependency_context import build_dependent_planner_notice
 from aura.hooks import hooks
 from aura.project_env import preferred_python_for_compile, quote_command_arg
+from aura.verify import run_focused_import_check
 
 EventCallback = Callable[[Event], None]
 
@@ -141,6 +142,14 @@ WORKER_AUTO_PY_COMPILE_INSTRUCTION = (
     "Focused py_compile failed on the following Python file(s). "
     "Re-read and repair the file(s), then run python -m py_compile again. "
     "Finish only after py_compile passes.\n\n"
+    "Diagnostic output:\n{diagnostics}"
+)
+
+WORKER_IMPORT_FAILURE_INSTRUCTION = (
+    "Import check failed on the following Python file(s). "
+    "The module(s) raised an exception on import, which means a symbol, import, "
+    "or dependency is missing or broken. Re-read and repair the file(s), "
+    "then finish again.\n\n"
     "Diagnostic output:\n{diagnostics}"
 )
 
@@ -296,6 +305,7 @@ class ConversationManager:
         patch_failed_cycles: dict[str, int] = {}
         syntax_repair_required: dict[str, dict[str, Any]] = {}
         syntax_validation_required: set[str] = set()
+        import_verification_required: set[str] = set()
         write_attempts_by_path: dict[str, int] = {}
         worker_recovery_nudge_sent = False
         stale_validation_notes: list[str] = []
@@ -450,6 +460,10 @@ class ConversationManager:
                             error="Python syntax still fails after two repair attempts.",
                         )
                         return
+                    # Carry import-verification paths forward for re-check
+                    if import_verification_required:
+                        for path in import_verification_required:
+                            syntax_validation_required.add(path)
                     edit_recovery_pending = bool(
                         edit_fallback_required
                         or line_range_reread_required
@@ -544,6 +558,24 @@ class ConversationManager:
                             )
                             if all_ok:
                                 syntax_validation_required.clear()
+                                # --- Import verification rung ---
+                                import_ok, import_diag = run_focused_import_check(
+                                    Path(self._tools.workspace_root),
+                                    product_paths,
+                                )
+                                if not import_ok:
+                                    for path in product_paths:
+                                        import_verification_required.add(path)
+                                    self._emit_auto_import_result(
+                                        paths=product_paths,
+                                        diagnostics=import_diag,
+                                        on_event=on_event,
+                                    )
+                                    instruction = WORKER_IMPORT_FAILURE_INSTRUCTION.format(
+                                        diagnostics=import_diag,
+                                    )
+                                    self._history.append_user_text(instruction)
+                                    continue
                             else:
                                 # Auto-py_compile failed — feed diagnostics back for repair
                                 for path in product_paths:
@@ -1152,6 +1184,40 @@ class ConversationManager:
                 tool_call_id="auto_py_compile",
                 name="run_terminal_command",
                 ok=ok,
+                result=content,
+            )
+        )
+
+    def _emit_auto_import_result(
+        self,
+        *,
+        paths: list[str],
+        diagnostics: str,
+        on_event: EventCallback,
+    ) -> None:
+        product_paths = [
+            _normalize_worker_path(path)
+            for path in paths
+            if not _is_validation_scratch_path(path)
+        ]
+        if not product_paths:
+            return
+        python_exe = quote_command_arg(preferred_python_for_compile(Path(self._tools.workspace_root)))
+        command = python_exe + " -c \"import <module>\"  # import verification"
+        payload = {
+            "ok": False,
+            "command": command,
+            "exit_code": 1,
+            "output": diagnostics,
+            "auto_validation": True,
+            "verification_rung": "import",
+        }
+        content = json.dumps(payload, ensure_ascii=False)
+        on_event(
+            ToolResult(
+                tool_call_id="auto_import_check",
+                name="run_terminal_command",
+                ok=False,
                 result=content,
             )
         )
