@@ -48,6 +48,7 @@ from aura.prompts import (
     inject_private_worker_style,
     inject_tier1_context,
 )
+from aura.dependency_context import build_dependency_stanza
 
 __all__ = [
     "_DispatchProxy",
@@ -218,11 +219,17 @@ class _DispatchProxy(QObject):
             )
 
         edited = pending.edited_request or req
+
+        # -- dependency graph: annotate downstream dependents ---------------
+        if self._workspace_root is not None and edited.files:
+            stanza = build_dependency_stanza(self._workspace_root, edited.files)
+            if stanza:
+                edited = replace(edited, spec=edited.spec + stanza)
+
         result = self._run_worker(tool_call_id, edited, pending)
         with self._lock:
             self._pending.pop(tool_call_id, None)
         return result
-
     # ---- GUI-thread side --------------------------------------------------
 
     def user_dispatched(

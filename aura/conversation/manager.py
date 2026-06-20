@@ -61,6 +61,7 @@ from aura.conversation.tools._types import (
     ApprovalRequest,
 )
 from aura.conversation.tools.registry import ToolRegistry
+from aura.dependency_context import build_dependent_planner_notice
 from aura.hooks import hooks
 from aura.project_env import preferred_python_for_compile, quote_command_arg
 
@@ -861,6 +862,14 @@ class ConversationManager:
                     _planner_stale_read_notice(planner_stale_read_files)
                 )
                 self._refresh_tier1_after_writes()
+
+            if planner_stale_read_files and self._workspace_root_for_refresh is not None:
+                notice = build_dependent_planner_notice(
+                    self._workspace_root_for_refresh,
+                    planner_stale_read_files,
+                )
+                if notice:
+                    self._history.append_user_text(notice)
 
             if _worker_phase_boundary_info is not None:
                 worker_phase_boundary_info = _worker_phase_boundary_info
