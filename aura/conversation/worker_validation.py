@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from aura.client import Event, ToolResult
+from aura.conversation.path_utils import normalize_worker_path, is_validation_scratch_path
 from aura.project_env import preferred_python_for_compile, quote_command_arg
 
 EventCallback = Callable[[Event], None]
@@ -23,17 +24,14 @@ def run_focused_py_compile(
     Normalizes paths safely (backslash/slash, strip leading "./").
     Preserves dot-prefixed directories like .aura.
     """
-    # Lazy import to avoid circular dependency with aura.conversation.manager
-    from aura.conversation.manager import _normalize_worker_path, _is_validation_scratch_path
-
     if not paths:
         return True, ""
     python_exe = str(preferred_python_for_compile(Path(workspace_root)))
     outputs: list[str] = []
     all_ok = True
     for path in sorted(paths):
-        normalized = _normalize_worker_path(path)
-        if _is_validation_scratch_path(normalized):
+        normalized = normalize_worker_path(path)
+        if is_validation_scratch_path(normalized):
             continue
         full_path = Path(workspace_root) / normalized
         if not full_path.exists():
@@ -75,12 +73,11 @@ def emit_auto_py_compile_result(
     on_event: EventCallback,
     workspace_root: str | Path,
 ) -> None:
-    from aura.conversation.manager import _normalize_worker_path, _is_validation_scratch_path
 
     product_paths = [
-        _normalize_worker_path(path)
+        normalize_worker_path(path)
         for path in paths
-        if not _is_validation_scratch_path(path)
+        if not is_validation_scratch_path(path)
     ]
     if not product_paths:
         return
@@ -111,12 +108,11 @@ def emit_auto_import_result(
     on_event: EventCallback,
     workspace_root: str | Path,
 ) -> None:
-    from aura.conversation.manager import _normalize_worker_path, _is_validation_scratch_path
 
     product_paths = [
-        _normalize_worker_path(path)
+        normalize_worker_path(path)
         for path in paths
-        if not _is_validation_scratch_path(path)
+        if not is_validation_scratch_path(path)
     ]
     if not product_paths:
         return
@@ -148,12 +144,11 @@ def emit_auto_dependent_import_info(
     on_event: EventCallback,
     workspace_root: str | Path,
 ) -> None:
-    from aura.conversation.manager import _normalize_worker_path, _is_validation_scratch_path
 
     product_paths = [
-        _normalize_worker_path(path)
+        normalize_worker_path(path)
         for path in paths
-        if not _is_validation_scratch_path(path)
+        if not is_validation_scratch_path(path)
     ]
     if not product_paths:
         return

@@ -77,8 +77,12 @@ from aura.conversation.worker_validation import (
 )
 from aura.dependency_context import compute_dependents
 from aura.hooks import hooks
-from aura.project_env import preferred_python_for_compile, quote_command_arg
 from aura.verify import run_focused_import_check, run_dependent_import_check
+from aura.conversation.path_utils import (
+    is_validation_scratch_path as _is_validation_scratch_path,
+    normalize_worker_path as _normalize_worker_path,
+    unique_worker_paths as _unique_worker_paths,
+)
 
 EventCallback = Callable[[Event], None]
 
@@ -159,47 +163,6 @@ WORKER_DEPENDENT_CONTRACT_INSTRUCTION = (
     "Diagnostic output:\n{diagnostics}"
 )
 
-def _normalize_worker_path(path: str) -> str:
-    normalized = str(path).replace("\\", "/")
-    if normalized.startswith("./"):
-        normalized = normalized[2:]
-    while "//" in normalized:
-        normalized = normalized.replace("//", "/")
-    return normalized
-
-
-def _unique_worker_paths(paths: list[str]) -> list[str]:
-    unique: list[str] = []
-    seen: set[str] = set()
-    for path in paths:
-        normalized = _normalize_worker_path(path).strip()
-        if not normalized or normalized in seen:
-            continue
-        unique.append(normalized)
-        seen.add(normalized)
-    return unique
-
-
-def _is_validation_scratch_path(path: str) -> bool:
-    normalized = _normalize_worker_path(path)
-    name = normalized.rsplit("/", 1)[-1]
-    if not name.endswith(".py"):
-        return False
-    if normalized.startswith(".aura/tmp/") or "/" not in normalized:
-        return name.startswith(
-            (
-                "dump",
-                "_check",
-                "check",
-                "tmp",
-                "_tmp",
-                "_inspect",
-                "inspect",
-                "diagnostic",
-                "_diagnostic",
-            )
-        )
-    return False
 
 
 class ConversationManager:
