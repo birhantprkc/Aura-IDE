@@ -32,9 +32,11 @@ class SetupDialog(QDialog):
         layout.setSpacing(16)
 
         label = QLabel(
-            f"{APP_NAME} needs at least one AI provider configured before "
-            "Planner/Worker can run. You can configure DeepSeek, OpenAI, "
-            "OpenRouter, Anthropic, Gemini, Claude Code, or Codex."
+            f"{APP_NAME} needs at least one AI provider configured before Planner/Worker can run.\n\n"
+            "The easiest way to start is with <b>Aura Credits</b> — buy credits or paste an Aura API key\n"
+            "in Settings → Aura.\n\n"
+            "You can also bring your own API key (DeepSeek, OpenAI, Anthropic, OpenRouter, Gemini,\n"
+            "Claude Code, or Codex)."
         )
         label.setWordWrap(True)
         layout.addWidget(label)
@@ -43,7 +45,7 @@ class SetupDialog(QDialog):
 
         button_box = QDialogButtonBox(self)
 
-        open_settings_btn = QPushButton("Open Provider Settings")
+        open_settings_btn = QPushButton("Set up Aura Credits")
         button_box.addButton(open_settings_btn, QDialogButtonBox.ButtonRole.AcceptRole)
         open_settings_btn.clicked.connect(self.accept)
 

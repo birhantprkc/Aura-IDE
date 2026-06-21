@@ -56,6 +56,23 @@ class MainWindowSettingsController(QObject):
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             self._apply_settings(dlg.result_settings())
 
+    def open_aura_settings(self) -> None:
+        """Open settings dialog directly to the Aura tab."""
+        window = self._window
+        dlg = SettingsDialog(
+            settings=window._settings,
+            workspace_root=window._workspace_root,
+            on_change_root=window._workspace_controller.on_change_root,
+            parent=window,
+            open_aura_tab=True,
+            on_live_settings_applied=self._apply_settings,
+        )
+        dlg.set_companion_manager(window._companion)
+        dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
+        dlg.credits_claimed.connect(window._refresh_status_bar)
+        if dlg.exec() == SettingsDialog.DialogCode.Accepted:
+            self._apply_settings(dlg.result_settings())
+
     def _apply_settings(self, settings: AppSettings) -> None:
         window = self._window
         window._settings = settings

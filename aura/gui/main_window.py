@@ -612,6 +612,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         """Open settings dialog directly to the API Keys tab."""
         self._settings_controller.open_api_settings()
 
+    def open_aura_settings(self) -> None:
+        """Open settings dialog directly to the Aura tab."""
+        self._settings_controller.open_aura_settings()
+
     def _on_companion_status(self, status: str) -> None:
         """Handle companion connection status changes."""
         logger.info("[MainWindow] Companion status: %s", status)

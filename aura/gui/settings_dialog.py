@@ -34,6 +34,7 @@ class SettingsDialog(QDialog):
         on_change_root: Callable[[], None],
         parent: QWidget | None = None,
         open_api_keys_tab: bool = False,
+        open_aura_tab: bool = False,
         on_live_settings_applied: Callable[[AppSettings], None] | None = None,
     ) -> None:
         super().__init__(parent)
@@ -107,7 +108,12 @@ class SettingsDialog(QDialog):
 
         self._companion_page.apply_requested.connect(self._apply_companion_settings_live)
 
-        if open_api_keys_tab:
+        if open_aura_tab:
+            for i in range(self._tabs.count()):
+                if self._tabs.tabText(i) == "Aura":
+                    self._tabs.setCurrentIndex(i)
+                    break
+        elif open_api_keys_tab:
             for i in range(self._tabs.count()):
                 if self._tabs.tabText(i) == "API Keys":
                     self._tabs.setCurrentIndex(i)
