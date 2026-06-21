@@ -340,6 +340,7 @@ class MainWindowDroneController(QObject):
             provider_id=self._window._settings.worker_provider,
             model=self._window.current_worker_model(),
             auto_approve=self._window._settings.auto_approve,
+            bridge=self._window._bridge,
             parent=None,
         )
         runner.moveToThread(thread)
