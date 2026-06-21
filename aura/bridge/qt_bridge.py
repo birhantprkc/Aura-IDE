@@ -197,6 +197,7 @@ class LapResult:
     worker_ok: bool = True
     worker_status: str = "completed"
     worker_errors: list[str] = field(default_factory=list)
+    validation_results: list[dict] = field(default_factory=list)
 
 
 class ConversationBridge(QObject):
@@ -671,6 +672,7 @@ class ConversationBridge(QObject):
             worker_ok = True
             worker_status = "completed"
             worker_errors: list[str] = []
+            validation_results: list[dict] = []
             try:
                 from aura.conversation.dispatch import WorkerOutcomeStatus
                 for record in self._dispatch_proxy.records():
@@ -681,6 +683,9 @@ class ConversationBridge(QObject):
                     errs = extras.get("errors") or []
                     if errs:
                         worker_errors.extend(str(e) for e in errs)
+                    vr = extras.get("validation_results") or []
+                    if vr:
+                        validation_results.extend(vr)
                     if extras.get("internal_error"):
                         worker_ok = False
                         worker_status = WorkerOutcomeStatus.harness_error.value
@@ -733,6 +738,7 @@ class ConversationBridge(QObject):
                 worker_ok=worker_ok,
                 worker_status=worker_status,
                 worker_errors=worker_errors,
+                validation_results=validation_results,
             )
         finally:
             self._auto_dispatch = old_auto_dispatch

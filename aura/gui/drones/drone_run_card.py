@@ -302,6 +302,15 @@ class DroneRunCard(QFrame):
 
     def on_status_changed(self, status: str) -> None:
         normalized = status.strip().lower().replace(" ", "_").replace("-", "_")
+        # Repair attempt status (e.g. "repairing 2/5") — show as-is
+        if normalized.startswith("repairing"):
+            self._status_badge.setText(status)
+            self._status_badge.setStyleSheet(
+                f"color: {WARN}; font-size: 11px; font-weight: 600; "
+                f"padding: 2px 10px; border-radius: 4px; "
+                f"background: #1a1a24; border: 1px solid {WARN};"
+            )
+            return
         if normalized in {"waiting", "approval", "waiting_approval"}:
             normalized = "waiting_for_approval"
         self._status_badge.setText(normalized.replace("_", " "))

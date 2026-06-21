@@ -8,13 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal, Slot
-from aura.drones.store import DroneStore, RunHistoryStore
 
 from aura.conversation.tools._types import ApprovalDecision
 from aura.drones.definition import DroneDefinition
 from aura.drones.folder_runner import is_folder_backed_drone, run_folder_drone_sync
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
+from aura.drones.store import DroneStore, RunHistoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +96,9 @@ class DroneRunner(QObject):
             raise RuntimeError("Harness-lap drone requires a bridge but none was provided")
 
         import datetime as dt
-        from aura.git_ops import working_tree_status, snapshot, changes_since, restore_to_snapshot, commit_all
+
         from aura.conversation.dispatch import WorkerOutcomeStatus
+        from aura.git_ops import changes_since, commit_all, restore_to_snapshot, snapshot, working_tree_status
 
         # 1. Check clean working tree before starting
         workspace_root = self._workspace_root
@@ -139,7 +140,7 @@ class DroneRunner(QObject):
 
         # 3. Read permissions from drone definition (with safe defaults)
         permissions = self._drone.permissions or {}
-        require_clean_worktree = permissions.get("require_clean_worktree", True)
+        permissions.get("require_clean_worktree", True)
         revert_on_failure = permissions.get("revert_on_failure", True)
         max_changed_files = permissions.get("max_changed_files", 0)  # 0 = unlimited
         protected_paths = permissions.get("protected_paths", []) or []
@@ -167,6 +168,146 @@ class DroneRunner(QObject):
         worker_ok = lap_result.worker_ok
         worker_status = lap_result.worker_status
         worker_errors = list(lap_result.worker_errors)
+
+        # --- Repair loop: bounded retry on validation failure ---
+        repair_attempt = 0
+        max_repairs = int(permissions.get("max_repair_attempts", 5))
+        repair_attempts_log: list[dict] = []
+        previous_failure_key: str | None = None
+        previous_changed: set[str] | None = None
+
+        lap_is_validation_failure = (
+            worker_status == WorkerOutcomeStatus.validation_failed.value
+            and bool(changed_files)
+        )
+
+        saved_revert = revert_on_failure
+        revert_on_failure = False  # Don't revert during repair loop
+
+        while lap_is_validation_failure and repair_attempt < max_repairs:
+            repair_attempt += 1
+
+            # Gather failure details from validation_results
+            vr_list = list(getattr(lap_result, 'validation_results', []))
+            validation_errors = [e for e in worker_errors if "validation" in e.lower() or "Validation command failed" in e]
+
+            # Build failure fingerprint
+            failure_parts = []
+            for vr in vr_list:
+                failure_parts.append(f"{vr.get('command','')}:{vr.get('exit_code','')}")
+            current_failure_key = "|".join(failure_parts) if failure_parts else (
+                "|".join(validation_errors) if validation_errors else str(repair_attempt)
+            )
+
+            # Stuck detection: same failure + same files
+            current_changed_set = set(changed_files) if changed_files else set()
+            if (previous_failure_key is not None
+                and current_failure_key == previous_failure_key
+                and current_changed_set == (previous_changed or set())):
+                repair_attempts_log.append({
+                    "attempt": repair_attempt,
+                    "stuck": True,
+                    "failure_key": current_failure_key,
+                    "changed_files": list(changed_files),
+                    "validation_results": vr_list,
+                    "errors": validation_errors,
+                })
+                break
+
+            previous_failure_key = current_failure_key
+            previous_changed = current_changed_set
+
+            # Emit progress to Drone Activity card
+            self.statusChanged.emit(f"repairing {repair_attempt}/{max_repairs}")
+            self.contentDelta.emit(f"**Validation failed.** Starting repair attempt {repair_attempt}/{max_repairs}...")
+
+            # Build repair prompt
+            repair_want_lines = [
+                "## Validation failure — repair needed",
+                "",
+                "The previous lap made changes but validation failed. Fix the issue below. Run the same validation command again after fixing to confirm.",
+                "",
+            ]
+            if changed_files:
+                repair_want_lines.append("### Changed files from previous lap:")
+                for f in changed_files:
+                    repair_want_lines.append(f"- {f}")
+                repair_want_lines.append("")
+
+            # Show up to 3 validation failures
+            for vr in vr_list[:3]:
+                repair_want_lines.append("### Validation failure")
+                repair_want_lines.append(f"Command: `{vr.get('command', '?')}`")
+                repair_want_lines.append(f"Exit code: {vr.get('exit_code', '?')}")
+                stdout_tail = (vr.get("stdout") or "")[-2000:]
+                stderr_tail = (vr.get("stderr") or "")[-2000:]
+                if stdout_tail.strip():
+                    repair_want_lines.append(f"stdout tail:\n```\n{stdout_tail}\n```")
+                if stderr_tail.strip():
+                    repair_want_lines.append(f"stderr tail:\n```\n{stderr_tail}\n```")
+                repair_want_lines.append("")
+
+            for err in validation_errors[:2]:
+                repair_want_lines.append(f"- {err}")
+            if failure_parts:
+                repair_want_lines.append(f"\nFailure fingerprint: {current_failure_key}")
+            repair_want_lines.append("")
+            repair_want_lines.append("Do not change unrelated files. Do not add new features. Fix only the validation failure.")
+
+            repair_want = "\n".join(repair_want_lines)
+
+            # Snapshot before repair lap
+            repair_pre_sha = snapshot(workspace_root)
+
+            # Record attempt before running
+            repair_attempts_log.append({
+                "attempt": repair_attempt,
+                "failure_key": current_failure_key,
+                "changed_files_before": list(changed_files),
+                "validation_results": vr_list,
+                "errors": validation_errors,
+            })
+
+            lap_result = self._bridge.run_one_lap(repair_want)
+
+            # Re-detect outcomes for loop check
+            has_work, repair_changed = changes_since(workspace_root, repair_pre_sha)
+            changed_files = list(lap_result.changed_files)
+            worker_ok = lap_result.worker_ok
+            worker_status = lap_result.worker_status
+            worker_errors = list(lap_result.worker_errors)
+
+            terminal_statuses = {
+                WorkerOutcomeStatus.needs_followup.value,
+                WorkerOutcomeStatus.scope_mismatch.value,
+                WorkerOutcomeStatus.needs_planner_resolution.value,
+                WorkerOutcomeStatus.harness_error.value,
+                WorkerOutcomeStatus.edit_mechanics_blocked.value,
+            }
+            if worker_status in terminal_statuses:
+                repair_attempts_log[-1]["worker_stopped"] = True
+                repair_attempts_log[-1]["worker_status"] = worker_status
+                break
+
+            lap_is_validation_failure = (
+                worker_status == WorkerOutcomeStatus.validation_failed.value
+                or (
+                    not worker_ok
+                    and worker_errors
+                    and any("Validation command failed" in e for e in worker_errors)
+                )
+            )
+
+            if not lap_is_validation_failure:
+                break  # Validation passed!
+
+        # Restore original revert setting
+        revert_on_failure = saved_revert
+
+        # Compute cumulative changed files since pre_sha
+        has_work_final, all_changed = changes_since(workspace_root, pre_sha)
+        changed_files = list(all_changed)
+        # --- End repair loop ---
 
         # 6. Determine if lap failed based on worker outcome
         hard_failure_statuses = {
@@ -216,7 +357,8 @@ class DroneRunner(QObject):
         # 8.5. Commit successful lap changes
         commit_sha: str | None = None
         if not lap_failed and changed_files:
-            commit_ok, sha, commit_msg = commit_all(workspace_root, lap_result.summary)
+            commit_summary = lap_result.summary if hasattr(lap_result, 'summary') else ""
+            commit_ok, sha, commit_msg = commit_all(workspace_root, commit_summary)
             commit_sha = sha
             if not commit_ok:
                 # Commit failure is not a lap failure — the edit is valid, just uncommitted
@@ -244,9 +386,14 @@ class DroneRunner(QObject):
             combined = " | ".join(parts)
             summary = f"Harness-lap failed: {combined}" if combined else "Harness-lap failed."
             if rollback_status and "rollback_failed" in rollback_status:
-                summary += f" Rollback failed -- tree may be dirty."
+                summary += " Rollback failed -- tree may be dirty."
+            # Prepend repair info if repair was attempted
+            if repair_attempt > 0:
+                summary = f"Failed after {repair_attempt} repair attempt(s). " + summary
         else:
             summary = lap_result.summary + summary_extra
+            if repair_attempt > 0:
+                summary = f"Repaired on attempt {repair_attempt}. " + summary
 
         artifact: dict[str, Any] = {
             "has_work": bool(changed_files),
@@ -257,6 +404,7 @@ class DroneRunner(QObject):
             "policy_violations": policy_violations,
             "rollback_status": rollback_status,
             "commit_sha": commit_sha,
+            "repair_attempts": repair_attempts_log,
         }
 
         receipt = DroneReceipt(
