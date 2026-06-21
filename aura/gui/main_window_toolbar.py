@@ -32,10 +32,10 @@ class MainWindowToolbar(QToolBar):
     auto_summon_drones_toggled = Signal(bool)
     update_requested = Signal()
     settings_requested = Signal()
+    logs_requested = Signal()
     minimize_requested = Signal()
     maximize_requested = Signal()
     close_requested = Signal()
-
     def __init__(self, settings, parent=None) -> None:
         super().__init__("Main", parent)
         self.setMovable(False)
@@ -122,6 +122,14 @@ class MainWindowToolbar(QToolBar):
         settings_act = QAction(QIcon(str(media_path("settings_24dp.svg"))), "Settings", self)
         settings_act.triggered.connect(self.settings_requested.emit)
         self.addAction(settings_act)
+
+        self.addWidget(_toolbar_separator())
+
+        self._logs_btn = QToolButton()
+        self._logs_btn.setText("Logs")
+        self._logs_btn.setToolTip("Open Logs Folder")
+        self._logs_btn.clicked.connect(self.logs_requested.emit)
+        self.addWidget(self._logs_btn)
 
         # Small spacer before window controls.
         win_spacer = QWidget()

@@ -20,6 +20,8 @@ import json
 import logging
 import re
 import threading
+
+_log = logging.getLogger(__name__)
 from pathlib import Path
 from typing import Any, Callable
 
@@ -301,6 +303,13 @@ class ConversationManager:
             full_message: dict[str, Any] | None = None
             tool_defs = [] if worker_needs_final_report else self._tools.tool_defs()
 
+            label = "planner_stream" if "planner" in hook_name else "worker_stream"
+            _log.info(
+                "%s_start model=%s thinking=%s hook_name=%s",
+                label, model, thinking, hook_name,
+            )
+            _first_event = True
+
             for ev in hooks.trigger(
                 hook_name,
                 messages=self._history.for_api(),
@@ -310,11 +319,17 @@ class ConversationManager:
                 cancel_event=cancel_event,
                 temperature=temperature,
             ):
+                if _first_event:
+                    _log.info("%s_first_event model=%s", label, model)
+                    _first_event = False
                 on_event(ev)
                 if isinstance(ev, Done):
                     full_message = ev.full_message
                 if isinstance(ev, ApiError):
+                    _log.info("%s_api_error model=%s", label, model)
                     return  # surface and stop
+
+            _log.info("%s_done model=%s", label, model)
 
             if cancel_event.is_set():
                 # If we have some content but no tool calls, we can keep it.

@@ -8,13 +8,17 @@ Yields events; never raises. Honors thinking mode rules:
 from __future__ import annotations
 
 import json
+import logging
+import os
 import threading
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from openai import APIError, APIStatusError, OpenAI
 
+_log = logging.getLogger(__name__)
 from aura.client.events import (
     ApiError,
     ContentDelta,
@@ -54,11 +58,11 @@ class DeepSeekClient:
         # Use a generous timeout with read=None to avoid [WinError 10054] / ReadError
         # during long thinking/streaming sessions. The OpenAI client will manage
         # its own connection pool.
-        timeout = httpx.Timeout(120.0, connect=10.0, read=None)
+        self._timeout = httpx.Timeout(120.0, connect=10.0, read=None)
         self._client = OpenAI(
             api_key=key,
             base_url=cfg.base_url,
-            timeout=timeout,
+            timeout=self._timeout,
             max_retries=3,
         )
 
@@ -152,6 +156,30 @@ class DeepSeekClient:
             else:
                 kwargs["reasoning_effort"] = "high" if thinking == "high" else "max"
 
+        _log.info(
+            "provider_stream_start provider=%s model=%s thinking=%s "
+            "base_url_host=%s timeout_connect=%s timeout_read=%s",
+            self._provider, model, thinking,
+            urlparse(self._base_url).hostname,
+            self._timeout.connect, self._timeout.read,
+        )
+        try:
+            from aura.updater import is_packaged
+            _log.info("provider_stream_start packaged=%s", is_packaged())
+        except ImportError:
+            pass
+        try:
+            import certifi
+            _log.info(
+                "provider_stream_start certifi_path=%s "
+                "SSL_CERT_FILE=%s REQUESTS_CA_BUNDLE=%s",
+                certifi.where(),
+                os.environ.get("SSL_CERT_FILE", "<not set>"),
+                os.environ.get("REQUESTS_CA_BUNDLE", "<not set>"),
+            )
+        except ImportError:
+            _log.info("provider_stream_start certifi=not_available")
+
         # Accumulators reproduce the streamed assistant message exactly.
         reasoning_buf: list[str] = []
         content_buf: list[str] = []
@@ -175,10 +203,19 @@ class DeepSeekClient:
             yield ApiError(status_code=None, message=f"{type(exc).__name__}: {exc}")
             return
 
+        _first_chunk_event = True
+
         try:
             for chunk in stream:
                 if cancel_event is not None and cancel_event.is_set():
                     break
+
+                if _first_chunk_event:
+                    _log.info(
+                        "provider_stream_first_event provider=%s model=%s",
+                        self._provider, model,
+                    )
+                    _first_chunk_event = False
 
                 # Usage may appear on a terminal-only chunk OR be bundled with the final
                 # choice chunk depending on the server. Emit at most once.

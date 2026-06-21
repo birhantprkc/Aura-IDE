@@ -7,8 +7,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from PySide6.QtCore import QByteArray, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QByteArray, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QIcon
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -119,6 +120,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.auto_summon_drones_toggled.connect(self._settings_controller.on_auto_summon_drones_toggled)
         self._toolbar.update_requested.connect(self._on_open_update)
         self._toolbar.settings_requested.connect(self._settings_controller.open_settings)
+        self._toolbar.logs_requested.connect(self._open_logs_folder)
         self._toolbar.minimize_requested.connect(self.showMinimized)
         self._toolbar.maximize_requested.connect(self._toggle_maximize)
         self._toolbar.close_requested.connect(self.close)
@@ -686,6 +688,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_open_update(self) -> None:
         dlg = UpdateDialog(self)
         dlg.exec()
+
+    def _open_logs_folder(self) -> None:
+        from aura.startup_logging import logs_dir
+
+        path = logs_dir()
+        path.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        logger.info("open_logs_folder path=%s", path)
 
     def _on_open_checkpoints(self) -> None:
         if self._workspace_root is None or not self._workspace_root.exists():

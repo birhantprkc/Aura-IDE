@@ -10,7 +10,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from aura.config import redact_secrets
 from PySide6.QtCore import QObject, Signal
+
+_log = logging.getLogger(__name__)
 
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 
@@ -114,6 +117,10 @@ class WorkerEventHandler(QObject):
         summary: str,
     ) -> None:
         """Always show the SpecCard; auto-dispatch or wait for card interaction."""
+        _log.info(
+            "dispatch_card_shown tool_call_id=%s goal=%s",
+            tool_call_id, goal[:120],
+        )
 
         if self._active_mismatch_card_id is not None:
             self._chat.mark_mismatch_resolved(self._active_mismatch_card_id)
@@ -174,6 +181,7 @@ class WorkerEventHandler(QObject):
 
     def _on_dispatch_clicked(self, tool_call_id: str) -> None:
         """Dispatch the spec card's current values directly."""
+        _log.info("dispatch_clicked tool_call_id=%s", tool_call_id)
         card = self._get_spec_card(tool_call_id)
         if card is None:
             return
@@ -256,6 +264,10 @@ class WorkerEventHandler(QObject):
         status: str | None = None,
     ) -> None:
         """Forward worker finished to playground and update spec card."""
+        _log.info(
+            "worker_finished tool_call_id=%s status=%s",
+            tool_call_id, status,
+        )
 
         metadata = self._worker_result_metadata(tool_call_id)
         suppress_main_summary = self._is_recoverable_internal_worker_result(
@@ -466,7 +478,10 @@ class WorkerEventHandler(QObject):
 
     def _on_worker_api_error(self, tool_call_id: str, status: int, message: str) -> None:
         """Forward API error to playground with a formatted title."""
-
+        _log.info(
+            "api_error tool_call_id=%s status=%s message_redacted=%s",
+            tool_call_id, status, redact_secrets(message)[:200],
+        )
         title = f"API Error {status}" if status > 0 else "Worker Error"
         self._playground.add_error(f"{title}: {message}")
         self._transition_active_workflow(

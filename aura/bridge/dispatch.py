@@ -11,10 +11,12 @@ import json
 import re
 import shlex
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+_log = logging.getLogger(__name__)
 from PySide6.QtCore import (
     QObject,
     Signal,
@@ -298,6 +300,8 @@ class _DispatchProxy(QObject):
         worker_history = History()
         base_prompt = self._worker_system_prompt if self._worker_system_prompt else WORKER_SYSTEM_PROMPT
         # Refresh Tier 1 context so a prior Worker pass's blueprint is visible.
+        _log.info("worker_context_build_start tool_call_id=%s", tool_call_id)
+        t1 = time.monotonic()
         if self._workspace_root is not None:
             try:
                 tier1_context = build_tier1_context(self._workspace_root)
@@ -305,16 +309,26 @@ class _DispatchProxy(QObject):
                 tier1_context = self._tier1_context
         else:
             tier1_context = self._tier1_context
+        _log.info(
+            "worker_context_build_end tool_call_id=%s duration_ms=%.0f",
+            tool_call_id, (time.monotonic() - t1) * 1000,
+        )
         full_prompt = inject_tier1_context(base_prompt, tier1_context)
         full_prompt = inject_private_worker_style(full_prompt)
         worker_history.set_system(full_prompt)
         task_spec = normalize_worker_task(req)
+        _log.info("worker_profile_detect_start tool_call_id=%s", tool_call_id)
+        t2 = time.monotonic()
         if self._workspace_root is not None:
             try:
                 profile = detect_project_profile(self._workspace_root)
                 task_spec = replace(task_spec, project_profile=profile)
             except Exception:
                 logging.exception("Failed to detect project profile for worker context")
+        _log.info(
+            "worker_profile_detect_end tool_call_id=%s duration_ms=%.0f",
+            tool_call_id, (time.monotonic() - t2) * 1000,
+        )
         worker_history.append_user_text(_format_spec_as_user_message(task_spec))
 
         worker_registry = self._registry_factory("worker")

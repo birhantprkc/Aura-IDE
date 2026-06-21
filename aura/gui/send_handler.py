@@ -6,11 +6,14 @@ execution. Delegates to the bridge, chat view, and input panel.
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox
+
+_log = logging.getLogger(__name__)
 
 from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode
 from aura.conversation.task_router import TaskLane, classify_user_request
@@ -406,6 +409,10 @@ class SendHandler(QObject):
         self._chat.scroll_to_bottom(force=True)
         self._chat.begin_assistant()
 
+        _log.info(
+            "send_start model=%s thinking=%s workspace_root=%s",
+            model, thinking, self._workspace_root,
+        )
         self._bridge.send(
             model=model,
             thinking=thinking,
