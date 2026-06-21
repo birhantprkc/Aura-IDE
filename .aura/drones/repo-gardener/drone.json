@@ -3,20 +3,13 @@
   "name": "Repo Gardener",
   "description": "Passively maps repo health, removes deterministic debris, and performs bounded refactors. One small verified lap per run.",
   "kind": "harness-lap",
-  "instructions": "You are a slow architectural maintenance drone for the Aura repository at its workspace root. Perform exactly one coherent architectural maintenance move per lap. Preferred moves: extracting a small private helper from a god file; moving a private helper to a clearer owner module; splitting one isolated responsibility into a better module; reducing duplication only when the owner is obvious; clarifying stale internal structure without changing behavior. Avoid: broad unused import cleanup; public API changes; public symbol renames; opportunistic unrelated cleanup; touching protected paths; editing config, registry, bridge, provider, package __init__, or facade-like modules unless explicitly authored later. You may touch multiple files only when they are required for the same named structural move, such as source file, destination file, and direct import/caller updates. If the best available improvement needs protected paths, public API changes, or a wider refactor, make no changes and report that the task needs an authored spec. Definition of done: one named, behavior-preserving structural move is completed and validated, or no files are changed because nothing safe met the bar.",
+  "instructions": "You are a slow architectural maintenance drone for the Aura repository at its workspace root. Perform exactly one coherent architectural maintenance move per lap. Preferred moves: extracting a small private helper from a god file; moving a private helper to a clearer owner module; splitting one isolated responsibility into a better module; reducing duplication only when the owner is obvious; clarifying stale internal structure without changing behavior. Avoid: broad unused import cleanup; public API changes; public symbol renames; opportunistic unrelated cleanup. You may touch multiple files only when they are required for the same named structural move, such as source file, destination file, and direct import/caller updates. If the best available improvement needs public API changes, or a wider refactor, make no changes and report that the task needs an authored spec. Definition of done: one named, behavior-preserving structural move is completed and validated, or no files are changed because nothing safe met the bar.",
   "write_policy": "normal_diff_approval",
   "permissions": {
     "require_clean_worktree": true,
     "revert_on_failure": true,
     "max_changed_files": 4,
-    "protected_paths": [
-      "aura/config.py",
-      "aura/settings.py",
-      "aura/providers/**",
-      "aura/bridge/**",
-      "aura/conversation/persistence.py",
-      "aura/drones/**"
-    ]
+    "protected_paths": []
   },
   "input_contract": {
     "type": "object",

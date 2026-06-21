@@ -461,6 +461,41 @@ def restore_to_snapshot(workspace_root: Path, sha: str) -> tuple[bool, str]:
         return False, "git reset timed out."
 
 
+def clean_untracked_paths(workspace_root: Path, paths: list[str]) -> tuple[bool, str]:
+    """Remove only the specified untracked paths using git clean -f.
+
+    Runs `git clean -f -- <paths>` scoped to the given explicit path list.
+    Files that are tracked or do not exist are silently ignored by git clean.
+    Safe to call after restore_to_snapshot to remove files a lap created
+    that git reset --hard leaves behind.
+
+    Returns (success, message).
+    """
+    if not paths:
+        return True, "No paths to clean."
+
+    try:
+        result = subprocess.run(
+            ["git", "clean", "-f", "--"] + paths,
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            **get_subprocess_kwargs(),
+        )
+        if result.returncode == 0:
+            return True, "Untracked paths cleaned."
+        else:
+            err = result.stderr.strip() if result.stderr else "git clean failed."
+            return False, f"git clean failed: {err}"
+    except subprocess.TimeoutExpired:
+        return False, "git clean timed out."
+    except FileNotFoundError:
+        return False, "git executable not found."
+
+
 def git_init(workspace_root: Path) -> tuple[bool, str]:
     """Initialize a git repository and create an initial commit.
     Returns (success, message)."""

@@ -209,7 +209,7 @@ class DroneRunner(QObject):
         import datetime as dt
 
         from aura.conversation.dispatch import WorkerOutcomeStatus
-        from aura.git_ops import changes_since, commit_all, restore_to_snapshot, snapshot, working_tree_status
+        from aura.git_ops import changes_since, clean_untracked_paths, commit_all, restore_to_snapshot, snapshot, working_tree_status
 
         # 1. Check working tree — allow owned dirty files from previous Gardener runs
         workspace_root = self._workspace_root
@@ -525,6 +525,8 @@ class DroneRunner(QObject):
         if lap_failed and revert_on_failure:
             if changed_files:
                 revert_ok, revert_msg = _revert(pre_sha)
+                if revert_ok:
+                    clean_untracked_paths(workspace_root, changed_files)
                 rollback_status = "reverted" if revert_ok else f"rollback_failed: {revert_msg}"
                 if not revert_ok:
                     rollback_status = f"rollback_failed: {revert_msg}"
