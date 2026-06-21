@@ -3,8 +3,21 @@
   "name": "Repo Gardener",
   "description": "Passively maps repo health, removes deterministic debris, and performs bounded refactors. One small verified lap per run.",
   "kind": "harness-lap",
-  "instructions": "You are working in the Aura repository at its workspace root, tasked with keeping the aura/ package clean to its own standards. This is one bounded lap of that standing job. Survey aura/ for the single most worthwhile small improvement available right now — dead code, a muddled function that wants extracting, a leaky abstraction, duplication that should be shared, a stale comment lying about live behavior. Read the live code before deciding; do not work from memory. Pick exactly one. Make the smallest change that fully lands it — one file where possible, behavior-preserving by construction, matching the patterns already in the surrounding code. Do not rename public symbols, change public APIs, or touch anything outside aura/. No new dependencies. If nothing is genuinely worth touching this lap, change nothing and say so plainly — an empty lap is the correct, expected signal to stop, never a failure. Never invent work to look busy. Definition of done: either one bounded, behavior-preserving improvement to a single file in aura/ with existing tests still passing, or no file changed and a plain report that nothing met the bar.",
+  "instructions": "You are working in the Aura repository at its workspace root, tasked with keeping the aura/ package clean to its own standards. This is one bounded lap of that standing job. Survey aura/ for the single most worthwhile small improvement available right now — dead code, a muddled function that wants extracting, a leaky abstraction, duplication that should be shared, a stale comment lying about live behavior. Read the live code before deciding; do not work from memory. Pick exactly one named structural move per lap. Make the smallest change that fully lands it — one file where possible, behavior-preserving by construction, matching the patterns already in the surrounding code. Do NOT remove imports from config, registry, provider, bridge, package __init__, or facade-like modules unless you can prove no repo file imports that name from that module. Do not rename public symbols, change public APIs, or touch anything outside aura/. No new dependencies. If nothing is genuinely worth touching this lap, change nothing and say so plainly — an empty lap is the correct, expected signal to stop, never a failure. Never invent work to look busy. Definition of done: either one bounded, behavior-preserving improvement to a single file in aura/ with existing tests still passing, or no file changed and a plain report that nothing met the bar.",
   "write_policy": "normal_diff_approval",
+  "permissions": {
+    "require_clean_worktree": true,
+    "revert_on_failure": true,
+    "max_changed_files": 4,
+    "protected_paths": [
+      "aura/config.py",
+      "aura/settings.py",
+      "aura/providers/**",
+      "aura/bridge/**",
+      "aura/conversation/persistence.py",
+      "aura/drones/**"
+    ]
+  },
   "input_contract": {
     "type": "object",
     "properties": {

@@ -16,7 +16,7 @@ Planner / worker mode:
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -194,6 +194,9 @@ class LapResult:
     has_work: bool
     summary: str
     changed_files: tuple[str, ...]
+    worker_ok: bool = True
+    worker_status: str = "completed"
+    worker_errors: list[str] = field(default_factory=list)
 
 
 class ConversationBridge(QObject):
@@ -660,6 +663,47 @@ class ConversationBridge(QObject):
                 self.workerDispatchRequested
             )
 
+            # --- added: collect worker dispatch metadata ---
+            worker_ok = True
+            worker_status = "completed"
+            worker_errors: list[str] = []
+            try:
+                from aura.conversation.dispatch import WorkerOutcomeStatus
+                for record in self._dispatch_proxy.records():
+                    meta = self._dispatch_proxy.result_metadata(record.tool_call_id)
+                    if not meta:
+                        continue
+                    extras = meta.get("extras", {}) or {}
+                    errs = extras.get("errors") or []
+                    if errs:
+                        worker_errors.extend(str(e) for e in errs)
+                    if extras.get("internal_error"):
+                        worker_ok = False
+                        worker_status = WorkerOutcomeStatus.harness_error.value
+                        if not worker_errors:
+                            worker_errors.append(str(extras["internal_error"]))
+                    elif extras.get("unrecovered_not_applied_writes"):
+                        worker_ok = False
+                        worker_status = WorkerOutcomeStatus.edit_mechanics_blocked.value
+                        if not worker_errors:
+                            worker_errors.append("Unrecovered write failures")
+                    elif extras.get("validation_not_run") and meta.get("modified_files"):
+                        worker_ok = False
+                        worker_status = WorkerOutcomeStatus.validation_failed.value
+                        if not worker_errors:
+                            worker_errors.append("Validation not run after writes")
+                    elif extras.get("needs_followup"):
+                        worker_ok = False
+                        worker_status = WorkerOutcomeStatus.needs_followup.value
+                        if not worker_errors:
+                            worker_errors.append("Worker reported needs_followup")
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Failed to collect worker dispatch metadata", exc_info=True
+                )
+            # --- end added ---
+
             has_work = False
             changed_files: tuple[str, ...] = ()
             summary = ""
@@ -682,6 +726,9 @@ class ConversationBridge(QObject):
                 has_work=has_work,
                 summary=summary,
                 changed_files=changed_files,
+                worker_ok=worker_ok,
+                worker_status=worker_status,
+                worker_errors=worker_errors,
             )
         finally:
             self._auto_dispatch = old_auto_dispatch

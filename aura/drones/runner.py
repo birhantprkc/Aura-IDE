@@ -94,28 +94,176 @@ class DroneRunner(QObject):
     def _run_harness_lap(self) -> None:
         if self._bridge is None:
             raise RuntimeError("Harness-lap drone requires a bridge but none was provided")
+
+        import datetime as dt
+        from aura.git_ops import working_tree_status, snapshot, changes_since, restore_to_snapshot
+        from aura.conversation.dispatch import WorkerOutcomeStatus
+
+        # 1. Check clean working tree before starting
+        workspace_root = self._workspace_root
+        git_ok, git_output, git_err = working_tree_status(workspace_root)
+        if git_ok and git_output.strip():
+            # Working tree is dirty -- skip the lap
+            ended = dt.datetime.now(tz=dt.timezone.utc).isoformat()
+            receipt = DroneReceipt(
+                run_id=self._run.run_id,
+                drone_id=self._drone.id,
+                drone_name=self._drone.name,
+                status="failed",
+                started_at=dt.datetime.fromtimestamp(
+                    self._run.started_at, tz=dt.timezone.utc
+                ).isoformat(),
+                ended_at=ended,
+                summary="Harness-lap skipped: working tree is dirty. Commit or stash changes first.",
+                produced_artifact={
+                    "has_work": False,
+                    "changed_files": [],
+                    "worker_ok": False,
+                    "worker_status": "skipped_dirty_tree",
+                    "worker_errors": [],
+                    "policy_violations": ["working tree is dirty"],
+                    "rollback_status": None,
+                },
+                errors=["Working tree is not clean. Harness-lap requires a clean working tree."],
+                elapsed_seconds=self._run.elapsed_seconds,
+            )
+            RunHistoryStore.save_run(workspace_root, receipt)
+            self.contentDelta.emit(receipt.summary)
+            self._run.mark("failed")
+            self.statusChanged.emit("failed")
+            self.receiptReady.emit(receipt)
+            return
+
+        # 2. Capture pre-lap snapshot
+        pre_sha = snapshot(workspace_root)
+
+        # 3. Read permissions from drone definition (with safe defaults)
+        permissions = self._drone.permissions or {}
+        require_clean_worktree = permissions.get("require_clean_worktree", True)
+        revert_on_failure = permissions.get("revert_on_failure", True)
+        max_changed_files = permissions.get("max_changed_files", 0)  # 0 = unlimited
+        protected_paths = permissions.get("protected_paths", []) or []
+
+        import fnmatch
+
+        def _path_matches_protected(path: str, patterns: list[str]) -> bool:
+            for pat in patterns:
+                if fnmatch.fnmatch(path, pat):
+                    return True
+            return False
+
+        def _revert(sha: str | None) -> tuple[bool, str]:
+            if sha:
+                ok, msg = restore_to_snapshot(workspace_root, sha)
+                return ok, msg
+            return False, "No pre-lap snapshot to restore"
+
+        # 4. Run the lap
         want = self._build_harness_lap_want()
         lap_result = self._bridge.run_one_lap(want)
+
+        # 5. Collect outcomes
+        changed_files = list(lap_result.changed_files)
+        worker_ok = lap_result.worker_ok
+        worker_status = lap_result.worker_status
+        worker_errors = list(lap_result.worker_errors)
+
+        # 6. Determine if lap failed based on worker outcome
+        hard_failure_statuses = {
+            WorkerOutcomeStatus.validation_failed.value,
+            WorkerOutcomeStatus.edit_mechanics_blocked.value,
+            WorkerOutcomeStatus.harness_error.value,
+            WorkerOutcomeStatus.needs_followup.value,
+            WorkerOutcomeStatus.needs_planner_resolution.value,
+            WorkerOutcomeStatus.craft_blocked.value,
+            WorkerOutcomeStatus.craft_rejected.value,
+            WorkerOutcomeStatus.scope_mismatch.value,
+            WorkerOutcomeStatus.approval_rejected.value,
+        }
+        lap_failed = not worker_ok or worker_status in hard_failure_statuses or bool(worker_errors)
+
+        if not lap_failed and not changed_files:
+            # Empty lap -- not a failure, but no work done
+            pass
+
+        # 7. Check policy constraints
+        policy_violations: list[str] = []
+
+        if max_changed_files > 0 and len(changed_files) > max_changed_files:
+            policy_violations.append(
+                f"Changed {len(changed_files)} files, exceeds max_changed_files={max_changed_files}"
+            )
+            lap_failed = True
+
+        for f in changed_files:
+            if _path_matches_protected(f, protected_paths):
+                policy_violations.append(
+                    f"Changed protected path '{f}'"
+                )
+                lap_failed = True
+
+        # 8. Revert on failure if policy says so
+        rollback_status: str | None = None
+        if lap_failed and revert_on_failure:
+            if changed_files:
+                revert_ok, revert_msg = _revert(pre_sha)
+                rollback_status = "reverted" if revert_ok else f"rollback_failed: {revert_msg}"
+                if not revert_ok:
+                    rollback_status = f"rollback_failed: {revert_msg}"
+            else:
+                rollback_status = "no_changes_to_revert"
+
+        final_status: str
+        if not lap_failed:
+            final_status = "completed"
+        elif rollback_status == "reverted" or rollback_status == "no_changes_to_revert":
+            final_status = "failed"
+        elif rollback_status and rollback_status.startswith("rollback_failed"):
+            final_status = "failed"
+        else:
+            final_status = "failed"
+
+        # 9. Build summary
+        if lap_failed:
+            violations_str = "; ".join(policy_violations) if policy_violations else ""
+            errors_str = "; ".join(worker_errors) if worker_errors else ""
+            parts = [s for s in [violations_str, errors_str] if s]
+            combined = " | ".join(parts)
+            summary = f"Harness-lap failed: {combined}" if combined else "Harness-lap failed."
+            if rollback_status and "rollback_failed" in rollback_status:
+                summary += f" Rollback failed -- tree may be dirty."
+        else:
+            summary = lap_result.summary
+
+        artifact: dict[str, Any] = {
+            "has_work": bool(changed_files),
+            "changed_files": changed_files,
+            "worker_ok": worker_ok,
+            "worker_status": worker_status,
+            "worker_errors": worker_errors,
+            "policy_violations": policy_violations,
+            "rollback_status": rollback_status,
+        }
+
         receipt = DroneReceipt(
             run_id=self._run.run_id,
             drone_id=self._drone.id,
             drone_name=self._drone.name,
-            status="completed",
-            started_at=dt.datetime.fromtimestamp(self._run.started_at, tz=dt.timezone.utc).isoformat(),
+            status=final_status,
+            started_at=dt.datetime.fromtimestamp(
+                self._run.started_at, tz=dt.timezone.utc
+            ).isoformat(),
             ended_at=dt.datetime.now(tz=dt.timezone.utc).isoformat(),
-            summary=lap_result.summary,
-            produced_artifact={
-                "has_work": lap_result.has_work,
-                "changed_files": list(lap_result.changed_files),
-            },
+            summary=summary,
+            produced_artifact=artifact,
+            errors=worker_errors if lap_failed else [],
             elapsed_seconds=self._run.elapsed_seconds,
         )
-        RunHistoryStore.save_run(self._workspace_root, receipt)
-        self.contentDelta.emit(lap_result.summary)
-        self._run.mark("completed")
-        self.statusChanged.emit("completed")
+        RunHistoryStore.save_run(workspace_root, receipt)
+        self.contentDelta.emit(summary)
+        self._run.mark(final_status)
+        self.statusChanged.emit(final_status)
         self.receiptReady.emit(receipt)
-
     @property
     def run_state(self) -> DroneRun:
         return self._run

@@ -59,3 +59,5 @@ Thumbs.db
 /.aura/toolist.txt
 /.aura/drones/runs/
 
+/.aura/memory.db-shm
+/.aura/memory.db-wal
