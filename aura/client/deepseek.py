@@ -174,12 +174,15 @@ class DeepSeekClient:
             pass
         try:
             import certifi
+            _certifi_path = certifi.where()
             _log.info(
                 "provider_stream_start certifi_path=%s "
+                "certifi_file_exists=%s "
                 "SSL_CERT_FILE=%s REQUESTS_CA_BUNDLE=%s",
-                certifi.where(),
-                os.environ.get("SSL_CERT_FILE", "<not set>"),
-                os.environ.get("REQUESTS_CA_BUNDLE", "<not set>"),
+                _certifi_path,
+                os.path.exists(_certifi_path),
+                "<set>" if "SSL_CERT_FILE" in os.environ else "<not set>",
+                "<set>" if "REQUESTS_CA_BUNDLE" in os.environ else "<not set>",
             )
         except ImportError:
             _log.info("provider_stream_start certifi=not_available")

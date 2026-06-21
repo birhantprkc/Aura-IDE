@@ -374,6 +374,7 @@ def create_nuitka_command(
         "--nofollow-import-to=numpy",
         "--nofollow-import-to=scipy",
         "--nofollow-import-to=pytest",
+        "--nofollow-import-to=certifi",
         "--nofollow-import-to=charset_normalizer",
         "--nofollow-import-to=click",
         "--lto=no",
@@ -528,6 +529,17 @@ def build(
         shutil.copytree(click_path, target_click_dir)
     else:
         print("Warning: click is not installed in the clean environment, skipping manual bundle.")
+
+    # Copy certifi as pure Python files for packaged SSL certificate bundle
+    certifi_path = get_venv_package_path("certifi")
+    if certifi_path and certifi_path.exists():
+        target_certifi_dir: Path = final_dist_dir / "certifi"
+        print(f"Bundling certifi as raw source: {certifi_path} -> {target_certifi_dir}")
+        if target_certifi_dir.exists():
+            shutil.rmtree(target_certifi_dir)
+        shutil.copytree(certifi_path, target_certifi_dir)
+    else:
+        print("Warning: certifi is not installed in the clean environment, skipping manual bundle.")
 
     if not installer_only:
         zip_path = zip_distribution(root, final_dist_dir)
