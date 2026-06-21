@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from aura.conversation._dispatch_helpers import _string_list
+
 
 TASK_KINDS = {
     "new_tool_or_app",
@@ -479,11 +481,6 @@ def _quality_traps_for_new_tool(shape: TaskShape) -> list[str]:
 def _bullets(items: list[str]) -> list[str]:
     return [f"- {item}" for item in items]
 
-
-def _string_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value]
 
 
 __all__ = [
