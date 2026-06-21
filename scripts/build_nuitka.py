@@ -126,12 +126,23 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
-def create_build_venv(root: Path) -> Path:
+def create_build_venv(root: Path, *, fast: bool = False, refresh_build_venv: bool = False) -> Path:
     """Create a pristine virtual environment for the build."""
     venv_dir = root / OUTPUT_DIR / ".build_venv"
-    if venv_dir.exists():
-        print("Cleaning up old build environment...")
-        shutil.rmtree(venv_dir, ignore_errors=True)
+
+    if fast and not refresh_build_venv:
+        python_exe = venv_dir / "Scripts" / "python.exe"
+        if python_exe.exists():
+            print("Reusing existing build venv (fast mode).")
+            return python_exe
+        print("Build venv not found; creating fresh one.")
+    else:
+        if refresh_build_venv:
+            print("Refreshing build venv...")
+        else:
+            print("Cleaning up old build environment...")
+        if venv_dir.exists():
+            shutil.rmtree(venv_dir, ignore_errors=True)
 
     print("Creating pristine build environment...")
     import venv
@@ -288,11 +299,55 @@ def create_installer(dist_dir: Path, version: str, installer_flag: bool | None) 
     return installer_path
 
 
+def upload_to_github_release(installer_path: Path, version: str, create_release: bool = False) -> None:
+    """Upload the installer to the GitHub release for tag v{version} using gh CLI."""
+    tag = f"v{version}"
+
+    # Check gh CLI is available
+    if not shutil.which("gh"):
+        raise SystemExit(
+            "GitHub CLI (gh) not found.\n"
+            "Install it from https://cli.github.com/ and ensure it's on your PATH."
+        )
+
+    # Check gh auth status
+    auth_result = subprocess.run(
+        ["gh", "auth", "status"],
+        capture_output=True, text=True,
+    )
+    if auth_result.returncode != 0:
+        raise SystemExit(
+            "GitHub CLI is not authenticated. Run 'gh auth login' first.\n"
+            f"Error: {auth_result.stderr.strip()}"
+        )
+
+    view_result = subprocess.run(
+        ["gh", "release", "view", tag, "--json", "tagName"],
+        capture_output=True, text=True,
+    )
+    release_exists = view_result.returncode == 0
+
+    if not release_exists:
+        if not create_release:
+            raise SystemExit(
+                f"GitHub release {tag} does not exist. "
+                "Use --create-github-release to create it."
+            )
+        print(f"Creating GitHub release {tag}...")
+        run(["gh", "release", "create", tag, f"--title=Aura v{version}", "--generate-notes"])
+
+    # Upload installer asset
+    print(f"Uploading {installer_path.name} to GitHub release {tag}...")
+    run(["gh", "release", "upload", tag, str(installer_path), "--clobber"])
+    print("Upload complete.")
+
+
 def create_nuitka_command(
     python_exe: Path | None = None,
     *,
     low_memory: bool = True,
     jobs: int = DEFAULT_NUITKA_JOBS,
+    fast: bool = False,
 ) -> list[str]:
     """Create the Nuitka command used for release builds."""
     if jobs == 0:
@@ -312,7 +367,6 @@ def create_nuitka_command(
         f"--include-data-file={UPDATER_HELPER_SOURCE}={UPDATER_HELPER_DIST_NAME}",
         f"--output-dir={OUTPUT_DIR}",
         f"--output-filename={APP_NAME}",
-        "--clean-cache=all",
         "--assume-yes-for-downloads",
         "--python-flag=-m",
         "--nofollow-import-to=google",
@@ -324,6 +378,8 @@ def create_nuitka_command(
         "--nofollow-import-to=click",
         "--lto=no",
     ]
+    if not fast:
+        cmd.insert(cmd.index("--assume-yes-for-downloads"), "--clean-cache=all")
     if low_memory:
         cmd.append("--low-memory")
     cmd.append(f"--jobs={jobs}")
@@ -380,6 +436,11 @@ def build(
     low_memory: bool = True,
     jobs: int = DEFAULT_NUITKA_JOBS,
     installer: bool | None = None,
+    fast: bool = False,
+    refresh_build_venv: bool = False,
+    installer_only: bool = False,
+    github_release: bool = False,
+    create_github_release: bool = False,
 ) -> None:
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
@@ -396,10 +457,10 @@ def build(
     clean_previous_dist_dirs(root)
 
     # 3. Build Environment
-    python_exe = create_build_venv(root)
+    python_exe = create_build_venv(root, fast=fast, refresh_build_venv=refresh_build_venv)
 
     # 4. Nuitka Command
-    cmd = create_nuitka_command(python_exe, low_memory=low_memory, jobs=jobs)
+    cmd = create_nuitka_command(python_exe, low_memory=low_memory, jobs=jobs, fast=fast)
 
     # 5. Run Build
     print(f"\nStarting Nuitka build for version {new_version}...")
@@ -468,13 +529,23 @@ def build(
     else:
         print("Warning: click is not installed in the clean environment, skipping manual bundle.")
 
-    zip_path = zip_distribution(root, final_dist_dir)
-    if copy_desktop:
-        copy_to_desktop(zip_path)
+    if not installer_only:
+        zip_path = zip_distribution(root, final_dist_dir)
+        if copy_desktop:
+            copy_to_desktop(zip_path)
 
     installer_path = create_installer(final_dist_dir, new_version, installer)
     if installer_path:
         print(f"Installer created at: {installer_path}")
+
+    if github_release:
+        if installer_path:
+            upload_to_github_release(installer_path, new_version, create_github_release)
+        else:
+            raise SystemExit(
+                "--github-release requires an installer. Use --installer or --installer-only "
+                "and ensure Inno Setup is available."
+            )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -519,16 +590,46 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Explicitly skip installer creation.",
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Fast build: reuse build venv, skip Nuitka cache cleanup. Useful for quick hotfix builds.",
+    )
+    parser.add_argument(
+        "--refresh-build-venv",
+        action="store_true",
+        help="Force re-creation of the build venv even in fast mode.",
+    )
+    parser.add_argument(
+        "--installer-only",
+        action="store_true",
+        help="Skip ZIP and desktop copy; build the installer only. Implies --installer.",
+    )
+    parser.add_argument(
+        "--github-release",
+        action="store_true",
+        help="Upload the installer to GitHub Releases using gh CLI after a successful build.",
+    )
+    parser.add_argument(
+        "--create-github-release",
+        action="store_true",
+        help="Create the GitHub release if it does not exist. Only meaningful with --github-release.",
+    )
     return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
     args = parse_args(sys.argv[1:])
 
+    if args.create_github_release and not args.github_release:
+        print("Warning: --create-github-release has no effect without --github-release.")
+
     installer: bool | None = None
-    if args.installer:
+    if args.installer_only:
         installer = True
-    if args.no_installer:
+    elif args.installer:
+        installer = True
+    if args.no_installer and not args.installer_only:
         installer = False
 
     build(
@@ -538,4 +639,9 @@ if __name__ == "__main__":
         low_memory=not args.no_low_memory,
         jobs=args.jobs,
         installer=installer,
+        fast=args.fast,
+        refresh_build_venv=args.refresh_build_venv,
+        installer_only=args.installer_only,
+        github_release=args.github_release,
+        create_github_release=args.create_github_release,
     )
