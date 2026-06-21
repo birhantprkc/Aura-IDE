@@ -19,6 +19,36 @@ from aura.drones.store import DroneStore, RunHistoryStore
 logger = logging.getLogger(__name__)
 
 
+def _find_owned_dirty_files(
+    workspace_root: Path, drone_id: str, dirty_files: set[str]
+) -> set[str] | None:
+    """Check if dirty files are owned by a previous Gardener run of this drone.
+
+    Returns the set of owned files if ALL dirty files fall within a previous
+    run's owned set. Returns an empty set if there are previous runs but none
+    of their owned files overlap with dirty_files. Returns None if there are
+    no previous Gardener runs (first-time launch with pre-existing dirty files).
+    """
+    runs = RunHistoryStore.list_runs(workspace_root, limit=30)
+    has_prior_runs = False
+    for run in runs:
+        if run.get("drone_id") != drone_id:
+            continue
+        has_prior_runs = True
+        artifact = run.get("produced_artifact") or {}
+        owned = artifact.get("dirty_files_owned")
+        if not owned and artifact.get("changed_files"):
+            owned = artifact["changed_files"]
+        if not owned:
+            continue
+        owned_set = set(owned)
+        if dirty_files.issubset(owned_set):
+            return owned_set
+    if not has_prior_runs:
+        return None
+    return set()
+
+
 class DroneRunner(QObject):
     """Executes a single registered folder-backed Drone on a background thread."""
 
@@ -52,6 +82,7 @@ class DroneRunner(QObject):
         self._model = model
         self._auto_approve = auto_approve
         self._bridge = bridge
+        self._run_owned_files: set[str] = set()
 
     def cancel(self) -> None:
         self._run.cancel()
@@ -100,40 +131,104 @@ class DroneRunner(QObject):
         from aura.conversation.dispatch import WorkerOutcomeStatus
         from aura.git_ops import changes_since, commit_all, restore_to_snapshot, snapshot, working_tree_status
 
-        # 1. Check clean working tree before starting
+        # 1. Check working tree — allow owned dirty files from previous Gardener runs
         workspace_root = self._workspace_root
         git_ok, git_output, git_err = working_tree_status(workspace_root)
+        dirty_paths: set[str] = set()
         if git_ok and git_output.strip():
-            # Working tree is dirty -- skip the lap
-            ended = dt.datetime.now(tz=dt.timezone.utc).isoformat()
-            receipt = DroneReceipt(
-                run_id=self._run.run_id,
-                drone_id=self._drone.id,
-                drone_name=self._drone.name,
-                status="failed",
-                started_at=dt.datetime.fromtimestamp(
-                    self._run.started_at, tz=dt.timezone.utc
-                ).isoformat(),
-                ended_at=ended,
-                summary="Harness-lap skipped: working tree is dirty. Commit or stash changes first.",
-                produced_artifact={
-                    "has_work": False,
-                    "changed_files": [],
-                    "worker_ok": False,
-                    "worker_status": "skipped_dirty_tree",
-                    "worker_errors": [],
-                    "policy_violations": ["working tree is dirty"],
-                    "rollback_status": None,
-                },
-                errors=["Working tree is not clean. Harness-lap requires a clean working tree."],
-                elapsed_seconds=self._run.elapsed_seconds,
-            )
-            RunHistoryStore.save_run(workspace_root, receipt)
-            self.contentDelta.emit(receipt.summary)
-            self._run.mark("failed")
-            self.statusChanged.emit("failed")
-            self.receiptReady.emit(receipt)
-            return
+            for line in git_output.strip().splitlines():
+                raw = line.rstrip()
+                if len(raw) > 3:
+                    path_part = raw[3:].strip()
+                    # Handle renames: "R  old -> new" -> take the "new" part
+                    if " -> " in path_part:
+                        path_part = path_part.split(" -> ")[-1].strip()
+                    if path_part:
+                        dirty_paths.add(path_part)
+            if dirty_paths:
+                owned_from_history = _find_owned_dirty_files(
+                    workspace_root, self._drone.id, dirty_paths
+                )
+                if owned_from_history is not None and dirty_paths == owned_from_history:
+                    # All dirty files match a previous Gardener run — auto-continue
+                    self._run_owned_files = owned_from_history
+                    self.contentDelta.emit(
+                        "Continuing Repo Gardener with existing run changes."
+                    )
+                elif owned_from_history is not None and dirty_paths:
+                    # Some or all dirty files are unknown — block with details
+                    unknown = dirty_paths - owned_from_history
+                    unknown_list = "\n".join(f"  - {f}" for f in sorted(unknown))
+                    ended = dt.datetime.now(tz=dt.timezone.utc).isoformat()
+                    receipt = DroneReceipt(
+                        run_id=self._run.run_id,
+                        drone_id=self._drone.id,
+                        drone_name=self._drone.name,
+                        status="failed",
+                        started_at=dt.datetime.fromtimestamp(
+                            self._run.started_at, tz=dt.timezone.utc
+                        ).isoformat(),
+                        ended_at=ended,
+                        summary=(
+                            "Harness-lap skipped: working tree has unrelated dirty files."
+                            f"\nFiles blocking:\n{unknown_list}"
+                        ),
+                        produced_artifact={
+                            "has_work": False,
+                            "changed_files": [],
+                            "worker_ok": False,
+                            "worker_status": "skipped_dirty_tree",
+                            "worker_errors": [],
+                            "policy_violations": [f"unrelated dirty files: {sorted(unknown)}"],
+                            "rollback_status": None,
+                        },
+                        errors=["Working tree has files not owned by this drone. "
+                                "Commit, stash, or revert them before running."],
+                        elapsed_seconds=self._run.elapsed_seconds,
+                    )
+                    RunHistoryStore.save_run(workspace_root, receipt)
+                    self.contentDelta.emit(receipt.summary)
+                    self._run.mark("failed")
+                    self.statusChanged.emit("failed")
+                    self.receiptReady.emit(receipt)
+                    return
+                else:
+                    # owned_from_history is None (no previous runs) — block normally
+                    dirty_list = "\n".join(f"  - {f}" for f in sorted(dirty_paths))
+                    ended = dt.datetime.now(tz=dt.timezone.utc).isoformat()
+                    receipt = DroneReceipt(
+                        run_id=self._run.run_id,
+                        drone_id=self._drone.id,
+                        drone_name=self._drone.name,
+                        status="failed",
+                        started_at=dt.datetime.fromtimestamp(
+                            self._run.started_at, tz=dt.timezone.utc
+                        ).isoformat(),
+                        ended_at=ended,
+                        summary=(
+                            "Harness-lap skipped: working tree is dirty. "
+                            "Commit or stash changes first."
+                            f"\nDirty files:\n{dirty_list}"
+                        ),
+                        produced_artifact={
+                            "has_work": False,
+                            "changed_files": [],
+                            "worker_ok": False,
+                            "worker_status": "skipped_dirty_tree",
+                            "worker_errors": [],
+                            "policy_violations": ["working tree is dirty"],
+                            "rollback_status": None,
+                        },
+                        errors=["Working tree is not clean. Harness-lap requires a clean working tree."],
+                        elapsed_seconds=self._run.elapsed_seconds,
+                    )
+                    RunHistoryStore.save_run(workspace_root, receipt)
+                    self.contentDelta.emit(receipt.summary)
+                    self._run.mark("failed")
+                    self.statusChanged.emit("failed")
+                    self.receiptReady.emit(receipt)
+                    return
+            # else: no dirty paths extracted — proceed (tree is effectively clean)
 
         # 2. Capture pre-lap snapshot
         pre_sha = snapshot(workspace_root)
@@ -168,6 +263,7 @@ class DroneRunner(QObject):
         worker_ok = lap_result.worker_ok
         worker_status = lap_result.worker_status
         worker_errors = list(lap_result.worker_errors)
+        self._run_owned_files.update(changed_files)
 
         # --- Repair loop: bounded retry on validation failure ---
         repair_attempt = 0
@@ -276,6 +372,7 @@ class DroneRunner(QObject):
             worker_ok = lap_result.worker_ok
             worker_status = lap_result.worker_status
             worker_errors = list(lap_result.worker_errors)
+            self._run_owned_files.update(changed_files)
 
             terminal_statuses = {
                 WorkerOutcomeStatus.needs_followup.value,
@@ -403,6 +500,7 @@ class DroneRunner(QObject):
             "worker_errors": worker_errors,
             "policy_violations": policy_violations,
             "rollback_status": rollback_status,
+            "dirty_files_owned": list(self._run_owned_files),
             "commit_sha": commit_sha,
             "repair_attempts": repair_attempts_log,
         }
