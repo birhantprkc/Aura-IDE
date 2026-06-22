@@ -32,11 +32,13 @@ class _ApprovalProxy(QObject):
             return ApprovalDecision(action="approve")
         with self._lock:
             self._last_request = request
-            QMetaObject.invokeMethod(
-                self,
-                "_open_dialog",
-                Qt.ConnectionType.BlockingQueuedConnection,
-            )
+        # Don't hold the lock while blocking on the GUI thread
+        QMetaObject.invokeMethod(
+            self,
+            "_open_dialog",
+            Qt.ConnectionType.BlockingQueuedConnection,
+        )
+        with self._lock:
             return self._last_decision
 
     def set_approve_all_session(self, enabled: bool) -> None:
@@ -69,9 +71,11 @@ class _ApprovalProxy(QObject):
 
     @Slot()
     def _open_dialog(self) -> None:
-        req = self._last_request
+        with self._lock:
+            req = self._last_request
         if req is None:
-            self._last_decision = ApprovalDecision(action="reject")
+            with self._lock:
+                self._last_decision = ApprovalDecision(action="reject")
             return
         dlg = DiffApprovalDialog(req, parent=self._parent_widget)
         with self._lock:
@@ -81,11 +85,13 @@ class _ApprovalProxy(QObject):
         finally:
             with self._lock:
                 self._active_dialog = None
-        self._last_decision = dlg.decision()
-        if self._last_decision.action == "approve_all":
+        decision = dlg.decision()
+        if decision.action == "approve_all":
             self._approve_all_session = True
-            self._last_decision = ApprovalDecision(action="approve")
-        self._last_event = self._event_from_request(req, self._last_decision.action)
+            decision = ApprovalDecision(action="approve")
+        with self._lock:
+            self._last_decision = decision
+            self._last_event = self._event_from_request(req, decision.action)
 
     @staticmethod
     def _event_from_request(
