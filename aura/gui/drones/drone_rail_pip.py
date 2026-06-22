@@ -76,6 +76,9 @@ class DroneRailPip(QToolButton):
     def set_cancelled(self) -> None:
         self.set_state("cancelled")
 
+    def set_looping_idle(self) -> None:
+        self.set_state("waiting_for_loop")
+
     def set_idle(self) -> None:
         self._set_idle()
 
@@ -96,6 +99,7 @@ class DroneRailPip(QToolButton):
             "cancelled": ("#202126", FG_DIM, "#2b2d34"),
             "timed_out": ("#35161d", DANGER, "#4a1c27"),
             "waiting_for_approval": ("#332716", WARN, "#473519"),
+            "waiting_for_loop": ("#1a1a2e", "#7b8cff", "#252545"),
         }
         bg, border, hover = palette.get(self._state, palette["running"])
         self.setStyleSheet(

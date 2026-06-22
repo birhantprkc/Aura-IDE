@@ -174,6 +174,8 @@ class EdgeTabRail(QFrame):
             pip.set_waiting_for_approval()
         elif normalized == "running":
             pip.set_running()
+        elif normalized == "waiting_for_loop":
+            pip.set_looping_idle()
 
     def remove_drone_run_pip(self, run_id: str) -> None:
         ghost, animation = self._summon_animations.pop(run_id, (None, None))
@@ -188,6 +190,17 @@ class EdgeTabRail(QFrame):
         pip.deleteLater()
         self.adjustSize()
         self.setFixedHeight(self.sizeHint().height())
+
+    def rekey_drone_run_pip(self, old_run_id: str, new_run_id: str) -> None:
+        """Move a pip widget from old_run_id to new_run_id without visual disruption."""
+        pip = self._drone_run_pips.pop(old_run_id, None)
+        if pip is not None:
+            try:
+                pip.focused.disconnect()
+            except RuntimeError:
+                pass
+            pip.focused.connect(lambda rid=new_run_id: self.droneRunFocusRequested.emit(rid))
+            self._drone_run_pips[new_run_id] = pip
 
     def _play_summon_animation(self, run_id: str) -> None:
         pip = self._drone_run_pips.get(run_id)

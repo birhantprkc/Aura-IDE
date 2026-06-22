@@ -69,6 +69,7 @@ class MainWindowDroneController(QObject):
         self._drone_receipt: DroneReceipt | None = None
         self._pending_drone_summons: dict[str, dict[str, str]] = {}
         self._looping_drones: dict[str, int] = {}  # drone_id -> interval_seconds
+        self._loop_pip_run_id: dict[str, str] = {}  # loop_drone_id -> current run_id
 
     # -- properties for external read access --
 
@@ -400,7 +401,17 @@ class MainWindowDroneController(QObject):
             lambda rid=run_id: self.on_cancel_drone_run(rid)
         )
 
-        self._window._edge_rail.add_drone_run_pip(run_id, run_drone.name)
+        # Add or rekey pip for looping drone runs (persistent pip across laps)
+        if loop_drone_id:
+            old_run_id = self._loop_pip_run_id.get(loop_drone_id)
+            if old_run_id is not None:
+                self._window._edge_rail.rekey_drone_run_pip(old_run_id, run_id)
+                self._window._edge_rail.set_drone_run_pip_state(run_id, run_drone.name, "running")
+            else:
+                self._window._edge_rail.add_drone_run_pip(run_id, run_drone.name)
+            self._loop_pip_run_id[loop_drone_id] = run_id
+        else:
+            self._window._edge_rail.add_drone_run_pip(run_id, run_drone.name)
         # Notify workbay card that this drone is running
         card_id = loop_drone_id if loop_drone_id else run_drone.id
         self.update_workbay_card_run_state(card_id, "running")
@@ -490,14 +501,13 @@ class MainWindowDroneController(QObject):
             drone=drone,
             goal=goal or drone.description,
             reason=reason,
-            parent=self._window._playground,
+            parent=self._window._drone_reports_window,
         )
         card.summonRequested.connect(self.on_confirm_summon_drone)
         card.cancelRequested.connect(self.on_cancel_summon_drone)
         self._active_run_card = card
-        self._window._playground.switch_to_workspace()
         self.sync_drone_tab_checked()
-        self._window._playground.add_run_card(f"summon:{request_id}", card)
+        self._window._drone_reports_window.add_run_card(f"summon:{request_id}", card)
 
     def on_confirm_summon_drone(self, request_id: str) -> None:
         if self._window._workspace_root is None:
@@ -505,7 +515,7 @@ class MainWindowDroneController(QObject):
         request = self._pending_drone_summons.pop(request_id, None)
         if request is None:
             return
-        self._window._playground.remove_run_card(f"summon:{request_id}")
+        self._window._drone_reports_window.remove_run_card(f"summon:{request_id}")
         drone = DroneStore.load_drone(
             self._window._workspace_root, request["drone_id"]
         )
@@ -515,7 +525,7 @@ class MainWindowDroneController(QObject):
 
     def on_cancel_summon_drone(self, request_id: str) -> None:
         self._pending_drone_summons.pop(request_id, None)
-        self._window._playground.remove_run_card(f"summon:{request_id}")
+        self._window._drone_reports_window.remove_run_card(f"summon:{request_id}")
         self._active_run_card = None
 
     def on_cancel_drone(self) -> None:
@@ -536,6 +546,7 @@ class MainWindowDroneController(QObject):
         loop_id = record.get("loop_drone_id", "")
         if loop_id:
             self._looping_drones.pop(loop_id, None)
+            self._loop_pip_run_id.pop(loop_id, None)
             # Update the workbay card loop state if the window is open
             if (
                 self._drone_workbay_window is not None
@@ -605,6 +616,7 @@ class MainWindowDroneController(QObject):
                     self.start_drone_run(drone, loop_drone_id=drone_id)
         else:
             self._looping_drones.pop(drone_id, None)
+            self._loop_pip_run_id.pop(drone_id, None)
             logger.info("[DroneLoop] loop disabled for drone=%s", drone_id)
 
     def on_loop_interval_changed(self, drone_id: str, interval_seconds: int) -> None:
@@ -681,11 +693,6 @@ class MainWindowDroneController(QObject):
         logger.debug(
             "[DroneRun] finished  run_id=%s  drone=%s", run_id, drone.name
         )
-        # Pip state already reflects the final status via statusChanged signal;
-        # schedule timed removal so the user can see the final badge briefly.
-        QTimer.singleShot(
-            15000, lambda rid=run_id: self.remove_drone_run_pip(rid)
-        )
         if self._write_drone_run_id == run_id:
             self._write_drone_run_id = None
         if self._drone_runner is runner:
@@ -705,6 +712,7 @@ class MainWindowDroneController(QObject):
             no_work = isinstance(artifact, dict) and artifact.get("has_work") is False
             if lap_failed or no_work:
                 self._looping_drones.pop(loop_drone_id, None)
+                self._loop_pip_run_id.pop(loop_drone_id, None)
                 if not lap_failed:
                     record["_stop_loop_due_to_no_work"] = True
                 if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
@@ -719,6 +727,25 @@ class MainWindowDroneController(QObject):
                     interval * 1000,
                     lambda lid=loop_drone_id: self.start_next_loop_lap(lid),
                 )
+
+        # Gated pip removal: keep pip for continuing loops, normal removal otherwise
+        if loop_drone_id:
+            if loop_drone_id in self._looping_drones:
+                # Loop continues — keep pip, show waiting state
+                self._window._edge_rail.set_drone_run_pip_state(
+                    run_id, drone.name, "waiting_for_loop"
+                )
+            else:
+                # Loop ended (failure, no_work, or toggle-off) — normal removal
+                self._loop_pip_run_id.pop(loop_drone_id, None)
+                QTimer.singleShot(
+                    15000, lambda rid=run_id: self.remove_drone_run_pip(rid)
+                )
+        else:
+            # Not a loop — normal removal
+            QTimer.singleShot(
+                15000, lambda rid=run_id: self.remove_drone_run_pip(rid)
+            )
 
         # Update workbay card with final run state
         card_id = loop_drone_id if loop_drone_id else drone.id

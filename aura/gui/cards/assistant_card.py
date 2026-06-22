@@ -148,7 +148,8 @@ class AssistantCard(QFrame):
                 self._reasoning_scroll_timer = QTimer(self)
                 self._reasoning_scroll_timer.setSingleShot(True)
                 self._reasoning_scroll_timer.timeout.connect(self._scroll_reasoning_to_bottom)
-            self._reasoning_scroll_timer.start(50)
+            if not self._reasoning_scroll_timer.isActive():
+                self._reasoning_scroll_timer.start(50)
 
     def _scroll_reasoning_to_bottom(self) -> None:
         if self._reasoning_scroll_area is not None:
