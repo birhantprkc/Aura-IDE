@@ -31,6 +31,9 @@ The workflow is a tight loop you stay in control of:
 3. **Dispatch** — When the spec looks right, you dispatch it.
 4. **Worker edits** — The Worker reads the spec and makes the changes through controlled file tools. It can read, write, edit, and search your codebase.
 5. **Diff approval** — Every proposed write shows as a diff. You approve, reject, approve all, or reject all before anything touches disk.
+<p align="left">
+  <img src="media/approve-diff-aura.png" alt="Approve window" width="500">
+</p>
 6. **Validation** — The Worker runs validation after every change. If it fails, the Worker inspects the error and attempts a fix. If recovery fails, the change is aborted cleanly. No broken state left behind.
 7. **Commit** — Approved changes are committed with an AI-generated message. You get a receipt showing every tool call, token cost, and file changed.
 
