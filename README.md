@@ -144,10 +144,13 @@ aura
 
 ## Built with Aura
 
-Aura wrote most of itself. During May 2026 it processed **1.1 billion DeepSeek tokens** across nearly **30,000 API requests** while building its own codebase.
+Aura wrote most of itself. During May/June 2026 it processed **2+ billion DeepSeek tokens** across nearly **30,000 API requests** while building its own codebase.
 
 <p align="center">
   <img src="media/aura-may.png" alt="Token usage for May 2026" width="600">
+</p>
+<p align="center">
+  <img src="media/deepseek-june.png" alt="Token usage for May 2026" width="600">
 </p>
 
 The harness produces the quality, not the model. Swap models, swap providers, change thinking depth — the workflow stays the same and the output stays consistent.
