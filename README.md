@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
-[![Version](https://img.shields.io/badge/version-1.8.2-orange)]()
+[![Version](https://img.shields.io/badge/version-1.8.21-orange)]()
 
 <p>
   <a href="https://www.producthunt.com/products/aura-ide?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-aura-ide" target="_blank" rel="noopener noreferrer">
@@ -56,6 +56,10 @@ Drones are folder-backed project tools that handle repeatable tasks without re-e
 
 **Harness-lap Drones** (like Repo Gardener) run through Aura's Planner/Worker loop with guardrails: clean worktree, protected paths, max changed files, rollback on failure. Each lap is one bounded maintenance pass.
 
+<p align="left">
+  <img src="media/drone-cohesion.png" alt="Drones and Workbay" width="400">
+</p>
+
 **Write-policy** controls what a Drone can do:
 - `read_only` — analysis only. No file modifications. Safe to run multiple in parallel.
 - `normal_diff_approval` — changes files through the same diff-approval cycle as any Worker.
@@ -77,7 +81,7 @@ Examples you can use or build in minutes:
 - **Repo Gardener** — passive maintenance pass with harness-lap guardrails. Removes deterministic debris, applies bounded refactors, and rolls back on failure.
 
 <p align="center">
-  <img src="media/drone-workbay.png" alt="Drones and Workbay" width="900">
+  <img src="media/drone-panel.png" alt="Drones and Workbay" width="900">
 </p>
 <p align="center"><em>Drones in Workbay — reusable automation cards you can run, loop, and delete.</em></p>
 
@@ -86,7 +90,9 @@ Examples you can use or build in minutes:
 Aura supports two model paths. Pick the one that fits you.
 
 **Aura Credits** — hosted Aura models without managing provider keys. Open Settings → Aura → Buy Credits, check purchase, then select Aura as your Planner or Worker provider. No credit card needed to start.
-
+<p align="center">
+  <img src="media/aura-credits-balance.png" alt="Aura credits balance" width="900">
+</p>
 **Bring Your Own Keys** — connect DeepSeek, OpenAI, Anthropic, Gemini, or OpenRouter directly. Set your API key in Settings; it's encrypted to disk with a machine-derived key. Environment variables also work (DEEPSEEK_API_KEY, OPENAI_API_KEY, etc.).
 
 Both paths support the full Planner/Worker architecture. Mix them — use your own key for one role and Aura Credits for the other.
