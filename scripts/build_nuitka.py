@@ -26,6 +26,9 @@ ZIP_NAME = "Aura-Windows-x64.zip"
 UPDATER_HELPER_SOURCE = Path(PACKAGE_NAME) / "windows_updater.cmd"
 UPDATER_HELPER_DIST_NAME = "AuraUpdater.cmd"
 
+DRONES_SOURCE_REL = Path(".aura") / "drones"
+DRONES_DEST_REL = Path(".aura") / "drones"
+
 REQUIRED_MEDIA_FILES = [
     "account_tree_.svg",
     "arrow_forward_24dp.svg",
@@ -203,6 +206,47 @@ def normalize_dist_dir(root: Path, created_dist_dir: Path) -> Path:
             shutil.rmtree(final_dist_dir, ignore_errors=True)
         created_dist_dir.rename(final_dist_dir)
     return final_dist_dir
+
+
+def bundle_drones(root: Path, final_dist_dir: Path) -> None:
+    """Copy bundled drone definitions from repo .aura/drones into the dist folder."""
+    source = root / DRONES_SOURCE_REL
+    dest = final_dist_dir / DRONES_DEST_REL
+
+    if not source.exists():
+        print("Repo .aura/drones not found; skipping drone bundle.")
+        return
+
+    # Remove any stale destination so leftover bundled drones don't persist
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+
+    excluded_dirs = {"runs", "logs", "__pycache__", ".pytest_cache"}
+    ignore_func = shutil.ignore_patterns(
+        "__pycache__", ".pytest_cache", "*.pyc", "*.pyo",
+        "*.tmp", "*.swp", "*~", "*.bak",
+    )
+
+    bundled = []
+    for entry in sorted(source.iterdir()):
+        if not entry.is_dir():
+            continue
+        if entry.name in excluded_dirs:
+            continue
+        if entry.name.startswith("."):
+            continue
+        drone_json = entry / "drone.json"
+        if not drone_json.exists():
+            continue
+
+        target = dest / entry.name
+        shutil.copytree(entry, target, ignore=ignore_func)
+        bundled.append(entry.name)
+
+    if bundled:
+        print(f"Bundled {len(bundled)} drone(s): {', '.join(bundled)}")
+    else:
+        print("No drones found to bundle.")
 
 
 def zip_distribution(root: Path, final_dist_dir: Path) -> Path:
@@ -529,6 +573,9 @@ def build(
         shutil.copytree(click_path, target_click_dir)
     else:
         print("Warning: click is not installed in the clean environment, skipping manual bundle.")
+
+    # Bundle .aura/drones into the dist for DroneStore runtime loading
+    bundle_drones(root, final_dist_dir)
 
     if not installer_only:
         zip_path = zip_distribution(root, final_dist_dir)
