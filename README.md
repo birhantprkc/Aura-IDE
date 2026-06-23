@@ -5,6 +5,8 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
 [![Version](https://img.shields.io/badge/version-1.8.3-orange)]()
 
+[![Discord](https://img.shields.io/badge/Discord-Join%20Aura-5865F2?logo=discord&logoColor=white)](https://discord.gg/aGSthBX2Bg)
+
 <p>
   <a href="https://www.producthunt.com/products/aura-ide?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-aura-ide" target="_blank" rel="noopener noreferrer">
     <img alt="Aura IDE - Open source AI coding harness you control | Product Hunt" width="150" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1162818&theme=light&t=1780584703498">
@@ -165,6 +167,8 @@ The harness produces the quality, not the model. Swap models, swap providers, ch
 [Full documentation](docs/README.md) — getting-started guide, tool reference, provider config, and more.
 
 [Aura blog](https://aura-ide.hashnode.dev/) — project updates, design deep-dives, usage guides
+
+[Discord](https://discord.gg/aGSthBX2Bg) — help, bug reports, feedback, and show-and-tell
 
 <p>
   <a href="https://www.producthunt.com/products/aura-ide?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-aura-ide" target="_blank" rel="noopener noreferrer">
