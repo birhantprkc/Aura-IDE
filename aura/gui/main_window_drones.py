@@ -261,7 +261,7 @@ class MainWindowDroneController(QObject):
         workbay.deleteDroneRequested.connect(self.on_delete_drone)
         workbay.loopDroneRequested.connect(self.on_loop_drone_toggled)
         workbay.loopIntervalChanged.connect(self.on_loop_interval_changed)
-        workbay.geometry_saved.connect(self._window._on_drone_workbay_geometry_saved)
+        workbay.geometry_saved.connect(self._window._terminal_controller._on_drone_workbay_geometry_saved)
         workbay.show_and_raise()
 
     def sync_drone_tab_checked(self) -> None:

@@ -59,6 +59,7 @@ from aura.gui.send_handler import SendHandler
 from aura.gui.debug_report_handler import DebugReportHandler
 from aura.gui.main_window_balance import MainWindowBalanceController
 from aura.gui.main_window_settings import MainWindowSettingsController
+from aura.gui.main_window_terminal import MainWindowTerminalController
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog, UpdateWorker
 from aura.gui.widgets.aura_glow import AuraWidget
@@ -151,6 +152,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._balance_controller.balance_changed.connect(self._refresh_status_bar)
 
         self._drone_controller = MainWindowDroneController(self)
+        self._terminal_controller = MainWindowTerminalController(self)
 
         # ----- splitter ----
         self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -250,7 +252,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             initial_geometry=self._settings.drone_reports_window_geometry,
         )
         self._drone_reports_window.geometry_saved.connect(
-            self._on_drone_reports_geometry_saved
+            self._terminal_controller._on_drone_reports_geometry_saved
         )
 
         self.droneRunFinishedOnUiThread.connect(self._drone_controller.on_drone_finished, Qt.ConnectionType.QueuedConnection)
@@ -337,7 +339,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._terminal_tab = self._edge_rail.terminal_tab
         self._terminal_container = self._edge_rail.terminal_container
         self._corner_widget = self._edge_rail.corner_widget
-        self._edge_rail.terminalTabToggled.connect(self._on_terminal_toggle)
+        self._edge_rail.terminalTabToggled.connect(self._terminal_controller._on_terminal_toggle)
         # Wire checkpoint tab click to the existing handler on MainWindow.
         checkpoint_tab = self._edge_rail.checkpoint_tab
         if checkpoint_tab is not None:
@@ -373,11 +375,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._tree.file_activated.connect(self._playground.open_file)
         self._playground.focused_action_requested.connect(self._on_focused_action_requested)
         terminal_window = self._playground.terminal_window()
-        terminal_window.terminal_started.connect(self._on_terminal_started)
-        terminal_window.terminal_finished.connect(self._on_terminal_finished)
-        terminal_window.visibility_changed.connect(self._on_terminal_visibility_changed)
-        terminal_window.terminal_cleared.connect(self._on_terminal_cleared)
-        terminal_window.geometry_saved.connect(self._on_terminal_geometry_saved)
+        terminal_window.terminal_started.connect(self._terminal_controller._on_terminal_started)
+        terminal_window.terminal_finished.connect(self._terminal_controller._on_terminal_finished)
+        terminal_window.visibility_changed.connect(self._terminal_controller._on_terminal_visibility_changed)
+        terminal_window.terminal_cleared.connect(self._terminal_controller._on_terminal_cleared)
+        terminal_window.geometry_saved.connect(self._terminal_controller._on_terminal_geometry_saved)
 
         # Worker signal wiring (delegated to WorkerEventHandler).
         self._worker_handler.connect_bridge_signals()
@@ -496,60 +498,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         rail.setFixedHeight(rail_h)
         rail.move(x, y)
         rail.raise_()
-
-    def _on_terminal_toggle(self, checked: bool) -> None:
-        self._playground.toggle_terminal_window()
-        self._sync_terminal_checked_state()
-        self._position_edge_tabs()
-
-    def _on_terminal_started(self) -> None:
-        self._edge_rail.set_state("running")
-
-    def _on_terminal_finished(self, exit_code: int) -> None:
-        if exit_code == 0:
-            self._edge_rail.set_state("success")
-            QTimer.singleShot(1200, self._dim_terminal_tab_after_success)
-        else:
-            self._edge_rail.set_state("failure")
-
-    def _on_terminal_visibility_changed(self, _visible: bool) -> None:
-        self._sync_terminal_checked_state()
-        self._edge_rail.set_is_terminal_open(self._playground.is_terminal_window_open())
-        self._edge_rail.set_state(self._edge_rail.state)
-        self._position_edge_tabs()
-
-    def _on_terminal_cleared(self) -> None:
-        self._edge_rail.set_state("dim")
-
-    def _on_terminal_geometry_saved(self, geometry: str) -> None:
-        if self._settings.terminal_window_geometry == geometry:
-            return
-        self._settings.terminal_window_geometry = geometry
-        save_settings(self._settings)
-
-    def _on_drone_reports_geometry_saved(self, geometry: str) -> None:
-        if self._settings.drone_reports_window_geometry == geometry:
-            return
-        self._settings.drone_reports_window_geometry = geometry
-        save_settings(self._settings)
-
-    def _on_drone_workbay_geometry_saved(self, geometry: str) -> None:
-        if self._settings.drone_workbay_window_geometry == geometry:
-            return
-        self._settings.drone_workbay_window_geometry = geometry
-        save_settings(self._settings)
-
-    def _dim_terminal_tab_after_success(self) -> None:
-        if self._edge_rail.state == "success":
-            self._edge_rail.set_state("dim")
-
-    def _sync_terminal_checked_state(self) -> None:
-        tab = self._edge_rail.terminal_tab
-        if tab is None:
-            return
-        is_open = self._playground.is_terminal_window_open()
-        tab.setChecked(is_open)
-        self._edge_rail.set_is_terminal_open(is_open)
 
     def _show_onboarding(self) -> None:
         dlg = OnboardingDialog(
