@@ -1,0 +1,59 @@
+name: Discord Release Announcement
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  announce:
+    if: ${{ !github.event.release.prerelease && !github.event.release.draft }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Post release to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          tag = os.environ.get("RELEASE_TAG", "").strip()
+          title = os.environ.get("RELEASE_NAME", "").strip() or tag or "New Aura-IDE release"
+          url = os.environ["RELEASE_URL"]
+          body = (os.environ.get("RELEASE_BODY") or "").strip()
+
+          if len(body) > 1000:
+              body = body[:997] + "..."
+
+          payload = {
+              "username": "Aura Release Bot",
+              "allowed_mentions": {"parse": []},
+              "content": f"✨ **Aura-IDE {tag} is live**\n{url}",
+              "embeds": [
+                  {
+                      "title": title,
+                      "url": url,
+                      "description": body or "Fresh build out of the forge.",
+                  }
+              ],
+          }
+
+          data = json.dumps(payload).encode("utf-8")
+          req = urllib.request.Request(
+              os.environ["DISCORD_WEBHOOK_URL"],
+              data=data,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+
+          with urllib.request.urlopen(req, timeout=15) as response:
+              if response.status not in (200, 204):
+                  raise SystemExit(f"Discord webhook failed: HTTP {response.status}")
+          PY
+
