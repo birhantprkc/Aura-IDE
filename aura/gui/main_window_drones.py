@@ -716,11 +716,26 @@ class MainWindowDroneController(QObject):
                 artifact = getattr(receipt_for_loop, "produced_artifact", None) or {}
             lap_failed = receipt_for_loop is not None and getattr(receipt_for_loop, "status", None) == "failed"
             no_work = isinstance(artifact, dict) and artifact.get("has_work") is False
-            if lap_failed or no_work:
+            stop_loop = False
+            if no_work:
+                stop_loop = True
+                record["_stop_loop_due_to_no_work"] = True
+            elif lap_failed:
+                rollback_status = (artifact or {}).get("rollback_status")
+                if rollback_status not in ("reverted", "no_changes_to_revert"):
+                    stop_loop = True
+                    logger.debug(
+                        "[DroneLoop] hard failure for drone=%s, rollback=%s — stopping loop",
+                        loop_drone_id, rollback_status,
+                    )
+                else:
+                    logger.debug(
+                        "[DroneLoop] safe failure for drone=%s, rollback=%s — keeping loop alive",
+                        loop_drone_id, rollback_status,
+                    )
+            if stop_loop:
                 self._looping_drones.pop(loop_drone_id, None)
                 self._loop_pip_run_id.pop(loop_drone_id, None)
-                if not lap_failed:
-                    record["_stop_loop_due_to_no_work"] = True
                 if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
                     self._drone_workbay_window.set_card_loop_state(loop_drone_id, False)
             else:
