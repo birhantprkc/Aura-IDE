@@ -7,12 +7,14 @@ workspace on first search, then incrementally refreshes on subsequent calls.
 from __future__ import annotations
 import hashlib
 import json
+import os
+import time
 from pathlib import Path
 
 from aura.codebase_index.bm25 import BM25Scorer, tokenize
 from aura.config import (
-    CODEBASE_INDEX_EXTENSIONS,
     CODEBASE_INDEX_MAX_FILE_BYTES,
+    CODEBASE_INDEX_MAX_WALK_SECONDS,
     MAX_CODEBASE_INDEX_FILES,
     SKIP_DIRS,
     SKIP_FILE_SUFFIXES,
@@ -68,8 +70,8 @@ class CodebaseIndex:
         self._scorer = BM25Scorer()
         # Map: workspace-relative path string -> (absolute path, mtime)
         self._files: dict[str, tuple[Path, float]] = {}
-        # Extensions to index (from config)
-        self._extensions: set[str] = CODEBASE_INDEX_EXTENSIONS
+        self._max_walk_seconds: float = CODEBASE_INDEX_MAX_WALK_SECONDS
+        self._index_partial: bool = False
         self._max_files: int = MAX_CODEBASE_INDEX_FILES
         self._max_file_bytes: int = CODEBASE_INDEX_MAX_FILE_BYTES
         self._built: bool = False
@@ -91,7 +93,7 @@ class CodebaseIndex:
     def _should_index(self, file_path: Path, rel_path: Path) -> bool:
         """Determine whether *file_path* should be included in the index.
 
-        Rejects hidden files, certain directories, non-indexable extensions,
+        Rejects hidden files, certain directories, binary files,
         and files exceeding the byte limit.
 
         Args:
@@ -101,10 +103,6 @@ class CodebaseIndex:
         Returns:
             True if the file should be indexed.
         """
-        # Check extension
-        if file_path.suffix.lower() not in self._extensions:
-            return False
-
         # Check file size
         try:
             size = file_path.stat().st_size
@@ -123,6 +121,15 @@ class CodebaseIndex:
 
         # Check suffix against skip suffixes
         if file_path.suffix.lower() in SKIP_FILE_SUFFIXES:
+            return False
+
+        # Binary content sniff: reject files containing a null byte in first 8KB
+        try:
+            with file_path.open("rb") as fh:
+                head = fh.read(8192)
+            if b"\x00" in head:
+                return False
+        except OSError:
             return False
 
         return True
@@ -154,32 +161,56 @@ class CodebaseIndex:
     def _walk_and_collect(self) -> dict[str, tuple[Path, float]]:
         """Walk the workspace and collect indexable files.
 
+        Uses os.walk with directory pruning for performance.
+        Stops early when max_files or max_walk_seconds budget is exceeded,
+        setting self._index_partial = True to indicate a truncated index.
+
         Returns:
             Dict mapping relative path strings (posix) to ``(absolute_path, mtime)``.
         """
         collected: dict[str, tuple[Path, float]] = {}
-        for file_path in self._root.rglob("*"):
-            if not file_path.is_file():
-                continue
+        self._index_partial = False
+        start = time.monotonic()
+        root_str = str(self._root)
+
+        for dirpath, dirnames, filenames in os.walk(root_str, topdown=True):
+            # Prune hidden and skip directories in-place so os.walk never descends
+            dirnames[:] = [d for d in dirnames
+                           if d not in SKIP_DIRS and not d.startswith(".")]
+
+            # Check wall-clock budget and file cap
             if len(collected) >= self._max_files:
+                self._index_partial = True
+                break
+            if time.monotonic() - start > self._max_walk_seconds:
+                self._index_partial = True
                 break
 
-            try:
-                rel_path = file_path.relative_to(self._root)
-            except ValueError:
-                continue
+            for name in filenames:
+                if len(collected) >= self._max_files:
+                    self._index_partial = True
+                    break
+                if time.monotonic() - start > self._max_walk_seconds:
+                    self._index_partial = True
+                    break
 
-            rel_str = rel_path.as_posix()
+                abs_path = Path(dirpath) / name
+                try:
+                    rel_path = abs_path.relative_to(self._root)
+                except ValueError:
+                    continue
 
-            if not self._should_index(file_path, rel_path):
-                continue
+                rel_str = rel_path.as_posix()
 
-            try:
-                mtime = file_path.stat().st_mtime
-            except OSError:
-                continue
+                if not self._should_index(abs_path, rel_path):
+                    continue
 
-            collected[rel_str] = (file_path, mtime)
+                try:
+                    mtime = abs_path.stat().st_mtime
+                except OSError:
+                    continue
+
+                collected[rel_str] = (abs_path, mtime)
 
         return collected
 
@@ -347,7 +378,7 @@ class CodebaseIndex:
         Returns:
             Dict with keys: ``ok``, ``query``, ``results`` (list of dicts with
             ``path``, ``score``, ``snippet``), ``indexed_file_count``,
-            ``indexed_term_count``.
+            ``indexed_term_count``, ``partial``.
         """
         if not self._built:
             self.build()
@@ -363,6 +394,7 @@ class CodebaseIndex:
                 "results": [],
                 "indexed_file_count": self._scorer.doc_count,
                 "indexed_term_count": self._scorer.term_count,
+                "partial": self._index_partial,
             }
 
         raw_results = self._scorer.search(query_tokens, top_k=top_k)
@@ -385,6 +417,7 @@ class CodebaseIndex:
             "results": results,
             "indexed_file_count": self._scorer.doc_count,
             "indexed_term_count": self._scorer.term_count,
+            "partial": self._index_partial,
         }
 
     @staticmethod

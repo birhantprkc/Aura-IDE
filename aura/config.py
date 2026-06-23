@@ -332,7 +332,15 @@ SKIP_DIRS = {
     ".pytest_cache",
     ".ruff_cache",
 }
-SKIP_FILE_SUFFIXES = {".import"}
+SKIP_FILE_SUFFIXES = {
+    ".import",
+    ".pyc", ".pyo", ".so", ".dll", ".dylib", ".o", ".a", ".exe", ".bin", ".class", ".wasm",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ".zip", ".tar", ".gz", ".7z", ".rar",
+    ".mp4", ".mov", ".mp3", ".wav",
+    ".pdf", ".db", ".sqlite",
+}
 
 # Codebase index (BM25 search_codebase tool)
 
@@ -347,6 +355,7 @@ CODEBASE_INDEX_EXTENSIONS: set[str] = {
 
 MAX_CODEBASE_INDEX_FILES: int = 1500
 CODEBASE_INDEX_MAX_FILE_BYTES: int = 128 * 1024
+CODEBASE_INDEX_MAX_WALK_SECONDS: float = 10.0
 SEARCH_CODEBASE_TOP_K: int = 5
 
 
