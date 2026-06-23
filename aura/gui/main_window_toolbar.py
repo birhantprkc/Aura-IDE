@@ -45,23 +45,14 @@ class MainWindowToolbar(QToolBar):
         # Group 1: conversation actions
         self._new_conv_btn = QToolButton()
         self._new_conv_btn.setIcon(QIcon(str(media_path("new_conv.svg"))))
-        self._new_conv_btn.setText("New")
+        self._new_conv_btn.setText("New Chat")
         self._new_conv_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._new_conv_btn.setToolTip("Start a new conversation (discards the current messages)")
+        self._new_conv_btn.setStyleSheet("QToolButton { padding-left: 8px; padding-right: 8px; }")
         self._new_conv_btn.clicked.connect(self.new_conversation_requested.emit)
         new_conv_action = self.addWidget(self._new_conv_btn)
         new_conv_action.setText("New Conversation")
         new_conv_action.triggered.connect(self.new_conversation_requested.emit)
-
-        self._open_conv_btn = QToolButton()
-        self._open_conv_btn.setIcon(QIcon(str(media_path("open_conversation.svg"))))
-        self._open_conv_btn.setText("Open")
-        self._open_conv_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self._open_conv_btn.setToolTip("Open a previously saved conversation")
-        self._open_conv_btn.clicked.connect(self.open_conversation_requested.emit)
-        open_conv_action = self.addWidget(self._open_conv_btn)
-        open_conv_action.setText("Open Conversation...")
-        open_conv_action.triggered.connect(self.open_conversation_requested.emit)
 
         self.addWidget(_toolbar_separator())
 

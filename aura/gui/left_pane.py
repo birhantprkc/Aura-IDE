@@ -227,22 +227,6 @@ class LeftPane(QFrame):
         layout.setContentsMargins(0, 8, 0, 8)
         layout.setSpacing(4)
 
-        title = QLabel("Workspace")
-        title.setObjectName("paneTitleWorkspace")
-        layout.addWidget(title)
-
-        self._workspace_label = QLabel("")
-        self._workspace_label.setObjectName("workspaceLabel")
-        self._workspace_label.setWordWrap(True)
-        layout.addWidget(self._workspace_label)
-
-        change_btn = QPushButton("Change Root...")
-        change_btn.clicked.connect(self.change_root_requested.emit)
-        change_row = QHBoxLayout()
-        change_row.setContentsMargins(8, 0, 8, 6)
-        change_row.addWidget(change_btn)
-        layout.addLayout(change_row)
-
         # --- Projects section ---
         _projects_block = QWidget()
         _projects_block.setMinimumHeight(100)
@@ -253,6 +237,18 @@ class LeftPane(QFrame):
         projects_title = QLabel("Projects")
         projects_title.setObjectName("paneTitleProjects")
         _projects_block_layout.addWidget(projects_title)
+
+        self._workspace_label = QLabel("")
+        self._workspace_label.setObjectName("workspaceLabel")
+        self._workspace_label.setWordWrap(True)
+        _projects_block_layout.addWidget(self._workspace_label)
+
+        change_btn = QPushButton("Change Folder...")
+        change_btn.clicked.connect(self.change_root_requested.emit)
+        change_row = QHBoxLayout()
+        change_row.setContentsMargins(8, 0, 8, 6)
+        change_row.addWidget(change_btn)
+        _projects_block_layout.addLayout(change_row)
 
         new_project_row = QHBoxLayout()
         new_project_row.setContentsMargins(8, 0, 8, 6)
