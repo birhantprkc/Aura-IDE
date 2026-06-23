@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -375,6 +376,13 @@ class ChatView(QScrollArea):
         card.setParent(None)
         card.deleteLater()
 
+    def _remove_terminal_plan_cards(self) -> None:
+        """Remove any PlanWriterCard in terminal state (done/failed) to prevent
+        orphaned cards from accumulating when the planner retries."""
+        for tid, card in list(self._plan_writer_cards.items()):
+            if card._state in (PlanWriterCard.STATE_DONE, PlanWriterCard.STATE_FAILED):
+                self._remove_plan_writer_card(tid)
+
     def prepare_spec_card(self, tool_call_id: str) -> None:
         """Remove transient plan-writing UI before showing an active spec card."""
         self._remove_plan_writer_card(tool_call_id)
@@ -526,6 +534,9 @@ class ChatView(QScrollArea):
                 controller = ToolStreamController(name, parent=self)
                 self._controllers[tool_call_id] = controller
 
+            # Remove any terminal-state plan cards left from prior retries
+            self._remove_terminal_plan_cards()
+
             card = PlanWriterCard(parent=self)
             self._plan_writer_cards[tool_call_id] = card
             if not ac._tool_cluster.isVisible():
@@ -594,6 +605,9 @@ class ChatView(QScrollArea):
                 except Exception:
                     pass
 
+                # Recoverable failures are planner control-flow — don't show transient failure
+                if not ok and recoverable and not cancelled:
+                    ok = True
                 # Finalize controller FIRST (updates planner/spec UI above)
                 controller.finalize(ok, result_text)
 
@@ -641,6 +655,14 @@ class ChatView(QScrollArea):
                 except Exception:
                     pass
 
+                # Suppress transient failure display — planner may retry
+                if not ok:
+                    logging.getLogger(__name__).info(
+                        "run_research failed (suppressed — planner may retry): "
+                        "tool_call_id=%s, result=%s",
+                        tool_call_id, result_text[:200],
+                    )
+                    ok = True
                 controller.finalize(ok, result_text)
 
                 if report:
