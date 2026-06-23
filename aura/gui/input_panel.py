@@ -167,7 +167,6 @@ class InputPanel(QFrame):
 
     sent = Signal(SendPayload)
     stop_requested = Signal()
-    retry_requested = Signal()
     handoff_requested = Signal()
 
     def __init__(self, workspace_root: Path | None, parent: QWidget | None = None) -> None:
@@ -235,20 +234,20 @@ class InputPanel(QFrame):
         controls.setSpacing(10)
 
         self._handoff_btn = QToolButton()
-        self._handoff_btn.setIcon(QIcon(str(media_path("move_group.svg"))))
+        self._handoff_btn.setIcon(QIcon(str(media_path("start_new_chat.svg"))))
+        self._handoff_btn.setText("Fresh Chat")
         self._handoff_btn.setToolTip("Generate a handoff and continue in a fresh chat")
         self._handoff_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._handoff_btn.setStyleSheet(
+            f"QToolButton {{ background: transparent; color: {FG}; border: none; "
+            f"padding: 4px 10px; border-radius: 10px; }}"
+            f"QToolButton::menu-indicator {{ image: none; }}"
+            f"QToolButton:hover {{ background: {BG_RAISED}; }}"
+        )
         self._handoff_btn.clicked.connect(self.handoff_requested.emit)
         controls.addWidget(self._handoff_btn)
 
         controls.addStretch(1)
-
-        self._retry_btn = QToolButton()
-        self._retry_btn.setText("↻")
-        self._retry_btn.setToolTip("Retry last message")
-        self._retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._retry_btn.clicked.connect(self.retry_requested.emit)
-        controls.addWidget(self._retry_btn)
 
         self._stop_btn = QPushButton("Stop")
         self._stop_btn.setObjectName("danger")
@@ -282,7 +281,6 @@ class InputPanel(QFrame):
         self._send_btn.setVisible(not streaming)
         self._stop_btn.setVisible(streaming)
         self._handoff_btn.setEnabled(not streaming)
-        self._retry_btn.setEnabled(not streaming)
         self._editor.setEnabled(not streaming)
 
     def set_placeholder(self, text: str) -> None:

@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QPlainTextEdit,
-    QPushButton,
     QSizePolicy,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from aura.config import media_path
 from aura.gui.cards._helpers import _mono_font
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
-from aura.gui.theme import ACCENT, BG, BORDER, FG, FG_MUTED
+from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, FG
 from aura.gui.widgets.todo_list import TodoListWidget
 
 
@@ -156,32 +158,42 @@ class InfoHubPane(QWidget):
         sb = self._log_view.verticalScrollBar()
         sb.setValue(sb.maximum())
 
-        # Add Copy Summary button
-        btn = QPushButton("📋 Copy Summary", self._log_tab)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setFlat(True)
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                color: {FG_MUTED};
-                font-size: 11px;
-                border: none;
-                padding: 2px 0;
-                text-decoration: none;
-            }}
-            QPushButton:hover {{
-                color: {ACCENT};
-            }}
-        """)
         receipt_text = f"{'═' * 46}\n{prefix}\n{summary}\n{'═' * 46}"
-        btn.clicked.connect(lambda checked, b=btn, r=receipt_text: self._on_copy_summary(b, r))
-        self._cards_layout.addWidget(btn)
+
+        # Compact copy-icon button in a right-aligned row
+        row = QWidget(self._log_tab)
+        row.setStyleSheet("background: transparent;")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 2, 8, 0)
+        row_layout.setSpacing(0)
+
+        row_layout.addStretch(1)
+
+        copy_btn = QToolButton(row)
+        copy_btn.setIcon(QIcon(str(media_path("copy-classic.svg"))))
+        copy_btn.setIconSize(QSize(16, 16))
+        copy_btn.setToolTip("Copy summary")
+        copy_btn.setStyleSheet(
+            f"QToolButton {{ border: none; border-radius: 3px; padding: 2px; }} "
+            f"QToolButton:hover {{ background: {BG_RAISED}; }}"
+        )
+        copy_btn.clicked.connect(lambda checked, b=copy_btn, r=receipt_text: self._on_copy_summary(b, r))
+        row_layout.addWidget(copy_btn)
+
+        self._cards_layout.addWidget(row)
 
 
-    def _on_copy_summary(self, btn: QPushButton, receipt_text: str) -> None:
-        """Copy summary to clipboard and briefly show 'Copied!'."""
+    def _on_copy_summary(self, btn: QToolButton, receipt_text: str) -> None:
         QGuiApplication.clipboard().setText(receipt_text)
-        btn.setText("Copied!")
-        QTimer.singleShot(1500, lambda: btn.setText("📋 Copy Summary"))
+        btn.setIcon(QIcon(str(media_path("check.svg"))))
+        btn.setText("")
+        btn.setToolTip("Copied!")
+        QTimer.singleShot(2000, lambda: self._reset_copy_summary_btn(btn))
+
+    def _reset_copy_summary_btn(self, btn: QToolButton) -> None:
+        btn.setIcon(QIcon(str(media_path("copy-classic.svg"))))
+        btn.setText("")
+        btn.setToolTip("Copy summary")
 
     def clear(self) -> None:
         """Reset the Worker Log: clear text, todo, and dynamic cards."""

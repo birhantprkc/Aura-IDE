@@ -365,7 +365,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._input.sent.connect(lambda p: self._send_handler.handle_send(p, self.current_model(), self.current_thinking()))
         self._input.stop_requested.connect(self._send_handler.handle_stop)
-        self._input.retry_requested.connect(self._on_retry)
         self._input.handoff_requested.connect(self._on_handoff_requested)
 
         self._pending_handoff: bool = False

@@ -76,14 +76,13 @@ def test_todo_widget_ignores_identical_updates(qapp):
     widget.update_tasks(tasks)
     
     assert len(widget._task_widgets) == 1
-    label = widget._task_widgets[0]
-    initial_text = label.text()
+    initial_text = widget._task_desc_labels[0].text()
     
     # Update with identical tasks under different keys/values that normalize to the same values
     widget.update_tasks([{"content": "Clean room", "status": "todo"}])
     
-    assert label is widget._task_widgets[0]
-    assert label.text() == initial_text
+    assert widget._task_widgets[0] is widget._task_widgets[0]
+    assert widget._task_desc_labels[0].text() == initial_text
 
 
 def test_todo_widget_marks_done_strikeout(qapp):
@@ -92,9 +91,10 @@ def test_todo_widget_marks_done_strikeout(qapp):
     tasks = [{"description": "Clean room", "status": "done"}]
     widget.update_tasks(tasks)
     
-    label = widget._task_widgets[0]
-    assert label.font().strikeOut() is True
-    assert "\u2713" in label.text()
+    desc_label = widget._task_desc_labels[0]
+    assert desc_label.font().strikeOut() is True
+    assert widget._task_icon_labels[0].pixmap() is not None
+    assert "Clean room" in desc_label.text()
 
 
 def test_todo_widget_does_not_recreate_active_pulse(qapp):

@@ -60,6 +60,7 @@ class ChatView(QScrollArea):
 
         self._current_assistant: AssistantCard | None = None
         self._current_aura: AuraWidget | None = None
+        self._latest_user_card: UserCard | None = None
         # Map tool_call_id -> the assistant card that owns it (for routing diff-after).
         self._tool_owner: dict[str, AssistantCard] = {}
         # Map dispatch tool_call_id -> SpecCard.
@@ -240,6 +241,7 @@ class ChatView(QScrollArea):
                 w.deleteLater()
         self._current_assistant = None
         self._current_aura = None
+        self._latest_user_card = None
         self._tool_owner.clear()
         self._spec_cards.clear()
         self._plan_writer_cards.clear()
@@ -322,9 +324,17 @@ class ChatView(QScrollArea):
         h = QHBoxLayout(wrapper)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(0)
-        h.addWidget(UserCard(text, image_b64s, parent=wrapper), 1)
+
+        if self._latest_user_card is not None:
+            self._latest_user_card.set_rerun_visible(False)
+
+        card = UserCard(text, image_b64s, parent=wrapper)
+        h.addWidget(card, 1)
         h.addSpacing(40)
         self._add_card(wrapper)
+        self._latest_user_card = card
+        card.set_rerun_visible(True)
+        card.rerun_requested.connect(self.retry_requested.emit)
         self._current_assistant = None  # next assistant turn opens a new card
 
     def begin_assistant(self) -> AssistantCard:

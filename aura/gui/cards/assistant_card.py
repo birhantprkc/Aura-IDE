@@ -257,8 +257,8 @@ class AssistantCard(QFrame):
 
     def _on_copy(self) -> None:
         QApplication.clipboard().setText(self._assistant_text)
-        self._copy_btn.setIcon(QIcon())
-        self._copy_btn.setText("✓")
+        self._copy_btn.setIcon(QIcon(str(media_path("check.svg"))))
+        self._copy_btn.setText("")
         self._copy_btn.setToolTip("Copied!")
         QTimer.singleShot(2000, self._reset_copy_btn)
 

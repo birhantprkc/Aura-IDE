@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 
-from PySide6.QtCore import QBuffer, QByteArray, QSize, Qt, QTimer
+from PySide6.QtCore import QBuffer, QByteArray, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon, QMovie, QPixmap
 from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
@@ -13,6 +13,8 @@ from aura.gui.theme import BG_RAISED, BORDER, DANGER, FG_BODY_USER
 
 
 class UserCard(QFrame):
+    rerun_requested = Signal()
+
     def __init__(self, text: str, image_b64s: list[str] | None = None, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("userCard")
@@ -45,6 +47,18 @@ class UserCard(QFrame):
         )
         self._copy_btn.clicked.connect(self._on_copy)
         header_layout.addWidget(self._copy_btn)
+
+        self._rerun_btn = QToolButton(header_row)
+        self._rerun_btn.setText("↻")
+        self._rerun_btn.setToolTip("Rerun this message")
+        self._rerun_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._rerun_btn.setIconSize(QSize(16, 16))
+        self._rerun_btn.setStyleSheet(
+            f"QToolButton {{ border: none; border-radius: 3px; padding: 2px; }} "
+            f"QToolButton:hover {{ background: {BG_RAISED}; }}"
+        )
+        self._rerun_btn.clicked.connect(self.rerun_requested.emit)
+        header_layout.addWidget(self._rerun_btn)
 
         layout.addWidget(header_row)
 
@@ -115,10 +129,13 @@ class UserCard(QFrame):
 
     def _on_copy(self) -> None:
         QApplication.clipboard().setText(self._text)
-        self._copy_btn.setIcon(QIcon())
-        self._copy_btn.setText("\u2713")
+        self._copy_btn.setIcon(QIcon(str(media_path("check.svg"))))
+        self._copy_btn.setText("")
         self._copy_btn.setToolTip("Copied!")
         QTimer.singleShot(2000, self._reset_copy_btn)
+
+    def set_rerun_visible(self, visible: bool) -> None:
+        self._rerun_btn.setVisible(visible)
 
     def _reset_copy_btn(self) -> None:
         self._copy_btn.setIcon(QIcon(str(media_path("copy-classic.svg"))))
