@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from aura.conversation.tools._schemas import (
+from aura.conversation.tools._drone_schemas import (
     CHECK_DRONE_RUN_TOOL_DEF,
+    LAUNCH_READ_ONLY_DRONE_TOOL_DEF,
+    REGISTER_DRONE_FOLDER_TOOL_DEF,
+    RUN_READ_ONLY_DRONE_TOOL_DEF,
+)
+from aura.conversation.tools._schemas import (
     DIAGNOSTIC_TOOL_DEF,
     DISPATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
-    LAUNCH_READ_ONLY_DRONE_TOOL_DEF,
     READ_TOOL_DEFS,
-    REGISTER_DRONE_FOLDER_TOOL_DEF,
     RESEARCH_TOOL_DEFS,
     RUN_AND_WATCH_TOOL_DEF,
-    RUN_READ_ONLY_DRONE_TOOL_DEF,
     SUMMON_DRONE_TOOL_DEF,
     TERMINAL_TOOL_DEF,
     WEB_TOOL_DEFS,
