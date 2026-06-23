@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QMessageBox
 
 _log = logging.getLogger(__name__)
 
-from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode
+from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode, has_usable_provider_configuration
 from aura.conversation.task_router import TaskLane, classify_user_request
 from aura.git_ops import (
     recent_commit_log,
@@ -96,6 +96,16 @@ class SendHandler(QObject):
             self._chat.add_error(
                 "No workspace",
                 "Choose a project folder first. Aura needs a workspace before it can plan, edit, or run tools.",
+            )
+            return
+
+        # Guard: no provider configured
+        if not has_usable_provider_configuration():
+            self._chat.add_error(
+                "No AI provider configured",
+                "Set up a provider in Settings → Aura or API Keys to start chatting. "
+                "Aura Credits is the easiest way to start — no API key needed.\n\n"
+                "You can also open/browse a project folder before configuring AI.",
             )
             return
 

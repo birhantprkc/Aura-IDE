@@ -370,8 +370,11 @@ class OnboardingDialog(QDialog):
         layout.addWidget(title)
 
         body = self._make_body(
-            f"{APP_NAME} supports multiple AI providers. By default it uses "
-            "<b>DeepSeek</b> for the best cost-to-performance ratio."
+            f"{APP_NAME} supports multiple AI providers. The easiest way to start is with "
+            "<b>Aura Credits</b> — buy credits or paste an Aura API key in Settings → Aura.\n\n"
+            "You can also bring your own API key for DeepSeek, OpenAI, Anthropic, Gemini, "
+            "OpenRouter, or other providers in Settings → API Keys.\n\n"
+            "You can still browse your project folder and explore the app without configuring AI."
         )
         layout.addWidget(body)
 
@@ -397,7 +400,7 @@ class OnboardingDialog(QDialog):
             status_text = "✓  Provider configured"
         else:
             indicator_color = WARN
-            status_text = "No provider configured — set up in Settings"
+            status_text = "No provider configured — you can explore the app or set one up in Settings"
 
         indicator = QLabel("●")
         indicator.setStyleSheet(f"color: {indicator_color}; font-size: 18px; background: transparent;")

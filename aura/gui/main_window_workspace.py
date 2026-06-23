@@ -131,7 +131,7 @@ class MainWindowWorkspaceController(QObject):
     def on_change_root(self) -> None:
         window = self._window
         start = str(window._workspace_root) if window._workspace_root else str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(window, "Choose workspace root", start)
+        chosen = QFileDialog.getExistingDirectory(window, "Choose project folder", start)
         if not chosen:
             return
         path = Path(chosen)
@@ -208,7 +208,7 @@ class MainWindowWorkspaceController(QObject):
         """Called from onboarding dialog to change workspace. Returns new path or None."""
         window = self._window
         start = str(window._workspace_root) if window._workspace_root else str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(window, "Choose workspace root", start)
+        chosen = QFileDialog.getExistingDirectory(window, "Choose project folder", start)
         if not chosen:
             return None
         path = Path(chosen)

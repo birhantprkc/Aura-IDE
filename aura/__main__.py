@@ -56,7 +56,7 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
 
     from PySide6.QtCore import QCoreApplication, QTimer, Qt
     from PySide6.QtGui import QGuiApplication, QIcon
-    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+    from PySide6.QtWidgets import QApplication, QMessageBox
 
     app_name = "Aura"
 
@@ -92,19 +92,11 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     _should_open_aura_settings = False
 
     if not has_usable_provider_configuration():
-        # No provider at all is configured/available — show setup dialog.
-        logger.info("no providers configured — showing setup dialog")
-        from aura.gui.setup_dialog import SetupDialog
-        dlg = SetupDialog()
-        result = dlg.exec()
-        if dlg._continue_readonly:
-            logger.info("user chose Continue Read-only")
-        elif result == QDialog.DialogCode.Accepted:
-            logger.info("user chose Set up Aura Credits")
+        logger.info("no providers configured — opening settings post-startup if not first launch")
+        if settings.first_launch_done:
             _should_open_aura_settings = True
-        else:
-            logger.info("user chose Exit")
-            return 0
+        # When first_launch_done is False, OnboardingDialog Step 4 covers
+        # provider awareness with its "Open Settings" button.
     elif not has_usable_provider_configuration(selected_provider):
         # Selected provider is not configured/available, but another one is.
         # If Aura Credits is configured, auto-switch to it silently.
