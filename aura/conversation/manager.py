@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import threading
 
 _log = logging.getLogger(__name__)
@@ -119,6 +118,7 @@ from aura.conversation.terminal_syntax import (
 
 from aura.conversation.syntax_terminal_state import update_syntax_state_from_terminal
 from aura.conversation import _edit_shapes
+from aura.conversation._recovery_tool_policy import WORKER_RECOVERY_ALWAYS_ALLOWED, syntax_repair_tool_allowed
 
 EventCallback = Callable[[Event], None]
 
@@ -139,33 +139,6 @@ EDIT_TRANSACTION_FAILURE_CLASSES = {
     "edit_transaction_invalid_syntax",
     "edit_transaction_not_applicable",
 }
-
-
-
-
-
-WORKER_RECOVERY_ALWAYS_ALLOWED = {
-    "read_file",
-    "read_files",
-    "read_file_range",
-    "read_file_outline",
-    "grep_search",
-    "find_usages",
-    "search_codebase",
-    "list_directory",
-    "glob",
-    "git_status",
-    "git_diff",
-    "git_log",
-    "git_show",
-    "git_log_file",
-    "run_diagnostic_command",
-    "get_workspace_snapshot",
-}
-
-SYNTAX_REPAIR_ALWAYS_ALLOWED = WORKER_RECOVERY_ALWAYS_ALLOWED
-
-
 
 WORKER_EDIT_RECOVERY_INSTRUCTION = (
     "Previous edit failed recoverably. Re-read the affected file with read_file or read_file_range, "
@@ -1050,7 +1023,7 @@ class ConversationManager:
         if name in WORKER_RECOVERY_ALWAYS_ALLOWED:
             return None
         syntax_paths = syntax_repair_paths(syntax_repair_required)
-        if syntax_paths and not self._syntax_repair_tool_allowed(name, args, syntax_paths):
+        if syntax_paths and not syntax_repair_tool_allowed(name, args, syntax_paths):
             target = sorted(syntax_paths)[0]
             state = syntax_repair_state_for_path(syntax_repair_required, target)
             repair_failed = bool(state.get("repair_failed"))
@@ -1435,41 +1408,6 @@ class ConversationManager:
             content = json.dumps(parsed, ensure_ascii=False)
 
         return content
-
-    @staticmethod
-    def _syntax_repair_tool_allowed(
-        name: str,
-        args: dict[str, Any],
-        syntax_paths: set[str],
-    ) -> bool:
-        if name in SYNTAX_REPAIR_ALWAYS_ALLOWED:
-            return True
-        if name in WRITE_TOOLS:
-            return _normalize_worker_path(str(args.get("path", ""))) in syntax_paths
-        if name == "run_terminal_command":
-            command = str(args.get("command", ""))
-            # py_compile targeting a broken file
-            if re.search(
-                r"(?i)(?:^|[;&|]\s*)"
-                r"(?:(?:\"[^\"]*python3?(?:\.exe)?\")|(?:'[^']*python3?(?:\.exe)?')|"
-                r"(?:[A-Za-z]:)?[A-Za-z0-9_./\\\-]*python3?(?:\.exe)?|py)"
-                r"\s+-m\s+py_compile\b",
-                command,
-            ):
-                targets = py_compile_targets(command)
-                return bool(targets) and any(target in syntax_paths for target in targets)
-            # pytest targeting a broken file (substring check)
-            if re.search(
-                r"(?i)(?:^|[;&|]\s*)"
-                r"(?:(?:\"[^\"]*python3?(?:\.exe)?\")|(?:'[^']*python3?(?:\.exe)?')|"
-                r"(?:[A-Za-z]:)?[A-Za-z0-9_./\\\-]*python3?(?:\.exe)?|py)"
-                r"\s+-m\s+pytest\b",
-                command,
-            ):
-                return any(path in command for path in syntax_paths)
-            return False
-        return False
-
 
     def _append_limit_tool_result(
         self,
