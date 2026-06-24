@@ -183,10 +183,12 @@ WORKER_DEPENDENT_CONTRACT_INSTRUCTION = (
 )
 
 WORKER_LAUNCH_FAILURE_INSTRUCTION = (
-    "Launch verification failed \u2014 the run command exited early or printed a "
-    "traceback. The import checks passed, so the code is structurally valid, "
-    "but it crashes at runtime. Re-read the relevant file(s), repair the "
-    "error shown in the output below, then finish again.\n\n"
+    "Launch verification failed. The declared run_command did not complete "
+    "successfully: it either exited nonzero, printed a traceback/error, was "
+    "cancelled, or was still running when the watch window expired. The import "
+    "checks passed, so the code is structurally valid, but it fails at runtime. "
+    "Re-read the relevant file(s), repair the failure shown in the output below, "
+    "then finish again.\n\n"
     "Command: {command}\n\n"
     "Diagnostic output:\n{output}"
 )
