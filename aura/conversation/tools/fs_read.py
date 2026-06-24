@@ -1,8 +1,8 @@
 """Read-only filesystem tools: read_file, list_directory, glob, read_file_outline."""
 from __future__ import annotations
 
-import hashlib
 import ast
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -174,10 +174,29 @@ def read_file_outline(workspace_root: Path, target: Path) -> dict[str, Any]:
     lines = text.splitlines()
     total_lines = len(lines) + (0 if not truncated else 0)  # line count from what we read
 
-    if suffix == ".py":
-        result = _outline_python(text, lines, filename=str(target))
-    else:
-        result = _outline_generic(lines)
+    # Try the code_intel adapter for this file (skip text fallback since we
+    # handle it locally).
+    result = None
+    try:
+        from aura.code_intel.adapter import get_adapter
+        adapter = get_adapter(str(target))
+        if adapter is not None and adapter.language_id != "text":
+            outline = adapter.outline(str(target), text)
+            result = {
+                "language": outline.get("language", "unknown"),
+                "imports": outline.get("imports", []),
+                "classes": outline.get("classes", []),
+                "functions": outline.get("functions", []),
+            }
+    except ImportError:
+        # code_intel not available — fall through to local outline
+        pass
+
+    if result is None:
+        if suffix == ".py":
+            result = _outline_python(text, lines, filename=str(target))
+        else:
+            result = _outline_generic(lines)
 
     language = result["language"]
     imports = result["imports"]

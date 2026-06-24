@@ -3,6 +3,12 @@
 Builds a cross-module dependency graph from Python AST data,
 supporting queries like who-imports-this-module, who-references-this-symbol,
 and blast-radius analysis.
+
+.. note::
+    ``CodeIntelIndex`` (``aura.code_intel.index``) is the preferred API for
+    new code.  ``DepGraph`` remains as a compatibility shim — its public
+    symbols (``build_graph``, ``DepGraph``, ``who_references``,
+    ``who_imports``, ``blast_radius``) are kept working for existing callers.
 """
 
 from __future__ import annotations

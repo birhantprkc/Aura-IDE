@@ -12,9 +12,10 @@ def compute_dependents(
         return []
 
     try:
-        from aura.dep_graph import build_graph
+        from aura.code_intel.index import CodeIntelIndex
 
-        graph = build_graph(workspace_root, force=force_graph)
+        index = CodeIntelIndex(workspace_root)
+        index.refresh(changed_files=files if force_graph else None)
         dependents: set[str] = set()
 
         for path_str in files:
@@ -28,7 +29,7 @@ def compute_dependents(
             except ValueError:
                 continue
             try:
-                for dep in graph.blast_radius(normalized):
+                for dep in index.get_blast_radius(normalized):
                     dependents.add(dep)
             except Exception:
                 continue

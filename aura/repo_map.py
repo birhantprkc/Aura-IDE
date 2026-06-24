@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import ast
 import logging
-import os
-import time
 from pathlib import Path
 from typing import Any
 
 from aura.ast_utils import parse_python_ast
-from aura.fs_utils import SKIP_DIRS, SKIP_FILE_SUFFIXES, MAX_DIRS_VISITED, MAX_FILES_CONSIDERED, MAX_SCAN_SECONDS, get_max_mtime
+from aura.fs_utils import (
+    SKIP_DIRS,
+    SKIP_FILE_SUFFIXES,
+    get_max_mtime,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -155,99 +157,35 @@ def generate_repo_map(workspace_root: Path, force: bool = False) -> str:
     if current_mtime == cached_mtime and cached_text:
         return cached_text
 
-    from aura.config import MAX_READ_BYTES
+    from aura.code_intel.index import CodeIntelIndex
 
-    # Walk workspace and collect outlines
+    index = CodeIntelIndex(workspace_root)
+    index.refresh()
+
+    # Collect outlines from the index
     tree_lines: list[str] = []
-    file_count = 0
-    dirs_visited = 0
-    files_considered = 0
-    start_time = time.monotonic()
-    budget_exceeded = False
+    file_count = index.file_count()
 
-    for dirpath, dirnames, filenames in os.walk(workspace_root):
-        dirs_visited += 1
-        if dirs_visited > MAX_DIRS_VISITED or time.monotonic() - start_time > MAX_SCAN_SECONDS:
-            budget_exceeded = True
-        if budget_exceeded:
-            break
+    for rel_path in index.file_paths():
+        outline = index.get_outline(rel_path)
 
-        # Prune skipped/hidden dirs
-        dirnames[:] = [
-            d
-            for d in dirnames
-            if not d.startswith(".") and d not in SKIP_DIRS and (workspace_root / d).parts[-1] not in SKIP_DIRS
-        ]
-
-        rel_dir = os.path.relpath(dirpath, workspace_root)
-        if rel_dir == ".":
-            rel_dir = ""
-
-        for fname in sorted(filenames):
-            suffix = Path(fname).suffix.lower()
-            if suffix not in (".py", ".ts", ".tsx", ".js"):
-                continue
-            files_considered += 1
-            if files_considered > MAX_FILES_CONSIDERED:
-                budget_exceeded = True
-                break
-
-            fpath = os.path.join(dirpath, fname)
-            try:
-                # Use chunked read here as well
-                file_size = os.path.getsize(fpath)
-                if file_size > MAX_READ_BYTES:
-                    continue  # Skip massive files for outline
-
-                with open(fpath, "rb") as f:
-                    raw = f.read(MAX_READ_BYTES)
-            except (OSError, PermissionError):
-                continue
-
-            try:
-                text = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-
-            rel_path = os.path.join(rel_dir, fname) if rel_dir else fname
-            file_count += 1
-
-            if suffix == ".py":
-                outline = _outline_python(text, filename=fpath)
-            else:
-                # For non-Python files, just record the file name
-                tree_lines.append(rel_path)
-                continue
-
-            if not outline["classes"] and not outline["functions"]:
-                tree_lines.append(rel_path)
-                continue
-
-            tree_lines.append("")
+        if not outline.get("classes") and not outline.get("functions"):
             tree_lines.append(rel_path)
-            if outline["classes"]:
-                for cls in outline["classes"]:
-                    bases_str = f"(extends {', '.join(cls['bases'])})" if cls["bases"] else ""
-                    tree_lines.append(f"  class {cls['name']}{bases_str}")
-                    for m in cls["methods"]:
-                        tree_lines.append(f"    {m}")
-            if outline["functions"]:
-                for fn in outline["functions"]:
-                    tree_lines.append(f"  {fn['signature']}")
+            continue
 
-        if budget_exceeded:
-            break
-
-    if budget_exceeded:
         tree_lines.append("")
-        tree_lines.append("... (repo map truncated: scan budget exceeded)")
-        logger.info(
-            "Repo-map scan truncated: root=%s dirs_visited=%d files_considered=%d elapsed_ms=%.0f",
-            root_str, dirs_visited, files_considered,
-            (time.monotonic() - start_time) * 1000,
-        )
+        tree_lines.append(rel_path)
+        if outline["classes"]:
+            for cls in outline["classes"]:
+                bases_str = f"(extends {', '.join(cls['bases'])})" if cls["bases"] else ""
+                tree_lines.append(f"  class {cls['name']}{bases_str}")
+                for m in cls["methods"]:
+                    tree_lines.append(f"    {m}")
+        if outline["functions"]:
+            for fn in outline["functions"]:
+                tree_lines.append(f"  {fn['signature']}")
 
-    if file_count == 0 and not budget_exceeded:
+    if file_count == 0:
         result = "No Python/TypeScript files found."
         _repo_map_cache[root_str] = (current_mtime, result)
         return result
