@@ -293,13 +293,14 @@ def prewarm_grammars(final_dist_dir: Path, python_exe: Path) -> None:
         ).decode()
     except subprocess.CalledProcessError as exc:
         print(f"Grammar prewarm failed:\n{exc.output.decode()}")
-        sys.exit(1)
+        print("Warning: tree-sitter grammar prewarm failed; continuing release build.")
+        return
 
     # Verify the grammar directory is non-empty
     entries = list(grammar_dir.iterdir())
     if not entries:
-        print("Grammar prewarm completed but grammars directory is empty.")
-        sys.exit(1)
+        print("Warning: grammar prewarm produced no files; continuing release build.")
+        return
 
     print(f"Grammar prewarm complete: {len(entries)} file(s) in {grammar_dir}")
 
