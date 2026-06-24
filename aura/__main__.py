@@ -164,9 +164,14 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
             logger.info("opening API settings post-startup")
             QTimer.singleShot(100, win.open_api_settings)
 
-    if args.selfcheck:
-        QTimer.singleShot(200, app.quit)
+    def _finish_selfcheck() -> None:
+        logger.info("Aura selfcheck success")
         print("Aura selfcheck: OK", flush=True)
+        logging.shutdown()
+        os._exit(0)
+
+    if args.selfcheck:
+        QTimer.singleShot(300, _finish_selfcheck)
 
     logger.info("app.exec start")
     exit_code = app.exec()
