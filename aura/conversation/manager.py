@@ -140,6 +140,16 @@ EDIT_TRANSACTION_FAILURE_CLASSES = {
     "edit_transaction_not_applicable",
 }
 
+PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS = "patch_candidate_invalid_syntax"
+PATCH_CANDIDATE_INVALID_SYNTAX_REPEATED_CLASS = "patch_candidate_invalid_syntax_repeated"
+
+PATCH_CANDIDATE_INVALID_SYNTAX_ACTION = (
+    "The proposed patch candidate would make this Python file invalid. The live file was not changed. "
+    "Re-read the suggested range, then retry patch_file once with a larger exact old block that includes "
+    "the adjacent line before and after the edit. Do not analyze patch mechanics. If the retry fails, "
+    "return a concise blocker."
+)
+
 WORKER_EDIT_RECOVERY_INSTRUCTION = (
     "Previous edit failed recoverably. Re-read the affected file with read_file or read_file_range, "
     "then retry patch_file once with corrected hunks and the current expected_file_hash. "
@@ -255,6 +265,7 @@ class ConversationManager:
         line_range_reread_required: dict[str, dict[str, Any]] = {}
         worker_file_state: dict[str, dict[str, Any]] = {}
         patch_failed_cycles: dict[str, int] = {}
+        patch_invalid_syntax_required: dict[str, dict[str, Any]] = {}
         syntax_repair_required: dict[str, dict[str, Any]] = {}
         syntax_validation_required: set[str] = set()
         import_verification_required: set[str] = set()
@@ -432,6 +443,7 @@ class ConversationManager:
                     edit_recovery_pending = bool(
                         edit_fallback_required
                         or line_range_reread_required
+                        or patch_invalid_syntax_required
                     )
                     syntax_repair_pending = bool(
                         syntax_repair_paths(syntax_repair_required)
@@ -442,7 +454,14 @@ class ConversationManager:
                     ):
                         if not worker_recovery_nudge_sent:
                             if edit_recovery_pending:
-                                instruction = WORKER_EDIT_RECOVERY_INSTRUCTION
+                                if (
+                                    patch_invalid_syntax_required
+                                    and not edit_fallback_required
+                                    and not line_range_reread_required
+                                ):
+                                    instruction = PATCH_CANDIDATE_INVALID_SYNTAX_ACTION
+                                else:
+                                    instruction = WORKER_EDIT_RECOVERY_INSTRUCTION
                             else:
                                 # Distinguish craft-gate failures from terminal py_compile failures
                                 any_repair_failed = any(
@@ -497,6 +516,10 @@ class ConversationManager:
                                 edit_fallback_required,
                                 line_range_reread_required,
                             ))
+                            if patch_invalid_syntax_required:
+                                details["patch_invalid_syntax_paths"] = sorted(
+                                    patch_invalid_syntax_required
+                                )
                         self._finish_worker_unrecoverable(
                             on_event,
                             failure_class="worker_recovery_exhausted",
@@ -701,6 +724,7 @@ class ConversationManager:
                         line_range_reread_required=line_range_reread_required,
                         worker_file_state=worker_file_state,
                         patch_failed_cycles=patch_failed_cycles,
+                        patch_invalid_syntax_required=patch_invalid_syntax_required,
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
                         write_attempts_by_path=write_attempts_by_path,
@@ -850,6 +874,7 @@ class ConversationManager:
                         line_range_reread_required=line_range_reread_required,
                         worker_file_state=worker_file_state,
                         patch_failed_cycles=patch_failed_cycles,
+                        patch_invalid_syntax_required=patch_invalid_syntax_required,
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
                         write_attempts_by_path=write_attempts_by_path,
@@ -1014,11 +1039,26 @@ class ConversationManager:
         write_attempts_by_path: dict[str, int],
         worker_file_state: dict[str, dict[str, Any]] | None = None,
         patch_failed_cycles: dict[str, int] | None = None,
+        patch_invalid_syntax_required: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         raw_path = _edit_shapes.tool_path(name, args)
         path = _normalize_worker_path(raw_path) if raw_path else ""
         worker_file_state = worker_file_state if worker_file_state is not None else {}
         patch_failed_cycles = patch_failed_cycles if patch_failed_cycles is not None else {}
+        patch_invalid_syntax_required = (
+            patch_invalid_syntax_required
+            if patch_invalid_syntax_required is not None
+            else {}
+        )
+        invalid_syntax_block = self._worker_patch_invalid_syntax_block(
+            tool_call_id=tool_call_id,
+            name=name,
+            args=args,
+            patch_invalid_syntax_required=patch_invalid_syntax_required,
+            recovery_block_counts=recovery_block_counts,
+        )
+        if invalid_syntax_block is not None:
+            return invalid_syntax_block
         if name in WORKER_RECOVERY_ALWAYS_ALLOWED:
             return None
         syntax_paths = syntax_repair_paths(syntax_repair_required)
@@ -1125,7 +1165,7 @@ class ConversationManager:
                 return blocked
             shape = _edit_shapes.edit_shape_signature(name, args)
             failed_cycles = patch_failed_cycles.get(shape, 0)
-            if failed_cycles >= 2:
+            if failed_cycles >= 1:
                 payload = recovery_payload(
                     path=path,
                     failure_class="patch_file_repeated_failure",
@@ -1175,6 +1215,88 @@ class ConversationManager:
                 return blocked_tool_result(tool_call_id, name, payload)
 
         return None
+
+    def _worker_patch_invalid_syntax_block(
+        self,
+        *,
+        tool_call_id: str,
+        name: str,
+        args: dict[str, Any],
+        patch_invalid_syntax_required: dict[str, dict[str, Any]],
+        recovery_block_counts: dict[str, int],
+    ) -> dict[str, Any] | None:
+        if not patch_invalid_syntax_required:
+            return None
+
+        target_path = _pending_patch_invalid_syntax_path(
+            name,
+            args,
+            patch_invalid_syntax_required,
+        )
+        pending_path = target_path or sorted(patch_invalid_syntax_required)[0]
+        state = patch_invalid_syntax_required.get(pending_path) or {}
+        if state.get("retry_failed") or state.get("blocked"):
+            payload = recovery_payload(
+                path=pending_path,
+                failure_class=PATCH_CANDIDATE_INVALID_SYNTAX_REPEATED_CLASS,
+                error=(
+                    "patch_file candidate syntax recovery already used its one retry. "
+                    "Stop and return a concise blocker."
+                ),
+                suggested_next_tool="none",
+                suggested_next_action="Stop and summarize the blocker; do not call more tools for this patch.",
+                recoverable=False,
+            )
+            payload["applied"] = False
+            payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
+            payload["patch_shape"] = state.get("patch_shape")
+            record_recovery_block(
+                payload,
+                f"patch-invalid-syntax-blocked:{pending_path}",
+                recovery_block_counts,
+            )
+            return blocked_tool_result(tool_call_id, name, payload)
+
+        if target_path and name in {"read_file", "read_file_range", "read_files"}:
+            return None
+
+        if not state.get("reread_done"):
+            payload = recovery_payload(
+                path=pending_path,
+                failure_class=PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS,
+                error="patch_file candidate syntax recovery requires re-reading the suggested range before any other tool.",
+                suggested_next_tool="read_file_range",
+                suggested_next_action=PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
+            )
+            payload["applied"] = False
+            payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
+            payload["patch_shape"] = state.get("patch_shape")
+            record_recovery_block(
+                payload,
+                f"patch-invalid-syntax-reread:{pending_path}:{name}",
+                recovery_block_counts,
+            )
+            return blocked_tool_result(tool_call_id, name, payload)
+
+        if name == "patch_file" and target_path:
+            return None
+
+        payload = recovery_payload(
+            path=pending_path,
+            failure_class=PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS,
+            error="Target area was re-read. Retry patch_file once now; do not use unrelated tools.",
+            suggested_next_tool="patch_file",
+            suggested_next_action=PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
+        )
+        payload["applied"] = False
+        payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
+        payload["patch_shape"] = state.get("patch_shape")
+        record_recovery_block(
+            payload,
+            f"patch-invalid-syntax-retry:{pending_path}:{name}",
+            recovery_block_counts,
+        )
+        return blocked_tool_result(tool_call_id, name, payload)
 
     def _worker_patch_file_state_block(
         self,
@@ -1251,9 +1373,15 @@ class ConversationManager:
         write_attempts_by_path: dict[str, int],
         worker_file_state: dict[str, dict[str, Any]] | None = None,
         patch_failed_cycles: dict[str, int] | None = None,
+        patch_invalid_syntax_required: dict[str, dict[str, Any]] | None = None,
     ) -> str:
         worker_file_state = worker_file_state if worker_file_state is not None else {}
         patch_failed_cycles = patch_failed_cycles if patch_failed_cycles is not None else {}
+        patch_invalid_syntax_required = (
+            patch_invalid_syntax_required
+            if patch_invalid_syntax_required is not None
+            else {}
+        )
         parsed = parse_tool_payload(content)
         record_reads_for_recovery(
             name,
@@ -1265,6 +1393,12 @@ class ConversationManager:
         )
         raw_path = _edit_shapes.tool_path(name, args, parsed)
         path = _normalize_worker_path(raw_path) if raw_path else ""
+        _mark_patch_invalid_syntax_reread(
+            name,
+            args,
+            parsed,
+            patch_invalid_syntax_required,
+        )
         if name in WRITE_TOOLS and path and (
             not ok
             or (
@@ -1286,6 +1420,7 @@ class ConversationManager:
                     pop_normalized_recovery_key(line_range_reread_required, path)
                     pop_normalized_key(worker_file_state, path)
                     clear_patch_failed_shapes_for_path(patch_failed_cycles, path, _edit_shapes.parse_patch_shape)
+                    pop_normalized_recovery_key(patch_invalid_syntax_required, path)
                     pop_syntax_repair_state(syntax_repair_required, path)
                     discard_syntax_validation_path(syntax_validation_required, path)
                     return content
@@ -1294,6 +1429,7 @@ class ConversationManager:
                 pop_normalized_recovery_key(line_range_reread_required, path)
                 pop_normalized_key(worker_file_state, path)
                 clear_patch_failed_shapes_for_path(patch_failed_cycles, path, _edit_shapes.parse_patch_shape)
+                pop_normalized_recovery_key(patch_invalid_syntax_required, path)
                 if is_python_path(path) and not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
                 state = syntax_repair_state_for_path(syntax_repair_required, path)
@@ -1313,6 +1449,46 @@ class ConversationManager:
 
         failure_class = str(parsed.get("failure_class", ""))
         shape = _edit_shapes.edit_shape_signature(name, args)
+        prior_invalid_syntax = (
+            normalized_state_value(patch_invalid_syntax_required, path)
+            if path and name == "patch_file"
+            else None
+        )
+        if (
+            path
+            and name == "patch_file"
+            and isinstance(prior_invalid_syntax, dict)
+            and prior_invalid_syntax.get("reread_done")
+            and failure_class
+        ):
+            prior_invalid_syntax["retry_failed"] = True
+            prior_invalid_syntax["blocked"] = True
+            blocked_state = {
+                **prior_invalid_syntax,
+                "retry_failed": True,
+                "blocked": True,
+            }
+            patch_invalid_syntax_required[_normalize_worker_path(path)] = blocked_state
+            parsed.setdefault("applied", False)
+            parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
+            parsed["recoverable"] = False
+            parsed["failure_class"] = (
+                PATCH_CANDIDATE_INVALID_SYNTAX_REPEATED_CLASS
+                if failure_class == PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS
+                else PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS
+            )
+            parsed["error"] = (
+                "patch_file retry failed after candidate syntax recovery. "
+                "Stop and return a concise blocker. "
+                + str(parsed.get("error", ""))
+            ).strip()
+            parsed["suggested_next_tool"] = "none"
+            parsed["suggested_next_action"] = (
+                "Stop and summarize the blocker; do not call more tools for this patch."
+            )
+            parsed["patch_shape"] = prior_invalid_syntax.get("patch_shape")
+            return json.dumps(parsed, ensure_ascii=False)
+
         if path and failure_class in EDIT_TRANSACTION_FAILURE_CLASSES:
             parsed.setdefault("applied", False)
             parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
@@ -1351,6 +1527,36 @@ class ConversationManager:
             parsed["recoverable"] = True
             parsed["suggested_next_tool"] = "read_file"
             parsed["suggested_next_action"] = "Re-read the file before retrying an edit."
+            content = json.dumps(parsed, ensure_ascii=False)
+        elif path and name == "patch_file" and failure_class == PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS:
+            parsed.setdefault("applied", False)
+            parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
+            parsed.setdefault("tool", name)
+            patch_shape = _edit_shapes.edit_shape_signature(name, args)
+            failed_cycles = patch_failed_cycles.get(patch_shape, 0) + 1
+            patch_failed_cycles[patch_shape] = failed_cycles
+            parsed["patch_failed_cycles"] = failed_cycles
+            parsed["patch_shape"] = _edit_shapes.shape_digest(patch_shape)
+            parsed["suggested_next_tool"] = "read_file_range"
+            parsed["suggested_next_action"] = PATCH_CANDIDATE_INVALID_SYNTAX_ACTION
+            if failed_cycles >= 2:
+                parsed["recoverable"] = False
+                parsed["failure_class"] = PATCH_CANDIDATE_INVALID_SYNTAX_REPEATED_CLASS
+                parsed["error"] = (
+                    "Repeated patch_file candidate syntax failure for the same patch shape. "
+                    "Stop and return a concise blocker."
+                )
+                pop_normalized_recovery_key(patch_invalid_syntax_required, path)
+            else:
+                patch_invalid_syntax_required[_normalize_worker_path(path)] = {
+                    "failure_class": PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS,
+                    "error": parsed.get("error", ""),
+                    "shape": patch_shape,
+                    "patch_shape": parsed["patch_shape"],
+                    "reread_done": False,
+                    "retry_failed": False,
+                }
+                parsed["recoverable"] = True
             content = json.dumps(parsed, ensure_ascii=False)
         elif path and name == "patch_file" and failure_class in {"patch_hunk_not_found", "patch_hunk_ambiguous", "patch_file_hash_mismatch"}:
             parsed.setdefault("applied", False)
@@ -1543,6 +1749,73 @@ class ConversationManager:
                 break
 
         on_event(ApiError(status_code=None, message="Cancelled."))
+
+
+def _pending_patch_invalid_syntax_path(
+    name: str,
+    args: dict[str, Any],
+    pending: dict[str, dict[str, Any]],
+) -> str:
+    normalized_pending = {_normalize_worker_path(path): path for path in pending}
+    if name == "read_files":
+        paths = args.get("paths")
+        if isinstance(paths, list):
+            for raw in paths:
+                normalized = _normalize_worker_path(str(raw))
+                if normalized in normalized_pending:
+                    return normalized_pending[normalized]
+        return ""
+
+    raw_path = _edit_shapes.tool_path(name, args)
+    if not raw_path:
+        return ""
+    normalized = _normalize_worker_path(raw_path)
+    return normalized_pending.get(normalized, "")
+
+
+def _mark_patch_invalid_syntax_reread(
+    name: str,
+    args: dict[str, Any],
+    parsed: Any,
+    pending: dict[str, dict[str, Any]],
+) -> None:
+    if name not in {"read_file", "read_file_range", "read_files"}:
+        return
+    if not isinstance(parsed, dict):
+        return
+
+    def mark_one(path: str, result: dict[str, Any]) -> None:
+        if result.get("ok") is not True:
+            return
+        if result.get("truncated") is True:
+            return
+        content_hash = result.get("content_hash")
+        file_size = result.get("file_size")
+        if not isinstance(content_hash, str) or not content_hash:
+            return
+        if not isinstance(file_size, int):
+            return
+        normalized = _normalize_worker_path(path)
+        state = normalized_state_value(pending, normalized)
+        if not isinstance(state, dict):
+            return
+        state["reread_done"] = True
+        state["latest_read_content_hash"] = content_hash
+        state["last_read_tool"] = name
+        pending[normalized] = state
+
+    if name == "read_files":
+        files = parsed.get("files")
+        if not isinstance(files, dict):
+            return
+        for path_key, result in files.items():
+            if isinstance(result, dict):
+                mark_one(str(result.get("path") or path_key), result)
+        return
+
+    path = _edit_shapes.tool_path(name, args, parsed)
+    if path:
+        mark_one(path, parsed)
 
 
 __all__ = [

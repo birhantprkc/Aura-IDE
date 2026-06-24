@@ -10,6 +10,13 @@ from aura.conversation.tools._replacement_engine import apply_replacement_to_con
 from aura.conversation.tools.fs_read import read_file_snapshot
 from aura.paths import safe_is_relative_to, safe_relative_to
 
+PATCH_CANDIDATE_INVALID_SYNTAX_ACTION = (
+    "The proposed patch candidate would make this Python file invalid. The live file was not changed. "
+    "Re-read the suggested range, then retry patch_file once with a larger exact old block that includes "
+    "the adjacent line before and after the edit. Do not analyze patch mechanics. If the retry fails, "
+    "return a concise blocker."
+)
+
 
 def _rel_path(workspace_root: Path, target: Path) -> str:
     if safe_is_relative_to(target, workspace_root):
@@ -350,17 +357,16 @@ def propose_patch_file(
             compile(proposed, target.name, "exec")
         except SyntaxError as exc:
             syntax_line = exc.lineno if isinstance(exc.lineno, int) else None
+            suggested_start_line = max(1, (syntax_line or 1) - 3)
+            suggested_end_line = (syntax_line or 1) + 3
             extra: dict[str, Any] = {
-                "suggested_tool": "patch_file",
-                "suggested_next_tool": "patch_file",
-                "suggested_next_action": (
-                    "Re-read the current file and inspect proposed_context. Treat joined Python statements "
-                    "or swallowed newlines as a likely patch boundary issue. Retry patch_file with a larger "
-                    "enclosing block: the line before, the edited lines, and the line after. Use the current "
-                    "expected_file_hash. Keep existing-file recovery on patch_file; do not use write_file as "
-                    "a fallback for this existing-file edit."
-                ),
-                "proposed_context": _proposal_context(proposed, syntax_line),
+                "applied": False,
+                "write_outcome": "not_applied_edit_mechanics_blocked",
+                "suggested_tool": "read_file_range",
+                "suggested_next_tool": "read_file_range",
+                "suggested_next_action": PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
+                "suggested_start_line": suggested_start_line,
+                "suggested_end_line": suggested_end_line,
             }
             if syntax_line is not None:
                 extra["syntax_error_line"] = syntax_line
@@ -372,7 +378,7 @@ def propose_patch_file(
                 workspace_root,
                 target,
                 f"replacement produces invalid Python: {exc}",
-                "syntax_invalid",
+                "patch_candidate_invalid_syntax",
                 **extra,
             )
 

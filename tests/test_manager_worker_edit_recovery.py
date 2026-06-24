@@ -1079,3 +1079,250 @@ def test_repeated_patch_file_block_becomes_nonrecoverable(tmp_workspace):
     assert payload["recoverable"] is False
     assert payload["failure_class"] == "patch_file_repeated_failure"
     assert "patch shape" in payload["error"]
+
+
+def test_patch_candidate_invalid_syntax_requires_target_reread_before_retry(tmp_workspace):
+    (tmp_workspace / "sample.py").write_text("value = 1\n", encoding="utf-8")
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    patch_invalid_syntax_required: dict = {}
+    worker_file_state: dict = {}
+    syntax_repair_required: dict = {}
+    syntax_validation_required: set = set()
+    args = {"path": "sample.py", "edits": [{"old": "value = 1\n", "new": "value =\n"}]}
+
+    updated = manager._update_worker_recovery_state(
+        name="patch_file",
+        args=args,
+        ok=False,
+        content=json.dumps({
+            "ok": False,
+            "path": "sample.py",
+            "failure_class": "patch_candidate_invalid_syntax",
+            "error": "replacement produces invalid Python",
+        }),
+        edit_failed_shapes=set(),
+        edit_fallback_required={},
+        line_range_reread_required={},
+        syntax_repair_required=syntax_repair_required,
+        syntax_validation_required=syntax_validation_required,
+        write_attempts_by_path={},
+        worker_file_state=worker_file_state,
+        patch_failed_cycles={},
+        patch_invalid_syntax_required=patch_invalid_syntax_required,
+    )
+
+    payload = json.loads(updated)
+    assert payload["recoverable"] is True
+    assert payload["suggested_next_tool"] == "read_file_range"
+    assert "live file was not changed" in payload["suggested_next_action"]
+    assert "Do not analyze patch mechanics" in payload["suggested_next_action"]
+    assert syntax_repair_required == {}
+
+    blocked = manager._worker_recovery_block(
+        tool_call_id="tc1",
+        name="search_codebase",
+        args={"query": "patch mechanics"},
+        edit_failed_shapes=set(),
+        edit_fallback_required={},
+        recovery_block_counts={},
+        line_range_reread_required={},
+        syntax_repair_required={},
+        syntax_validation_required=set(),
+        write_attempts_by_path={},
+        worker_file_state=worker_file_state,
+        patch_failed_cycles={},
+        patch_invalid_syntax_required=patch_invalid_syntax_required,
+    )
+    assert blocked is not None
+    blocked_payload = json.loads(blocked["result_payload"])
+    assert blocked_payload["failure_class"] == "patch_candidate_invalid_syntax"
+    assert blocked_payload["suggested_next_tool"] == "read_file_range"
+
+    manager._update_worker_recovery_state(
+        name="read_file_range",
+        args={"path": "sample.py", "start_line": 1, "end_line": 1},
+        ok=True,
+        content=json.dumps({
+            "ok": True,
+            "path": "sample.py",
+            "content": "value = 1\n",
+            "content_hash": "fresh-hash",
+            "file_size": 10,
+        }),
+        edit_failed_shapes=set(),
+        edit_fallback_required={},
+        line_range_reread_required={},
+        syntax_repair_required={},
+        syntax_validation_required=set(),
+        write_attempts_by_path={},
+        worker_file_state=worker_file_state,
+        patch_failed_cycles={},
+        patch_invalid_syntax_required=patch_invalid_syntax_required,
+    )
+
+    blocked_after_read = manager._worker_recovery_block(
+        tool_call_id="tc2",
+        name="grep_search",
+        args={"pattern": "value"},
+        edit_failed_shapes=set(),
+        edit_fallback_required={},
+        recovery_block_counts={},
+        line_range_reread_required={},
+        syntax_repair_required={},
+        syntax_validation_required=set(),
+        write_attempts_by_path={},
+        worker_file_state=worker_file_state,
+        patch_failed_cycles={},
+        patch_invalid_syntax_required=patch_invalid_syntax_required,
+    )
+    assert blocked_after_read is not None
+    after_read_payload = json.loads(blocked_after_read["result_payload"])
+    assert after_read_payload["suggested_next_tool"] == "patch_file"
+
+    allowed_retry = manager._worker_recovery_block(
+        tool_call_id="tc3",
+        name="patch_file",
+        args={
+            "path": "sample.py",
+            "expected_file_hash": "fresh-hash",
+            "edits": [{"old": "value = 1\n", "new": "value = 2\n"}],
+        },
+        edit_failed_shapes=set(),
+        edit_fallback_required={},
+        recovery_block_counts={},
+        line_range_reread_required={},
+        syntax_repair_required={},
+        syntax_validation_required=set(),
+        write_attempts_by_path={},
+        worker_file_state=worker_file_state,
+        patch_failed_cycles={},
+        patch_invalid_syntax_required=patch_invalid_syntax_required,
+    )
+    assert allowed_retry is None
+
+    manager._update_worker_recovery_state(
+        name="patch_file",
+        args={
+            "path": "sample.py",
+            "expected_file_hash": "fresh-hash",
+            "edits": [{"old": "value = 1\n", "new": "value = 2\n"}],
+        },
+        ok=True,
+        content=json.dumps({"ok": True, "path": "sample.py", "applied": True}),
+        edit_failed_shapes=set(),
+        edit_fallback_required={},
+        line_range_reread_required={},
+        syntax_repair_required=syntax_repair_required,
+        syntax_validation_required=syntax_validation_required,
+        write_attempts_by_path={},
+        worker_file_state=worker_file_state,
+        patch_failed_cycles={},
+        patch_invalid_syntax_required=patch_invalid_syntax_required,
+    )
+    assert patch_invalid_syntax_required == {}
+
+
+def test_patch_candidate_invalid_syntax_retry_failure_is_nonrecoverable(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    patch_invalid_syntax_required = {
+        "sample.py": {
+            "failure_class": "patch_candidate_invalid_syntax",
+            "patch_shape": "abc123",
+            "reread_done": True,
+        }
+    }
+
+    updated = manager._update_worker_recovery_state(
+        name="patch_file",
+        args={"path": "sample.py", "edits": [{"old": "value = 1\n", "new": "value =\n"}]},
+        ok=False,
+        content=json.dumps({
+            "ok": False,
+            "path": "sample.py",
+            "failure_class": "patch_candidate_invalid_syntax",
+            "error": "replacement produces invalid Python",
+        }),
+        edit_failed_shapes=set(),
+        edit_fallback_required={},
+        line_range_reread_required={},
+        syntax_repair_required={},
+        syntax_validation_required=set(),
+        write_attempts_by_path={},
+        patch_invalid_syntax_required=patch_invalid_syntax_required,
+    )
+
+    payload = json.loads(updated)
+    assert payload["recoverable"] is False
+    assert payload["failure_class"] == "patch_candidate_invalid_syntax_repeated"
+    assert payload["suggested_next_tool"] == "none"
+    assert "Stop and return a concise blocker" in payload["error"]
+    assert patch_invalid_syntax_required["sample.py"]["retry_failed"] is True
+
+    blocked = manager._worker_recovery_block(
+        tool_call_id="tc1",
+        name="read_file",
+        args={"path": "sample.py"},
+        edit_failed_shapes=set(),
+        edit_fallback_required={},
+        recovery_block_counts={},
+        line_range_reread_required={},
+        syntax_repair_required={},
+        syntax_validation_required=set(),
+        write_attempts_by_path={},
+        patch_invalid_syntax_required=patch_invalid_syntax_required,
+    )
+    assert blocked is not None
+    blocked_payload = json.loads(blocked["result_payload"])
+    assert blocked_payload["recoverable"] is False
+    assert blocked_payload["suggested_next_tool"] == "none"
+
+
+def test_repeated_same_patch_candidate_invalid_syntax_shape_is_blocked(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    patch_failed_cycles: dict[str, int] = {}
+    patch_invalid_syntax_required: dict = {}
+    args = {"path": "sample.py", "edits": [{"old": "value = 1\n", "new": "value =\n"}]}
+
+    manager._update_worker_recovery_state(
+        name="patch_file",
+        args=args,
+        ok=False,
+        content=json.dumps({
+            "ok": False,
+            "path": "sample.py",
+            "failure_class": "patch_candidate_invalid_syntax",
+            "error": "replacement produces invalid Python",
+        }),
+        edit_failed_shapes=set(),
+        edit_fallback_required={},
+        line_range_reread_required={},
+        syntax_repair_required={},
+        syntax_validation_required=set(),
+        write_attempts_by_path={},
+        patch_failed_cycles=patch_failed_cycles,
+        patch_invalid_syntax_required=patch_invalid_syntax_required,
+    )
+    second = manager._update_worker_recovery_state(
+        name="patch_file",
+        args=args,
+        ok=False,
+        content=json.dumps({
+            "ok": False,
+            "path": "sample.py",
+            "failure_class": "patch_candidate_invalid_syntax",
+            "error": "replacement produces invalid Python",
+        }),
+        edit_failed_shapes=set(),
+        edit_fallback_required={},
+        line_range_reread_required={},
+        syntax_repair_required={},
+        syntax_validation_required=set(),
+        write_attempts_by_path={},
+        patch_failed_cycles=patch_failed_cycles,
+        patch_invalid_syntax_required=patch_invalid_syntax_required,
+    )
+
+    payload = json.loads(second)
+    assert payload["recoverable"] is False
+    assert payload["failure_class"] == "patch_candidate_invalid_syntax_repeated"
+    assert "same patch shape" in payload["error"]
