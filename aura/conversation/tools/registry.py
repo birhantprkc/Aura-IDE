@@ -19,10 +19,10 @@ from typing import Any
 
 from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
 from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
+from aura.conversation.tools._code_intel_mixin import CodeIntelHandlersMixin
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
 from aura.conversation.tools._git_mixin import GitHandlersMixin
 from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
-
 from aura.conversation.tools._planner_mixin import PlannerHandlersMixin
 from aura.conversation.tools._read_mixin import ReadHandlersMixin
 from aura.conversation.tools._search_mixin import SearchHandlersMixin
@@ -67,6 +67,7 @@ TOOL_HANDLERS: dict[str, Any] = {}
 
 
 class ToolRegistry(
+    CodeIntelHandlersMixin,
     ReadHandlersMixin,
     SearchHandlersMixin,
     GitHandlersMixin,
@@ -252,4 +253,8 @@ TOOL_HANDLERS["launch_read_only_drone"] = ToolRegistry._handle_launch_read_only_
 TOOL_HANDLERS["run_read_only_drone"] = ToolRegistry._handle_run_read_only_drone
 TOOL_HANDLERS["check_drone_run"] = ToolRegistry._handle_check_drone_run
 TOOL_HANDLERS["register_drone_folder"] = ToolRegistry._handle_register_drone_folder
+TOOL_HANDLERS["code_intel_outline"] = ToolRegistry._handle_code_intel_outline
+TOOL_HANDLERS["code_intel_references"] = ToolRegistry._handle_code_intel_references
+TOOL_HANDLERS["code_intel_dependents"] = ToolRegistry._handle_code_intel_dependents
+TOOL_HANDLERS["code_intel_audit"] = ToolRegistry._handle_code_intel_audit
 

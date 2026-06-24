@@ -6,8 +6,8 @@ the worker manager when the user clicks Dispatch.
 
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import re
 import shlex
 import threading
@@ -40,17 +40,17 @@ from aura.conversation import (
     WorkerTaskSpec,
     normalize_worker_task,
 )
+from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.project_profile import detect_project_profile
 from aura.conversation.task_shape import task_shape_contract_lines
 from aura.conversation.tool_limits import WRITE_TOOLS
-from aura.conversation.persistence import WorkerDispatchRecord
+from aura.dependency_context import build_dependency_stanza
 from aura.prompts import (
     WORKER_SYSTEM_PROMPT,
     build_tier1_context,
     inject_private_worker_style,
     inject_tier1_context,
 )
-from aura.dependency_context import build_dependency_stanza
 
 __all__ = [
     "_DispatchProxy",
@@ -570,6 +570,26 @@ class _DispatchProxy(QObject):
                 "or incomplete verification."
             )
             result_caveats.append(phrase_caveat)
+
+        # --- Post-edit structural audit ---
+        if self._workspace_root is not None and has_writes and relay.touched_files:
+            try:
+                from aura.code_intel.audit import audit_changed_files
+                touched = sorted(relay.touched_files)
+                audit_findings = audit_changed_files(self._workspace_root, touched)
+                parse_failures = [f for f in audit_findings if f.kind == "parse_failure" and f.severity in ("error",)]
+                if parse_failures:
+                    failure_files = sorted({f.file for f in parse_failures})
+                    msg = (
+                        "Post-edit structural audit found parse failures in: "
+                        + ", ".join(failure_files[:5])
+                        + ". Fix these before declaring success."
+                    )
+                    result_errors.append(msg)
+                    for pf in parse_failures[:5]:
+                        result_errors.append(f"  {pf.file}:{pf.line}: {pf.message}")
+            except Exception:
+                _log.exception("Post-edit structural audit failed")
 
         # No-work detection
         phase_boundary = relay.phase_boundary_info is not None

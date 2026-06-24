@@ -282,6 +282,95 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "code_intel_outline",
+                    "description": (
+                        "Get a structural outline of a file using language-aware code intelligence. "
+                        "Returns classes, functions, and imports. Use this as an alternative to "
+                        "read_file_outline when you want richer language-specific parsing. "
+                        "Always prefer read_file_outline for lightweight use."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Workspace-relative path.",
+                            }
+                        },
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "code_intel_references",
+                    "description": (
+                        "Find all references to a symbol across the workspace using the code intelligence "
+                        "index. Returns list of ReferenceEdge objects with source_file, target_symbol, "
+                        "line, and kind. Use this for safe refactoring — find every place a symbol is used."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "symbol": {
+                                "type": "string",
+                                "description": "Symbol name to search.",
+                            },
+                            "file": {
+                                "type": "string",
+                                "description": "Restrict to this file (optional).",
+                            },
+                        },
+                        "required": ["symbol"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "code_intel_dependents",
+                    "description": (
+                        "Return the list of files that transitively depend on a given file (blast radius). "
+                        "Use this before editing to understand which downstream files could break."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Workspace-relative file path.",
+                            }
+                        },
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "code_intel_audit",
+                    "description": (
+                        "Run a structural audit on a list of changed files. Detects parse failures and "
+                        "structural issues. Returns list of AuditFinding objects sorted by file and line. "
+                        "Use this after editing to verify no structural regressions."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "paths": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Workspace-relative file paths to audit.",
+                            },
+                        },
+                        "required": ["paths"],
+                    },
+                },
+            },
         ]
 GIT_TOOL_DEFS: list[dict[str, Any]] = [
     {
@@ -1127,4 +1216,96 @@ WORKSPACE_SNAPSHOT_TOOL_DEF: dict[str, Any] = {
     },
 }
 
-from aura.conversation.tools._drone_schemas import LAUNCH_READ_ONLY_DRONE_TOOL_DEF, RUN_READ_ONLY_DRONE_TOOL_DEF, CHECK_DRONE_RUN_TOOL_DEF, REGISTER_DRONE_FOLDER_TOOL_DEF
+CODE_INTEL_OUTLINE_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "code_intel_outline",
+        "description": (
+            "Get a structural outline of a file using language-aware code intelligence. "
+            "Returns classes, functions, and imports. Use this as an alternative to "
+            "read_file_outline when you want richer language-specific parsing. "
+            "Always prefer read_file_outline for lightweight use."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Workspace-relative path.",
+                }
+            },
+            "required": ["path"],
+        },
+    },
+}
+
+CODE_INTEL_REFERENCES_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "code_intel_references",
+        "description": (
+            "Find all references to a symbol across the workspace using the code intelligence "
+            "index. Returns list of ReferenceEdge objects with source_file, target_symbol, "
+            "line, and kind. Use this for safe refactoring — find every place a symbol is used."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "Symbol name to search.",
+                },
+                "file": {
+                    "type": "string",
+                    "description": "Restrict to this file (optional).",
+                },
+            },
+            "required": ["symbol"],
+        },
+    },
+}
+
+CODE_INTEL_DEPENDENTS_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "code_intel_dependents",
+        "description": (
+            "Return the list of files that transitively depend on a given file (blast radius). "
+            "Use this before editing to understand which downstream files could break."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Workspace-relative file path.",
+                }
+            },
+            "required": ["path"],
+        },
+    },
+}
+
+CODE_INTEL_AUDIT_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "code_intel_audit",
+        "description": (
+            "Run a structural audit on a list of changed files. Detects parse failures and "
+            "structural issues. Returns list of AuditFinding objects sorted by file and line. "
+            "Use this after editing to verify no structural regressions."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Workspace-relative file paths to audit.",
+                },
+            },
+            "required": ["paths"],
+        },
+    },
+}
+
