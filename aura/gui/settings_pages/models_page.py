@@ -22,6 +22,7 @@ from aura.config import (
     save_dynamic_catalog,
 )
 from aura.gui.theme import FG_DIM
+from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
 from aura.gui.widgets.glass_switch import GlassSwitch
 from aura.providers.base import ProviderId
 from aura.providers.registry import provider_registry
@@ -78,14 +79,14 @@ class ModelsPage(QWidget):
         )
 
         # Planner Provider
-        self._planner_provider_combo = QComboBox()
+        self._planner_provider_combo = NoWheelComboBox()
         for pid in provider_registry.ids():
             spec = provider_registry.get(pid)
             kind = get_provider_kind(pid)
             kind_label = {"api_key": "API Key", "external_cli": "External CLI", "local": "Local"}.get(kind, kind)
             self._planner_provider_combo.addItem(f"{spec.label} ({kind_label})", pid)
 
-        self._planner_model_combo = QComboBox()
+        self._planner_model_combo = NoWheelComboBox()
 
         self._planner_refresh_btn = QPushButton("↻ Refresh")
         self._planner_refresh_btn.setFixedHeight(20)
@@ -95,19 +96,19 @@ class ModelsPage(QWidget):
         )
         self._planner_refresh_btn.setToolTip("Fetch latest models and pricing from provider")
 
-        self._planner_thinking_combo = QComboBox()
+        self._planner_thinking_combo = NoWheelComboBox()
         for label, val in _THINKING_ITEMS:
             self._planner_thinking_combo.addItem(label, val)
 
         # Worker Provider
-        self._worker_provider_combo = QComboBox()
+        self._worker_provider_combo = NoWheelComboBox()
         for pid in provider_registry.ids():
             spec = provider_registry.get(pid)
             kind = get_provider_kind(pid)
             kind_label = {"api_key": "API Key", "external_cli": "External CLI", "local": "Local"}.get(kind, kind)
             self._worker_provider_combo.addItem(f"{spec.label} ({kind_label})", pid)
 
-        self._worker_model_combo = QComboBox()
+        self._worker_model_combo = NoWheelComboBox()
 
         self._worker_refresh_btn = QPushButton("↻ Refresh")
         self._worker_refresh_btn.setFixedHeight(20)
@@ -117,7 +118,7 @@ class ModelsPage(QWidget):
         )
         self._worker_refresh_btn.setToolTip("Fetch latest models and pricing from provider")
 
-        self._worker_thinking_combo = QComboBox()
+        self._worker_thinking_combo = NoWheelComboBox()
         for label, val in _THINKING_ITEMS:
             self._worker_thinking_combo.addItem(label, val)
 

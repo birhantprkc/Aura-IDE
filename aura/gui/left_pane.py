@@ -5,10 +5,11 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
-    QComboBox,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -27,6 +28,7 @@ from aura.config import (
 )
 from aura.drones.store import _global_drones_root
 from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, FG_DIM, FG_MUTED, LABEL_PROJECTS, LABEL_THREAD
+from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
 from aura.projects.store import ProjectStore
 from aura.providers.registry import provider_registry
 
@@ -36,9 +38,37 @@ class _ToggleToolButton(QToolButton):
         event.accept()
         super().mousePressEvent(event)
 
+class _ElidedLabel(QLabel):
+    """A QLabel that elides text with an ellipsis when the label is too narrow."""
+    def __init__(self, text: str = "", parent=None) -> None:
+        super().__init__(text, parent)
+        self._full_text = text
+        self.setMinimumWidth(1)
+        self.setWordWrap(False)
+
+    def set_full_text(self, text: str) -> None:
+        self._full_text = text
+        self._update_elision()
+
+    def full_text(self) -> str:
+        return self._full_text
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_elision()
+
+    def _update_elision(self) -> None:
+        w = self.width()
+        if w < 1:
+            return
+        metrics = self.fontMetrics()
+        elided = metrics.elidedText(self._full_text, Qt.ElideRight, w)
+        self.setText(elided)
+
 class _ProjectRow(QFrame):
     clicked = Signal(Path)
     collapse_toggled = Signal(str)
+    rename_requested = Signal(str, str)  # (project_id, new_name)
 
     def __init__(self, project, is_active: bool, parent=None) -> None:
         super().__init__(parent)
@@ -59,11 +89,12 @@ class _ProjectRow(QFrame):
         self.toggle_btn.clicked.connect(self._on_toggle_clicked)
         layout.addWidget(self.toggle_btn)
 
-        self.name_label = QLabel(project.name)
+        self.name_label = _ElidedLabel(project.name)
         self.name_label.setStyleSheet(
             f"color: {LABEL_PROJECTS if is_active else FG_DIM}; "
             f"font-weight: {'bold' if is_active else 'normal'};"
         )
+        self.name_label.setToolTip(f"{project.name}\n{project.root_path}")
         layout.addWidget(self.name_label, 1)
 
         border_left_style = f"3px solid {ACCENT}" if is_active else "3px solid transparent"
@@ -86,6 +117,19 @@ class _ProjectRow(QFrame):
     def _on_toggle_clicked(self) -> None:
         self.collapse_toggled.emit(self.project.id)
 
+    def contextMenuEvent(self, event) -> None:
+        menu = QMenu(self)
+        rename_act = menu.addAction("Rename Project")
+        chosen = menu.exec(event.globalPos())
+        if chosen == rename_act:
+            name, ok = QInputDialog.getText(
+                self, "Rename Project", "New name:",
+                text=self.project.name
+            )
+            if ok and name.strip():
+                self.rename_requested.emit(self.project.id, name.strip())
+        event.accept()
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self.project.root_path)
@@ -95,6 +139,7 @@ class _ProjectRow(QFrame):
 
 class _ThreadRow(QFrame):
     clicked = Signal(Path)
+    rename_requested = Signal(str, str, str)  # (project_id, thread_id, new_title)
 
     def __init__(self, thread, parent=None) -> None:
         super().__init__(parent)
@@ -106,7 +151,7 @@ class _ThreadRow(QFrame):
         layout.setContentsMargins(24, 0, 8, 0)
         layout.setSpacing(4)
 
-        self.title_label = QLabel(thread.title)
+        self.title_label = _ElidedLabel(thread.title)
         self.title_label.setObjectName("threadTitle")
         tooltip = thread.summary if thread.summary else thread.title
         self.title_label.setToolTip(tooltip)
@@ -121,6 +166,19 @@ class _ThreadRow(QFrame):
                 background-color: {BG_RAISED};
             }}
         """)
+
+    def contextMenuEvent(self, event) -> None:
+        menu = QMenu(self)
+        rename_act = menu.addAction("Rename Chat")
+        chosen = menu.exec(event.globalPos())
+        if chosen == rename_act:
+            title, ok = QInputDialog.getText(
+                self, "Rename Chat", "New title:",
+                text=self.thread.title
+            )
+            if ok and title.strip():
+                self.rename_requested.emit(self.thread.project_id, self.thread.id, title.strip())
+        event.accept()
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -334,7 +392,7 @@ class LeftPane(QFrame):
         planner_model_label = QLabel("Planner:")
         planner_model_label.setStyleSheet(f"color: {FG_DIM};")
         planner_model_row.addWidget(planner_model_label)
-        self._planner_model_combo = QComboBox()
+        self._planner_model_combo = NoWheelComboBox()
         self._planner_model_combo.currentIndexChanged.connect(
             lambda: self.planner_model_changed.emit(self.current_planner_model())
         )
@@ -347,7 +405,7 @@ class LeftPane(QFrame):
         planner_think_label = QLabel("Thinking:")
         planner_think_label.setStyleSheet(f"color: {FG_DIM};")
         planner_think_row.addWidget(planner_think_label)
-        self._planner_thinking_combo = QComboBox()
+        self._planner_thinking_combo = NoWheelComboBox()
         self._planner_thinking_combo.addItem("Off", "off")
         self._planner_thinking_combo.addItem("High", "high")
         self._planner_thinking_combo.addItem("Max", "max")
@@ -364,7 +422,7 @@ class LeftPane(QFrame):
         self._worker_model_label = QLabel("Worker:")
         self._worker_model_label.setStyleSheet(f"color: {FG_DIM};")
         worker_model_row.addWidget(self._worker_model_label)
-        self._worker_model_combo = QComboBox()
+        self._worker_model_combo = NoWheelComboBox()
         self._worker_model_combo.currentIndexChanged.connect(
             lambda: self.worker_model_changed.emit(self.current_worker_model())
         )
@@ -377,7 +435,7 @@ class LeftPane(QFrame):
         self._worker_thinking_label = QLabel("Thinking:")
         self._worker_thinking_label.setStyleSheet(f"color: {FG_DIM};")
         worker_think_row.addWidget(self._worker_thinking_label)
-        self._worker_thinking_combo = QComboBox()
+        self._worker_thinking_combo = NoWheelComboBox()
         self._worker_thinking_combo.addItem("Off", "off")
         self._worker_thinking_combo.addItem("High", "high")
         self._worker_thinking_combo.addItem("Max", "max")
@@ -492,6 +550,7 @@ class LeftPane(QFrame):
             row = _ProjectRow(project, is_active, parent=self._projects_container)
             row.clicked.connect(self.project_selected.emit)
             row.collapse_toggled.connect(self._on_project_collapse_toggled)
+            row.rename_requested.connect(self._on_rename_project)
             row.set_collapsed(self._project_collapsed.get(project.id, False))
             self._projects_layout.addWidget(row)
 
@@ -513,6 +572,7 @@ class LeftPane(QFrame):
                 for t in visible_threads:
                     t_row = _ThreadRow(t, parent=self._projects_container)
                     t_row.clicked.connect(self.thread_selected.emit)
+                    t_row.rename_requested.connect(self._on_rename_thread)
                     self._projects_layout.addWidget(t_row)
 
                 if has_more:
@@ -543,6 +603,23 @@ class LeftPane(QFrame):
     def _on_project_collapse_toggled(self, project_id: str) -> None:
         self._project_collapsed[project_id] = not self._project_collapsed.get(project_id, False)
         self.refresh_projects(self._last_workspace_root)
+
+    @Slot(str, str)
+    def _on_rename_project(self, project_id: str, new_name: str) -> None:
+        store = ProjectStore()
+        result = store.rename_project(project_id, new_name)
+        if result is not None:
+            self.refresh_projects(self._last_workspace_root)
+
+    @Slot(str, str, str)
+    def _on_rename_thread(self, project_id: str, thread_id: str, new_title: str) -> None:
+        store = ProjectStore()
+        project = store.load_project(project_id)
+        if project is None:
+            return
+        result = store.rename_thread(project, thread_id, new_title)
+        if result is not None:
+            self.refresh_projects(self._last_workspace_root)
 
     def refresh_drones(self, active_root: Path | None) -> None:
         from aura.drones.store import DroneStore

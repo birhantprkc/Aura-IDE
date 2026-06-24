@@ -234,6 +234,30 @@ class ProjectStore:
         }
         self._save_index(index)
 
+    def rename_project(self, project_id: str, new_name: str) -> ProjectSpace | None:
+        new_name = new_name.strip()
+        if not new_name:
+            return None
+        project = self.load_project(project_id)
+        if project is None:
+            return None
+        project.name = new_name
+        self.save_project(project)
+        return project
+
+    def rename_thread(self, project: ProjectSpace, thread_id: str, new_title: str) -> ProjectThread | None:
+        new_title = new_title.strip()
+        if not new_title:
+            return None
+        if len(new_title) > 72:
+            new_title = new_title[:72].rstrip()
+        thread = self.load_thread(project, thread_id)
+        if thread is None:
+            return None
+        thread.title = new_title
+        self.save_thread(project, thread)
+        return thread
+
     def _prune_stale_index_entries(self, root_path: Path, keep_id: str) -> None:
         """Remove index entries with the same canonical root but a different ID."""
         index = self._load_index()
