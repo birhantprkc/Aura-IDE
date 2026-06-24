@@ -15,7 +15,10 @@ def compute_dependents(
         from aura.code_intel.index import CodeIntelIndex
 
         index = CodeIntelIndex(workspace_root)
-        index.refresh(changed_files=files if force_graph else None)
+        # Full refresh first for blast-radius context
+        index.refresh()
+        # Re-parse the specific files
+        index.refresh(changed_files=files)
         dependents: set[str] = set()
 
         for path_str in files:

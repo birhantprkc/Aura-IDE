@@ -1,7 +1,7 @@
 """Structural audit API — cheap deterministic checks on changed files.
 
-``audit_changed_files`` compares old-vs-new symbols for removed exports,
-stale references in downstream dependents, and parse failures.
+Detects parse failures in changed files.  Blast-radius context is computed
+for future export/stale-reference checks (not yet implemented).
 """
 
 from __future__ import annotations
@@ -22,9 +22,10 @@ def audit_changed_files(
 
     Steps:
 
-    1. Build/refresh a :class:`CodeIntelIndex` for the workspace.
-    2. For each changed file, re-parse and compare symbols.
-    3. For each dependent in the blast radius, check for stale references.
+    1. Build/refresh a :class:`CodeIntelIndex` for the workspace (full
+       refresh for blast-radius context, then re-parse changed files).
+    2. For each changed file, check indexability and emit parse diagnostics.
+    3. Compute blast-radius dependents (future use, not yet implemented).
     4. Return findings sorted by file, then line.
 
     Returns:
@@ -39,6 +40,9 @@ def audit_changed_files(
 
     try:
         index = CodeIntelIndex(workspace_root)
+        # Full refresh first to build whole-repo context for blast radius
+        index.refresh()
+        # Then re-parse changed files specifically
         index.refresh(changed_files=changed_files)
     except Exception as exc:
         logger.warning("audit_changed_files: index refresh failed — %s", exc)
@@ -54,7 +58,7 @@ def audit_changed_files(
 
     changed_norm = {p.replace("\\", "/") for p in changed_files}
 
-    # 1. Check parse failures: re-read changed files
+    # 1. Check parse failures and diagnostics for changed files
     for path_str in changed_norm:
         file_info = index.get_file(path_str)
         if file_info is None:
@@ -67,8 +71,20 @@ def audit_changed_files(
                     kind="parse_failure",
                 )
             )
+        else:
+            # Report any parse diagnostics for this file
+            for diag in index.get_diagnostics(path_str):
+                findings.append(
+                    AuditFinding(
+                        file=diag.file or path_str,
+                        line=diag.line,
+                        message=diag.message,
+                        severity=diag.severity or "warning",
+                        kind="parse_failure",
+                    )
+                )
 
-    # 2. Blast radius: check downstream files for stale references
+    # 2. Compute blast radius for future export/stale-reference checks
     blast: set[str] = set()
     for path_str in changed_norm:
         try:
@@ -82,13 +98,5 @@ def audit_changed_files(
 
     # Subtract the changed files themselves
     blast -= changed_norm
-
-    for dep_path in sorted(blast):
-        try:
-            refs = index._refs.get(dep_path, [])
-            if not refs:
-                continue
-        except Exception:
-            continue
 
     return sorted(findings, key=lambda f: (f.file, f.line or 0))

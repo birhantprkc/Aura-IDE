@@ -70,16 +70,17 @@ ADAPTER_REGISTRY: list[CodeIntelAdapter] = []
 def register_adapter(adapter: CodeIntelAdapter) -> None:
     """Register a code-intelligence adapter.
 
-    Adapters are checked in registration order; the *last* registered adapter
-    that matches a file wins.  The generic ``text`` adapter should be
-    registered last so that it acts as the fallback.
+    Adapters are checked in reverse registration order; the **last**
+    registered adapter that matches a file wins.  Register the generic
+    ``text`` adapter first so that more specific adapters registered
+    later can override it.
     """
     ADAPTER_REGISTRY.append(adapter)
 
 
 def get_adapter(file_path: str, content: str | None = None) -> CodeIntelAdapter | None:
-    """Return the first adapter that claims the given file, or None."""
-    for adapter in ADAPTER_REGISTRY:
+    """Return the last registered adapter that claims the given file, or None."""
+    for adapter in reversed(ADAPTER_REGISTRY):
         if adapter.detect(file_path, content=content):
             return adapter
     return None

@@ -55,6 +55,8 @@ class CodeIntelIndex:
         self._dep_edges: dict[str, set[str]] = defaultdict(set)
         # Reverse: file -> set[file] that depend on it
         self._rev_dep_edges: dict[str, set[str]] = defaultdict(set)
+        # path -> list[ParseDiagnostic] from last parse
+        self._diagnostics: dict[str, list[Any]] = {}
 
     # -- public API ---------------------------------------------------------
 
@@ -146,6 +148,15 @@ class CodeIntelIndex:
         visited.discard(path)
         return sorted(visited)
 
+    def get_diagnostics(self, path: str) -> list[Any]:
+        """Return list of ParseDiagnostic for *path*, or [].
+
+        Lazy-parses the file if not already indexed.
+        """
+        if path not in self._diagnostics:
+            self._lazy_parse(path)
+        return list(self._diagnostics.get(path, []))
+
     # -- internal: lazy single-file parse -----------------------------------
 
     def _lazy_parse(self, path: str) -> None:
@@ -200,9 +211,12 @@ class CodeIntelIndex:
         self._outlines[path] = adapter.outline(path, content)
 
         # --- Symbols & reference edges ---
-        symbols, refs, _diags = adapter.parse(path, content)
+        symbols, refs, diags = adapter.parse(path, content)
         self._symbols[path] = symbols
         self._refs[path] = refs
+
+        # --- Parse diagnostics ---
+        self._diagnostics[path] = diags
 
         # Update symbol definition indices
         for sym in symbols:
@@ -327,6 +341,7 @@ class CodeIntelIndex:
             self._outlines.pop(norm, None)
             self._symbols.pop(norm, None)
             self._refs.pop(norm, None)
+            self._diagnostics.pop(norm, None)
 
             # Re-parse
             abs_path = self._root / norm
