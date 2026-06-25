@@ -567,6 +567,15 @@ def build_tier1_context(workspace_root: Path, force: bool = False) -> str:
     except Exception:
         logger.debug("Drone construction context unavailable", exc_info=True)
 
+    # 6. Hazard guard context
+    try:
+        from aura.hazard.guard_text import build_hazard_guard_context
+        guard_ctx = build_hazard_guard_context(workspace_root)
+        if guard_ctx:
+            parts.append(guard_ctx)
+    except Exception:
+        logger.debug("Hazard guard context unavailable", exc_info=True)
+
     return "\n\n".join(parts)
 
 

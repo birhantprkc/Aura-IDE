@@ -789,6 +789,17 @@ class _DispatchProxy(QObject):
         if self._workspace_root is not None:
             from aura.conversation.persistence import save_dispatch_record_to_memory
             save_dispatch_record_to_memory(record, self._workspace_root)
+            from aura.hazard.capture import record_hazard
+            record_hazard(
+                workspace_root=self._workspace_root,
+                model=str(self._worker_model),
+                status=status,
+                structured_failure=structured_failure,
+                target_files=spec_dict.get("files") or [],
+                task_shape=task_shape_summary,
+                errors=result_errors,
+                tool_call_id=tool_call_id,
+            )
 
         self._result_metadata[tool_call_id] = {
             "modified_files": modified_files,
