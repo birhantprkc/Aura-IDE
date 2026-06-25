@@ -390,7 +390,6 @@ WORKER_SYSTEM_PROMPT = (
     TIER1_CONTEXT_PLACEHOLDER + "\n"
     + _SHARED_WORKSPACE_RULES + "\n\n"
     + _CODE_CRAFT + "\n\n"
-    + _CODE_STYLE_EXAMPLES + "\n\n"
     + _TOOL_EFFICIENCY_RULES + "\n\n"
     + _WORKER_OPS + "\n\n"
     + _WORKER_BLOCK

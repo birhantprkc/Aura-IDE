@@ -971,18 +971,37 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
         "Builder Note",
         task.builder_note,
         "",
-        "Allowed Responsibilities",
-        _lines(task.allowed_responsibilities),
-        "",
-        "Forbidden Responsibilities",
-        _lines(task.forbidden_responsibilities),
-        "",
-        "Required Outputs",
-        _lines(task.required_outputs),
-        "",
-        "Non-Goals",
-        _lines(task.non_goals),
-        "",
+    ])
+
+    if task.allowed_responsibilities:
+        parts.extend([
+            "Allowed Responsibilities",
+            _lines(task.allowed_responsibilities),
+            "",
+        ])
+
+    if task.forbidden_responsibilities:
+        parts.extend([
+            "Forbidden Responsibilities",
+            _lines(task.forbidden_responsibilities),
+            "",
+        ])
+
+    if task.required_outputs:
+        parts.extend([
+            "Required Outputs",
+            _lines(task.required_outputs),
+            "",
+        ])
+
+    if task.non_goals:
+        parts.extend([
+            "Non-Goals",
+            _lines(task.non_goals),
+            "",
+        ])
+
+    parts.extend([
         "Acceptance / Validation",
         task.acceptance,
     ])
@@ -998,36 +1017,7 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
 
     parts.extend([
         "",
-        "Worker Contract",
-        "- Read each target before editing it.",
-        "- Small files can use read_file or read_files.",
-        "- Large files and scoped targets use read_file_outline to navigate, then read_file_range around the edit region.",
-        "- Use the returned content_hash from the latest successful read_file, read_files, or read_file_range result as expected_file_hash on patch_file.",
-        "- If read_file returns truncated: true, treat it as navigation context only; read the actual edit region with read_file_range and use that range read's content_hash before patch_file.",
-        "- Do not move unrelated behavior into entry points.",
-        "- Do not create demo, prototype, or phase files unless explicitly requested.",
-        "- Do not invent broad architecture outside the task scope.",
-        "- Do not hide failure behind success-looking output.",
-        "- Do not satisfy acceptance with placeholder behavior.",
-        "- If a requested responsibility does not belong in a listed file, inspect and choose the smallest correct neighboring module, or report the mismatch.",
-        "- Use update_todo_list for broad or risky work; small localized tasks may proceed directly after reading.",
-        "- Use patch_file for existing-file edits after reading the file or target range.",
-        "- Use write_file only for new files or intentional full-file replacement.",
-        "- Use delete_file for intentional file removals; do not use terminal rm/del as the primary deletion path.",
-        "- If patch_file reports a hash mismatch or hunk failure, re-read the file and retry patch_file once with the new expected_file_hash; do not switch between edit tools.",
-        "- Build the smallest complete implementation.",
-        "- Own exact edits, validation, and code-quality decisions.",
-        "- Use grep_search for discovery; use read_file or read_file_range for exact known-file verification.",
-        "- For absent-pattern validation, make intended no-match exit 0.",
-        "- Code must work and be easy to work on.",
-        "- Avoid public-library, tutorial, or demo ceremony unless requested.",
-        "- Avoid module summary docstrings and Args/Returns/Raises in normal app/tool code.",
-        "- Do not add fake architecture.",
-        "- Helpers return values or raise; CLI/UI/app boundary reports.",
-        "- Validate actual behavior when practical.",
-        "- Do not report Done unless acceptance passed.",
-        "",
-        "Begin. Read the listed files first, then make the change(s).",
+        "Begin.",
     ])
 
     return "\n".join(parts)
