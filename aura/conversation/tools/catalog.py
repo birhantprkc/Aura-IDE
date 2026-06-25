@@ -1,4 +1,4 @@
-"""Tool catalog — builds the list of tool schemas for the current mode/read-only state."""
+"""Tool catalog - builds the list of tool schemas for the current mode/read-only state."""
 
 from __future__ import annotations
 
@@ -16,11 +16,9 @@ from aura.conversation.tools._schemas import (
     DISPATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
     READ_TOOL_DEFS,
-    RESEARCH_TOOL_DEFS,
     RUN_AND_WATCH_TOOL_DEF,
     SUMMON_DRONE_TOOL_DEF,
     TERMINAL_TOOL_DEF,
-    WEB_TOOL_DEFS,
     WORKER_TODO_TOOL_DEF,
     WORKSPACE_SNAPSHOT_TOOL_DEF,
     WRITE_TOOL_DEFS,
@@ -57,11 +55,7 @@ def _tool_name(tool_def: dict[str, Any]) -> str:
 
 
 class ToolCatalog:
-    """Builds the list of available tool schemas for the current mode/read-only state.
-
-    Given mode, read-only state, dynamic schemas, and MCP schemas,
-    returns the complete list of tool definitions for the API.
-    """
+    """Builds the available tool schemas for the current mode/read-only state."""
 
     def build_tool_defs(
         self,
@@ -71,23 +65,9 @@ class ToolCatalog:
         dynamic_schemas: list[dict[str, Any]] | None = None,
         mcp_schemas: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Build tool definitions for the given mode and state.
-
-        Args:
-            mode: The current registry mode.
-            read_only: If True, only read and git tools are returned.
-            dynamic_schemas: Schemas from dynamic (user) tools.
-            mcp_schemas: Schemas from connected MCP servers.
-
-        Returns:
-            A list of OpenAI-compatible tool definition dicts.
-        """
-        # Read-only is the safety floor — strips writes AND dispatch (since
-        # there's nothing for a worker to do without writes).
+        """Build tool definitions for the given mode and state."""
         if read_only:
             tools: list[dict[str, Any]] = list(READ_TOOL_DEFS) + list(GIT_TOOL_DEFS)
-        elif mode == "researcher":
-            tools = list(WEB_TOOL_DEFS) + list(READ_TOOL_DEFS)
         elif mode == "planner":
             planner_read_tools = [
                 tool for tool in READ_TOOL_DEFS if _tool_name(tool) in PLANNER_TOOL_NAMES
@@ -104,10 +84,8 @@ class ToolCatalog:
                 + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(CHECK_DRONE_RUN_TOOL_DEF)]
                 + [dict(DECLARE_UI_CONTRACT_TOOL_DEF)]
-                + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
-
             )
         elif mode == "worker":
             worker_write_tools = [
@@ -121,32 +99,27 @@ class ToolCatalog:
                 + [dict(TERMINAL_TOOL_DEF)]
                 + [dict(RUN_AND_WATCH_TOOL_DEF)]
                 + list(GIT_TOOL_DEFS)
-                + list(RESEARCH_TOOL_DEFS)
                 + [dict(LAUNCH_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(CHECK_DRONE_RUN_TOOL_DEF)]
                 + [dict(REGISTER_DRONE_FOLDER_TOOL_DEF)]
             )
-        else:  # "single" or any unknown mode
+        else:
             tools = (
                 list(READ_TOOL_DEFS)
                 + list(WRITE_TOOL_DEFS)
                 + [dict(TERMINAL_TOOL_DEF)]
                 + [dict(RUN_AND_WATCH_TOOL_DEF)]
                 + list(GIT_TOOL_DEFS)
-                + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
                 + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(REGISTER_DRONE_FOLDER_TOOL_DEF)]
             )
 
-        # Append dynamic tools (only when not read-only)
         if not read_only and mode != "planner" and dynamic_schemas:
             tools.extend(dynamic_schemas)
 
-        # Append MCP tool schemas outside planner mode. Planner keeps a small,
-        # non-mutating dispatch surface; workers/single mode retain extensions.
         if mode != "planner" and mcp_schemas:
             tools.extend(mcp_schemas)
 
