@@ -112,21 +112,6 @@ from aura.conversation.worker_recovery_state import (
     pop_normalized_recovery_key,
     record_reads_for_recovery,
 )
-from aura.conversation.worker_smoothness import (
-    WorkerSmoothnessState,
-)
-from aura.conversation.worker_smoothness import (
-    note_validation_result as _note_validation_result,
-)
-from aura.conversation.worker_smoothness import (
-    observe_tool_result as _observe_tool_result,
-)
-from aura.conversation.worker_smoothness import (
-    phase_boundary_payload as _smoothness_phase_boundary_payload,
-)
-from aura.conversation.worker_smoothness import (
-    precheck_tool as _precheck_tool,
-)
 from aura.conversation.worker_stream_buffer import WorkerStreamBuffer
 from aura.conversation.worker_validation import (
     emit_auto_dependent_import_info,
@@ -212,16 +197,6 @@ WORKER_LAUNCH_FAILURE_INSTRUCTION = (
     "Diagnostic output:\n{output}"
 )
 
-WORKER_SMOOTHNESS_PHASE_BOUNDARY_INSTRUCTION = (
-    "Worker paused before thrashing.\n"
-    "Progress made: {progress_note}\n"
-    "Reason: {reason}\n"
-    "Next: planner should redispatch with a narrower target or "
-    "explicit validation command."
-)
-
-
-
 class ConversationManager:
     def __init__(
         self,
@@ -283,7 +258,6 @@ class ConversationManager:
         reject_all_for_turn = False
         mode = getattr(self._tools, "mode", "single")
         limits = ToolLimitState(mode=mode)
-        smoothness = WorkerSmoothnessState() if mode == "worker" else None
         stream_buffer = WorkerStreamBuffer() if mode == "worker" else None
         candidate_final_message: dict[str, Any] | None = None
         rounds_used = 0
@@ -313,20 +287,6 @@ class ConversationManager:
             candidate_final_message = None
             if stream_buffer is not None:
                 stream_buffer.discard()
-
-        def smoothness_boundary_instruction(info: dict[str, Any]) -> str:
-            details = info.get("details") if isinstance(info.get("details"), dict) else {}
-            progress_note = str(details.get("last_progress_note") or "none recorded")
-            reason = str(
-                details.get("budget_reason")
-                or info.get("message")
-                or info.get("reason")
-                or "budget reached"
-            )
-            return WORKER_SMOOTHNESS_PHASE_BOUNDARY_INSTRUCTION.format(
-                progress_note=progress_note,
-                reason=reason,
-            )
 
         while True:
             if (
@@ -749,13 +709,6 @@ class ConversationManager:
                             workspace_root=Path(self._tools.workspace_root),
                             commands=explicit_validation_commands,
                         )
-                        if smoothness is not None:
-                            _note_validation_result(
-                                smoothness,
-                                gate="explicit_validation",
-                                ok=val_result.ok,
-                                diagnostics=val_result.diagnostics,
-                            )
                         if not val_result.ok:
                             emit_explicit_validation_result(
                                 command=val_result.command,
@@ -773,8 +726,6 @@ class ConversationManager:
                             continue
                     # All gates passed — release candidate final and flush buffer
                     if candidate_final_message is not None:
-                        if smoothness is not None:
-                            _note_validation_result(smoothness, gate="final", ok=True)
                         self._history.append_assistant(candidate_final_message)
                         candidate_final_message = None
                     if stream_buffer is not None:
@@ -849,14 +800,6 @@ class ConversationManager:
                             _worker_phase_boundary_info = blocked_payload
                         return blocked
 
-                # Smoothness precheck — after recovery block which takes priority
-                if mode == "worker" and smoothness is not None:
-                    decision = _precheck_tool(smoothness, name=name, args=args)
-                    if not decision.allowed:
-                        payload = _smoothness_phase_boundary_payload(decision)
-                        _worker_phase_boundary_info = payload
-                        return blocked_tool_result(tool_call_id, name, payload)
-
                 if name == "dispatch_to_worker":
                     result = self._tool_runner.handle_dispatch(
                         tool_call_id=tool_call_id,
@@ -919,25 +862,6 @@ class ConversationManager:
                         cancel_event=cancel_event,
                         declared_run_command=declared_run_command or "",
                     )
-                    if mode == "worker" and smoothness is not None:
-                        terminal_payload = (
-                            loop_info.get("_terminal_payload")
-                            if isinstance(loop_info, dict)
-                            else None
-                        )
-                        decision = _observe_tool_result(
-                            smoothness,
-                            name=name,
-                            args=args,
-                            ok=bool(
-                                terminal_payload.get("ok")
-                                if isinstance(terminal_payload, dict)
-                                else loop_info and loop_info.get("ok")
-                            ),
-                            payload_text=json.dumps(loop_info) if loop_info else "",
-                        )
-                        if decision.phase_boundary:
-                            _worker_phase_boundary_info = _smoothness_phase_boundary_payload(decision)
                     return {
                         "id": tool_call_id,
                         "skip": True,
@@ -964,27 +888,6 @@ class ConversationManager:
                         )
                     if is_recoverable_phase_boundary(loop_info):
                         _worker_phase_boundary_info = loop_info
-                    # Smoothness observe for terminal commands
-                    if mode == "worker" and smoothness is not None:
-                        terminal_payload = (
-                            loop_info.get("_terminal_payload")
-                            if isinstance(loop_info, dict)
-                            else None
-                        )
-                        payload_text = json.dumps(loop_info) if loop_info else ""
-                        decision = _observe_tool_result(
-                            smoothness,
-                            name=name,
-                            args=args,
-                            ok=bool(
-                                terminal_payload.get("ok")
-                                if isinstance(terminal_payload, dict)
-                                else loop_info and loop_info.get("ok")
-                            ),
-                            payload_text=payload_text,
-                        )
-                        if decision.phase_boundary:
-                            _worker_phase_boundary_info = _smoothness_phase_boundary_payload(decision)
                     return {
                         "id": tool_call_id,
                         "skip": True,
@@ -1051,18 +954,6 @@ class ConversationManager:
                 )
                 tool_msg_content = loop_result["content"]
                 loop_info = loop_result["info"]
-
-                # Smoothness observation — after tool result is fully processed
-                if mode == "worker" and smoothness is not None:
-                    decision = _observe_tool_result(
-                        smoothness,
-                        name=name,
-                        args=args,
-                        ok=exec_result.ok,
-                        payload_text=tool_msg_content,
-                    )
-                    if decision.phase_boundary:
-                        _worker_phase_boundary_info = _smoothness_phase_boundary_payload(decision)
 
                 if is_recoverable_phase_boundary(loop_info):
                     _worker_phase_boundary_info = loop_info
@@ -1160,11 +1051,7 @@ class ConversationManager:
 
             if _worker_phase_boundary_info is not None:
                 worker_phase_boundary_info = _worker_phase_boundary_info
-                if worker_phase_boundary_info.get("smoothness_phase_boundary"):
-                    self._history.append_user_text(
-                        smoothness_boundary_instruction(worker_phase_boundary_info)
-                    )
-                elif worker_phase_boundary_info.get("message"):
+                if worker_phase_boundary_info.get("message"):
                     self._history.append_user_text(str(worker_phase_boundary_info["message"]))
                 worker_needs_final_report = True
                 continue

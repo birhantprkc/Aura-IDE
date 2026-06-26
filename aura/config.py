@@ -288,7 +288,7 @@ PRICING: dict[str, dict[str, float]] = dict(provider_registry.get("deepseek").pr
 
 # Hard limits
 
-MAX_TOOL_ROUNDS = 50
+MAX_TOOL_ROUNDS = 300
 MAX_READ_BYTES = 200 * 1024
 MAX_GLOB_RESULTS = 200
 MAX_CONTEXT_TOKENS = 60_000

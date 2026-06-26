@@ -79,7 +79,7 @@ class AppSettings:
     auto_approve: bool = False
     auto_summon_drones: bool = False
     sandbox_mode: str = DEFAULT_SANDBOX_MODE
-    max_tool_rounds: int = 50
+    max_tool_rounds: int = 300
     aura_pending_session_id: str = ""
     aura_pending_claim_secret: str = ""
     terminal_window_geometry: str = ""
