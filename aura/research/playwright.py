@@ -5,15 +5,12 @@ Uses ``playwright.sync_api`` directly. No MCP dependency.
 
 from __future__ import annotations
 
-import os
-import sys
 import urllib.parse
 
+from aura.browser.runtime import BrowserRuntime
 from aura.research.extract import ParsedPage, normalize_text
 from aura.research.limits import DEFAULT_LIMITS, ResearchLimits
 from aura.research.models import Source
-from aura.resources import get_resource_path
-
 
 _BING_CHROME_TITLES = {
     "all",
@@ -45,9 +42,7 @@ class PlaywrightResearcher:
     ) -> None:
         self._limits = limits
         self._unavailable_reason = ""
-        self._pw = None
-        self._browser = None
-        self._context = None
+        self._runtime = BrowserRuntime(headless=True)
 
     # -- Lifecycle -------------------------------------------------------
 
@@ -57,43 +52,15 @@ class PlaywrightResearcher:
         Returns True on success.  On failure sets ``_unavailable_reason``
         and returns False — never raises.
         """
-        try:
-            try:
-                import playwright.sync_api  # noqa: F811
-            except ImportError as exc:
-                self._unavailable_reason = str(exc)
-                return False
-
-            # Determine if running packaged
-            if getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS") or "__compiled__" in globals():
-                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(get_resource_path("ms-playwright"))
-
-            self._pw = playwright.sync_api.sync_playwright().start()
-            self._browser = self._pw.chromium.launch(headless=True)
-            self._context = self._browser.new_context()
-            self._context.set_default_navigation_timeout(20000)
-            return True
-        except Exception as exc:
-            self._unavailable_reason = str(exc)
-            # Tear down partial state — we are already in the error path
-            self._context = None
-            self._browser = None
-            if self._pw is not None:
-                self._pw.stop()
-                self._pw = None
+        if not self._runtime.start():
+            self._unavailable_reason = self._runtime.unavailable_reason
             return False
+        self._runtime.context.set_default_navigation_timeout(20000)
+        return True
 
     def close(self) -> None:
         """Shut down the browser and clean up resources."""
-        if self._context is not None:
-            self._context.close()
-            self._context = None
-        if self._browser is not None:
-            self._browser.close()
-            self._browser = None
-        if self._pw is not None:
-            self._pw.stop()
-            self._pw = None
+        self._runtime.close()
 
     # -- Public API ------------------------------------------------------
 
@@ -102,10 +69,10 @@ class PlaywrightResearcher:
 
         Returns an empty list when the researcher is not started or on error.
         """
-        if self._context is None:
+        if self._runtime.context is None:
             return []
 
-        page = self._context.new_page()
+        page = self._runtime.context.new_page()
         try:
             encoded = urllib.parse.quote(query)
             url = f"https://www.bing.com/search?q={encoded}"
@@ -161,10 +128,10 @@ class PlaywrightResearcher:
         Returns an error-indicating ParsedPage when the researcher is
         not started or on error.
         """
-        if self._context is None:
+        if self._runtime.context is None:
             return ParsedPage(clean_text="Researcher not started")
 
-        page = self._context.new_page()
+        page = self._runtime.context.new_page()
         try:
             page.goto(url)
             final_url = page.url

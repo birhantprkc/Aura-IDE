@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 _DRONE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _WRITE_POLICIES = {"read_only", "ask_before_writes", "normal_diff_approval"}
-_VALID_KINDS = frozenset({"command", "harness-lap"})
+_VALID_KINDS = frozenset({"command", "harness-lap", "browse"})
 def _is_safe_drone_id(drone_id: str) -> bool:
     return bool(_DRONE_ID_RE.fullmatch(str(drone_id or "")))
 

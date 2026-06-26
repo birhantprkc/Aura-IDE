@@ -94,6 +94,9 @@ class DroneRunner(QObject):
     def cancel(self) -> None:
         self._run.cancel()
 
+    def _is_browse_drone(self) -> bool:
+        return self._drone.kind == "browse"
+
     def _is_harness_lap_drone(self) -> bool:
         if self._drone.kind == "harness-lap":
             return True
@@ -200,6 +203,31 @@ class DroneRunner(QObject):
 
         findings.sort(key=lambda f: _oldest_attempt(f.path))
         return findings[0].path
+
+    def _run_browse_drone(self) -> None:
+        """Run an in-process placeholder browse drone."""
+        self.contentDelta.emit("Browse drone scaffold ready.")
+        receipt = DroneReceipt(
+            run_id=self._run.run_id,
+            drone_id=self._drone.id,
+            drone_name=self._drone.name,
+            status="completed",
+            started_at=dt.datetime.fromtimestamp(
+                self._run.started_at, tz=dt.timezone.utc
+            ).isoformat(),
+            ended_at=dt.datetime.now(tz=dt.timezone.utc).isoformat(),
+            summary="Browse scaffold ready.",
+            produced_artifact={
+                "kind": "browse",
+                "status": "scaffold_ready",
+                "objective": self._drone.instructions,
+            },
+            elapsed_seconds=self._run.elapsed_seconds,
+        )
+        RunHistoryStore.save_run(self._workspace_root, receipt)
+        self.receiptReady.emit(receipt)
+        self._run.mark("completed")
+        self.statusChanged.emit("completed")
 
     def _run_harness_lap(self) -> None:
         if self._harness_bridge is None:
@@ -666,6 +694,9 @@ class DroneRunner(QObject):
         self._run.mark("running")
         self.statusChanged.emit("running")
         try:
+            if self._is_browse_drone():
+                self._run_browse_drone()
+                return
             if self._is_harness_lap_drone():
                 self._run_harness_lap()
                 return
