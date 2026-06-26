@@ -31,6 +31,8 @@ class ResearchHandlersMixin:
             payload={
                 "ok": result.ok,
                 "query": result.query,
+                "source_count": len(result.sources),
+                "evidence_count": len(result.evidence),
                 "sources": [asdict(s) for s in result.sources],
                 "evidence": [asdict(e) for e in result.evidence],
                 "notes": result.notes,
