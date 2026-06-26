@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import re as _re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -88,15 +89,18 @@ def load_monitor_state(workspace_root: Path) -> dict[str, Any]:
 
 
 def save_monitor_state(workspace_root: Path, state: dict[str, Any]) -> None:
-    """Persist the monitor state dict to disk.
+    """Persist the monitor state dict to disk atomically.
 
     Creates parent directories if needed.
     Writes JSON with ``indent=2`` and sorted keys.
+    Uses a tempfile + replace pattern for atomic writes.
     """
     path = monitor_store_path(workspace_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".json")
+    with open(fd, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, sort_keys=True, ensure_ascii=False)
+    Path(tmp_path).replace(path)
 
 
 def update_monitor_fingerprint(
@@ -159,3 +163,42 @@ def update_monitor_fingerprint(
         "state": state,
         "changed_at": now_iso,
     }
+
+
+def apply_monitor_to_artifact(
+    artifact: dict[str, Any],
+    *,
+    workspace_root: Path,
+    monitor_key: str,
+    monitor_fields: list[str] | None = None,
+    monitor_excerpt_chars: int = 2000,
+    snapshot: BrowseSnapshot | dict | None = None,
+) -> str:
+    """Apply monitor fingerprint to an artifact dict.
+
+    When *snapshot* is not ``None``, calls :func:`update_monitor_fingerprint`
+    and stores the result in ``artifact["monitor"]``.
+
+    When *snapshot* is ``None``, sets ``artifact["monitor"]`` to a
+    ``not_checked`` placeholder.
+
+    Returns the verdict string (empty string for ``not_checked``).
+    """
+    if snapshot is not None:
+        result = update_monitor_fingerprint(
+            workspace_root=workspace_root,
+            monitor_key=monitor_key,
+            snapshot=snapshot,
+            fields=monitor_fields,
+            excerpt_chars=monitor_excerpt_chars,
+        )
+        artifact["monitor"] = result
+        return result["verdict"]
+
+    artifact["monitor"] = {
+        "enabled": True,
+        "monitor_key": monitor_key,
+        "verdict": "not_checked",
+        "reason": "No snapshot available",
+    }
+    return ""

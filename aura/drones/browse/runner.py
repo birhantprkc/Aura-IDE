@@ -20,6 +20,7 @@ from aura.drones.browse.models import BrowseCandidate
 from aura.drones.browse.policy import PolicyResult, classify_action
 from aura.drones.browse.profiles import ensure_profile_dir
 from aura.drones.browse.snapshot import capture_snapshot, extract_candidates, find_candidate
+from aura.drones.browse.monitor import apply_monitor_to_artifact
 from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
@@ -43,6 +44,11 @@ def _read_browse_settings(permissions: dict) -> dict:
         "login_required_text": permissions.get("login_required_text", ["log in", "sign in"]),
         "login_session": bool(permissions.get("login_session", False)),
         "login_wait_seconds": int(permissions.get("login_wait_seconds", 900)),
+        # Monitor fingerprint settings
+        "monitor_key": permissions.get("monitor_key") or None,
+        "monitor_enabled": bool(permissions.get("monitor_enabled", False)),
+        "monitor_fields": permissions.get("monitor_fields", ["title", "url", "body_excerpt"]),
+        "monitor_excerpt_chars": int(permissions.get("monitor_excerpt_chars", 2000)),
     }
 
 
@@ -244,6 +250,12 @@ def run_browse_drone(
     login_session_flag: bool = settings["login_session"]
     login_wait_seconds: int = settings["login_wait_seconds"]
 
+    # Monitor settings
+    monitor_key: str | None = settings["monitor_key"]
+    monitor_enabled: bool = settings["monitor_enabled"]
+    monitor_fields: list[str] = settings["monitor_fields"]
+    monitor_excerpt_chars: int = settings["monitor_excerpt_chars"]
+
     # --- Login session mode ---
     if login_session_flag:
         _run_login_session_mode(
@@ -280,6 +292,17 @@ def run_browse_drone(
             errors=[runtime.unavailable_reason],
             profile_metadata=profile_metadata,
         )
+        if monitor_enabled and monitor_key:
+            verdict = apply_monitor_to_artifact(
+                receipt.produced_artifact,
+                workspace_root=workspace_root,
+                monitor_key=monitor_key,
+                monitor_fields=monitor_fields,
+                monitor_excerpt_chars=monitor_excerpt_chars,
+                snapshot=None,
+            )
+            if verdict:
+                receipt.summary += f" [monitor: {verdict}]"
         on_receipt(receipt)
         RunHistoryStore.save_run(workspace_root, receipt)
         run.mark("failed")
@@ -328,6 +351,15 @@ def run_browse_drone(
                 browser_profile=browser_profile,
                 visible=visible,
             )
+            if monitor_enabled and monitor_key:
+                apply_monitor_to_artifact(
+                    produced_artifact,
+                    workspace_root=workspace_root,
+                    monitor_key=monitor_key,
+                    monitor_fields=monitor_fields,
+                    monitor_excerpt_chars=monitor_excerpt_chars,
+                    snapshot=before_snapshot,
+                )
             ended = dt.datetime.now(dt.timezone.utc).isoformat()
             receipt = DroneReceipt(
                 run_id=run.run_id,
@@ -342,6 +374,10 @@ def run_browse_drone(
                 produced_artifact=produced_artifact,
                 elapsed_seconds=run.elapsed_seconds,
             )
+            if monitor_enabled and monitor_key:
+                verdict = produced_artifact.get("monitor", {}).get("verdict", "")
+                if verdict:
+                    receipt.summary += f" [monitor: {verdict}]"
             on_receipt(receipt)
             RunHistoryStore.save_run(workspace_root, receipt)
             run.mark("completed")
@@ -477,6 +513,21 @@ def run_browse_drone(
                 profile_metadata=profile_metadata,
             )
 
+        # --- Monitor fingerprint ---
+        if monitor_enabled and monitor_key:
+            if policy_block is not None:
+                snap_for_monitor = before_snapshot
+            else:
+                snap_for_monitor = after_snapshot if after_snapshot is not None else before_snapshot
+            apply_monitor_to_artifact(
+                produced_artifact,
+                workspace_root=workspace_root,
+                monitor_key=monitor_key,
+                monitor_fields=monitor_fields,
+                monitor_excerpt_chars=monitor_excerpt_chars,
+                snapshot=snap_for_monitor,
+            )
+
         ended = dt.datetime.now(dt.timezone.utc).isoformat()
         receipt = DroneReceipt(
             run_id=run.run_id,
@@ -491,6 +542,10 @@ def run_browse_drone(
             produced_artifact=produced_artifact,
             elapsed_seconds=run.elapsed_seconds,
         )
+        if monitor_enabled and monitor_key:
+            verdict = produced_artifact.get("monitor", {}).get("verdict", "")
+            if verdict:
+                receipt.summary += f" [monitor: {verdict}]"
         on_receipt(receipt)
         RunHistoryStore.save_run(workspace_root, receipt)
         run.mark("completed")
@@ -514,6 +569,17 @@ def run_browse_drone(
             ],
             profile_metadata=profile_metadata,
         )
+        if monitor_enabled and monitor_key:
+            verdict = apply_monitor_to_artifact(
+                receipt.produced_artifact,
+                workspace_root=workspace_root,
+                monitor_key=monitor_key,
+                monitor_fields=monitor_fields,
+                monitor_excerpt_chars=monitor_excerpt_chars,
+                snapshot=None,
+            )
+            if verdict:
+                receipt.summary += f" [monitor: {verdict}]"
         on_receipt(receipt)
         RunHistoryStore.save_run(workspace_root, receipt)
         run.mark("failed")
