@@ -351,6 +351,52 @@ def bundle_chromium(final_dist_dir: Path, python_exe: Path) -> None:
     print(f"Chromium bundled: {len(entries)} file(s) in {browsers_dir}")
 
 
+def validate_playwright_bundle(final_dist_dir: Path, python_exe: Path) -> None:
+    """Validate Playwright is properly bundled in the dist.
+
+    Checks:
+    1. Bundled Chromium exists at ms-playwright/chromium-*
+    2. import playwright + playwright.sync_api + greenlet + pyee work
+    """
+    browsers_dir = final_dist_dir / "ms-playwright"
+
+    # Check 1: Verify bundled Chromium
+    if not browsers_dir.exists():
+        raise SystemExit(
+            "Playwright bundle validation FAILED: ms-playwright directory not found.\n"
+            "Chromium was not bundled. Run bundle_chromium() before validation."
+        )
+    chromium_dirs = list(browsers_dir.glob("chromium-*"))
+    if not chromium_dirs:
+        raise SystemExit(
+            "Playwright bundle validation FAILED: no chromium-* directory in ms-playwright.\n"
+            "Chromium install produced no browser entry."
+        )
+    print(f"Playwright bundle: Chromium found ({chromium_dirs[0].name})")
+
+    # Check 2: Verify playwright + greenlet + pyee are importable from the build venv
+    print("Validating Playwright imports...")
+    import_script = (
+        "import sys; "
+        "import playwright; print('playwright:', playwright.__file__); "
+        "import playwright.sync_api; print('sync_api: OK'); "
+        "import greenlet; print('greenlet:', greenlet.__file__); "
+        "import pyee; print('pyee:', pyee.__file__)"
+    )
+    try:
+        result = subprocess.run(
+            [str(python_exe), "-c", import_script],
+            check=True, capture_output=True, text=True, timeout=30,
+        )
+        for line in result.stdout.strip().splitlines():
+            print(f"  {line}")
+    except subprocess.CalledProcessError as exc:
+        print(f"Playwright import validation FAILED:\n{exc.stdout}\n{exc.stderr}")
+        raise SystemExit("Playwright bundle validation failed: imports broken.")
+
+    print("Playwright bundle validation: OK")
+
+
 def zip_distribution(root: Path, final_dist_dir: Path) -> Path:
     """Package Aura.dist into a ZIP."""
     zip_base = root / OUTPUT_DIR / "Aura-Windows-x64"
@@ -510,6 +556,8 @@ def create_nuitka_command(
         f"--windows-icon-from-ico={ICON_PATH}",
         f"--include-data-dir={MEDIA_DIR}={MEDIA_DIR}",
         "--include-package=aura",
+        "--include-package=playwright",
+        "--include-package-data=playwright",
         f"--include-data-file={UPDATER_HELPER_SOURCE}={UPDATER_HELPER_DIST_NAME}",
         f"--output-dir={OUTPUT_DIR}",
         f"--output-filename={APP_NAME}",
@@ -522,7 +570,6 @@ def create_nuitka_command(
         "--nofollow-import-to=pytest",
         "--nofollow-import-to=charset_normalizer",
         "--nofollow-import-to=click",
-        "--nofollow-import-to=playwright",
         "--lto=no",
     ]
     if not fast:
@@ -677,16 +724,7 @@ def build(
     else:
         print("Warning: click is not installed in the clean environment, skipping manual bundle.")
 
-    # Copy playwright as pure Python files to avoid Nuitka compilation hang/crash
-    playwright_path = get_venv_package_path("playwright")
-    if playwright_path and playwright_path.exists():
-        target_playwright_dir: Path = final_dist_dir / "playwright"
-        print(f"Bundling playwright as raw source: {playwright_path} -> {target_playwright_dir}")
-        if target_playwright_dir.exists():
-            shutil.rmtree(target_playwright_dir)
-        shutil.copytree(playwright_path, target_playwright_dir)
-    else:
-        print("Warning: playwright is not installed in the clean environment, skipping manual bundle.")
+
 
     # Bundle .aura/drones into the dist for DroneStore runtime loading
     bundle_drones(root, final_dist_dir)
@@ -696,6 +734,9 @@ def build(
 
     # Bundle Chromium browser for Playwright
     bundle_chromium(final_dist_dir, python_exe)
+
+    # Validate Playwright bundle
+    validate_playwright_bundle(final_dist_dir, python_exe)
 
     if not installer_only:
         zip_path = zip_distribution(root, final_dist_dir)
