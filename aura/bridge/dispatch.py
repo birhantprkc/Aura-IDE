@@ -598,7 +598,8 @@ class _DispatchProxy(QObject):
                 _log.exception("Post-edit structural audit failed")
 
         # No-work detection
-        phase_boundary = relay.phase_boundary_info is not None
+        structured_phase_boundary = bool(structured_failure.get("phase_boundary"))
+        phase_boundary = relay.phase_boundary_info is not None or structured_phase_boundary
         is_implementation = not (
             "blueprint" in req.spec.lower()[:200]
             or "inspect" in req.goal.lower()[:100]
@@ -652,7 +653,8 @@ class _DispatchProxy(QObject):
             ok = False
             needs_followup = not has_internal_failure
             recoverable = (
-                has_validation_failure
+                structured_phase_boundary
+                or has_validation_failure
                 or has_source_inspection_blocker
                 or has_terminal_policy_blocker
                 or has_environment_setup_blocker
@@ -763,7 +765,18 @@ class _DispatchProxy(QObject):
             "validation_not_run": validation_not_run,
             "recoverable": recoverable,
             "needs_followup": needs_followup,
-            "phase_boundary": relay.phase_boundary_info or {},
+            "phase_boundary": relay.phase_boundary_info
+            or (
+                {
+                    "reason": structured_failure.get("followup_reason")
+                    or structured_failure.get("failure_class"),
+                    "message": structured_failure.get("error"),
+                    "recoverable": True,
+                    "phase_boundary": True,
+                }
+                if structured_phase_boundary
+                else {}
+            ),
             "task_shape": task_shape_summary,
             "limit": (
                 relay.phase_boundary_info
@@ -821,7 +834,13 @@ class _DispatchProxy(QObject):
             needs_followup=needs_followup,
             phase_boundary=phase_boundary,
             followup_reason=(
-                str(relay.phase_boundary_info.get("reason")) if relay.phase_boundary_info else None
+                str(relay.phase_boundary_info.get("reason"))
+                if relay.phase_boundary_info
+                else (
+                    str(structured_failure.get("followup_reason") or structured_failure.get("failure_class"))
+                    if structured_phase_boundary
+                    else None
+                )
             ),
             recoverable=recoverable,
             completed=continuation.get("completed", []),

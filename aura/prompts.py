@@ -60,6 +60,7 @@ Scope:
 - Do not make product decisions.
 - Do not narrate obvious steps.
 - Do not say done before validation passes.
+- Never write tool-call markup, XML, DSML, or fake tool invocation blocks in message content. Use the tool interface only.
 
 Editing:
 - Read before editing.
