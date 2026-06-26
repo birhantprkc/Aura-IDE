@@ -205,29 +205,16 @@ class DroneRunner(QObject):
         return findings[0].path
 
     def _run_browse_drone(self) -> None:
-        """Run an in-process placeholder browse drone."""
-        self.contentDelta.emit("Browse drone scaffold ready.")
-        receipt = DroneReceipt(
-            run_id=self._run.run_id,
-            drone_id=self._drone.id,
-            drone_name=self._drone.name,
-            status="completed",
-            started_at=dt.datetime.fromtimestamp(
-                self._run.started_at, tz=dt.timezone.utc
-            ).isoformat(),
-            ended_at=dt.datetime.now(tz=dt.timezone.utc).isoformat(),
-            summary="Browse scaffold ready.",
-            produced_artifact={
-                "kind": "browse",
-                "status": "scaffold_ready",
-                "objective": self._drone.instructions,
-            },
-            elapsed_seconds=self._run.elapsed_seconds,
+        from aura.drones.browse.runner import run_browse_drone
+
+        run_browse_drone(
+            workspace_root=self._workspace_root,
+            run=self._run,
+            drone=self._drone,
+            on_content=self.contentDelta.emit,
+            on_status=self.statusChanged.emit,
+            on_receipt=self.receiptReady.emit,
         )
-        RunHistoryStore.save_run(self._workspace_root, receipt)
-        self.receiptReady.emit(receipt)
-        self._run.mark("completed")
-        self.statusChanged.emit("completed")
 
     def _run_harness_lap(self) -> None:
         if self._harness_bridge is None:
