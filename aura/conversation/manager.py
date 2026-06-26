@@ -15,6 +15,7 @@ the supplied DispatchCallback rather than the registry.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -97,6 +98,14 @@ from aura.conversation.worker_final_validation import (
     emit_explicit_validation_result,
     run_explicit_validation_commands,
 )
+from aura.conversation.worker_recovery_messages import (
+    PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
+    WORKER_AUTO_PY_COMPILE_INSTRUCTION,
+    WORKER_DEPENDENT_CONTRACT_INSTRUCTION,
+    WORKER_EDIT_RECOVERY_INSTRUCTION,
+    WORKER_IMPORT_FAILURE_INSTRUCTION,
+    WORKER_LAUNCH_FAILURE_INSTRUCTION,
+)
 from aura.conversation.worker_recovery_payload import (
     blocked_tool_result,
     is_recoverable_phase_boundary,
@@ -118,14 +127,6 @@ from aura.conversation.worker_validation import (
     emit_auto_launch_result,
     emit_auto_py_compile_result,
     run_focused_py_compile,
-)
-from aura.conversation.worker_recovery_messages import (
-    PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
-    WORKER_AUTO_PY_COMPILE_INSTRUCTION,
-    WORKER_DEPENDENT_CONTRACT_INSTRUCTION,
-    WORKER_EDIT_RECOVERY_INSTRUCTION,
-    WORKER_IMPORT_FAILURE_INSTRUCTION,
-    WORKER_LAUNCH_FAILURE_INSTRUCTION,
 )
 from aura.dependency_context import compute_dependents
 from aura.hooks import hooks
@@ -153,6 +154,59 @@ EDIT_TRANSACTION_FAILURE_CLASSES = {
 
 PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS = "patch_candidate_invalid_syntax"
 PATCH_CANDIDATE_INVALID_SYNTAX_REPEATED_CLASS = "patch_candidate_invalid_syntax_repeated"
+
+
+def _is_worker_app_source_path(path: str) -> bool:
+    normalized = _normalize_worker_path(path)
+    if not is_python_path(normalized) or _is_validation_scratch_path(normalized):
+        return False
+    parts = normalized.split("/")
+    if "tests" in parts:
+        return False
+    name = parts[-1]
+    return not (
+        (name.startswith("test_") and name.endswith(".py"))
+        or name.endswith("_test.py")
+    )
+
+
+def _fingerprint_paths(paths: set[str], workspace_root) -> str:
+    if not paths:
+        return ""
+
+    root = Path(workspace_root)
+    try:
+        resolved_root = root.resolve()
+    except OSError:
+        resolved_root = root
+    entries: list[tuple[str, str]] = []
+    for raw_path in paths:
+        normalized = _normalize_worker_path(raw_path)
+        candidate = Path(normalized)
+        full_path = candidate if candidate.is_absolute() else root / normalized
+        if not full_path.exists():
+            continue
+        try:
+            content_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        try:
+            relative_path = full_path.resolve().relative_to(resolved_root).as_posix()
+        except (OSError, ValueError):
+            relative_path = normalized
+        entries.append((relative_path, content_hash))
+
+    if not entries:
+        return ""
+
+    digest = hashlib.sha256()
+    for relative_path, content_hash in sorted(entries):
+        digest.update(relative_path.encode("utf-8", errors="surrogateescape"))
+        digest.update(b"\0")
+        digest.update(content_hash.encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
 
 class ConversationManager:
     def __init__(
@@ -235,6 +289,9 @@ class ConversationManager:
         write_attempts_by_path: dict[str, int] = {}
         worker_recovery_nudge_sent = False
         stale_validation_notes: list[str] = []
+        worker_app_writes: set[str] = set()
+        last_launch_ok_fingerprint: str | None = None
+        last_dependent_ok_fingerprint: str | None = None
         task_completion_context = False
         final_messages_after_completion = 0
         last_completion_final_text = ""
@@ -565,42 +622,50 @@ class ConversationManager:
                                     for path in product_paths:
                                         import_verification_required.discard(path)
                                     # --- Dependent import verification rung ---
+                                    fp_dep = _fingerprint_paths(
+                                        set(product_paths),
+                                        self._tools.workspace_root,
+                                    )
                                     try:
-                                        deps = compute_dependents(
-                                            Path(self._tools.workspace_root),
-                                            product_paths,
-                                        )
-                                        deps = deps[:15]
-                                        if deps:
-                                            gating_paths, gating_diag, info_diag = run_dependent_import_check(
+                                        if not (fp_dep and fp_dep == last_dependent_ok_fingerprint):
+                                            deps = compute_dependents(
                                                 Path(self._tools.workspace_root),
                                                 product_paths,
-                                                deps,
                                             )
-                                            if info_diag:
-                                                emit_auto_dependent_import_info(
-                                                    paths=deps,
-                                                    diagnostics=info_diag,
-                                                    on_event=on_event,
-                                                    workspace_root=self._tools.workspace_root,
+                                            deps = deps[:15]
+                                            gating_paths: list[str] = []
+                                            if deps:
+                                                gating_paths, gating_diag, info_diag = run_dependent_import_check(
+                                                    Path(self._tools.workspace_root),
+                                                    product_paths,
+                                                    deps,
                                                 )
-                                            if gating_paths:
-                                                for path in product_paths:
-                                                    import_verification_required.add(path)
-                                                emit_auto_import_result(
-                                                    paths=gating_paths,
-                                                    diagnostics=gating_diag,
-                                                    on_event=on_event,
-                                                    workspace_root=self._tools.workspace_root,
-                                                )
-                                                instruction = WORKER_DEPENDENT_CONTRACT_INSTRUCTION.format(
-                                                    edited_files=", ".join(product_paths),
-                                                    dependent_files=", ".join(gating_paths),
-                                                    diagnostics=gating_diag,
-                                                )
-                                                self._history.append_user_text(instruction)
-                                                discard_worker_candidate_final()
-                                                continue
+                                                if info_diag:
+                                                    emit_auto_dependent_import_info(
+                                                        paths=deps,
+                                                        diagnostics=info_diag,
+                                                        on_event=on_event,
+                                                        workspace_root=self._tools.workspace_root,
+                                                    )
+                                                if gating_paths:
+                                                    for path in product_paths:
+                                                        import_verification_required.add(path)
+                                                    emit_auto_import_result(
+                                                        paths=gating_paths,
+                                                        diagnostics=gating_diag,
+                                                        on_event=on_event,
+                                                        workspace_root=self._tools.workspace_root,
+                                                    )
+                                                    instruction = WORKER_DEPENDENT_CONTRACT_INSTRUCTION.format(
+                                                        edited_files=", ".join(product_paths),
+                                                        dependent_files=", ".join(gating_paths),
+                                                        diagnostics=gating_diag,
+                                                    )
+                                                    self._history.append_user_text(instruction)
+                                                    discard_worker_candidate_final()
+                                                    continue
+                                            if not gating_paths:
+                                                last_dependent_ok_fingerprint = fp_dep
                                     except Exception:
                                         logging.getLogger(__name__).warning(
                                             "Dependent import check failed non-fatally",
@@ -623,38 +688,52 @@ class ConversationManager:
                                 continue
                     # --- Launch verification rung ---
                     if declared_run_command:
+                        fp = _fingerprint_paths(
+                            worker_app_writes,
+                            self._tools.workspace_root,
+                        )
                         try:
-                            from aura.sandbox import SandboxExecutor
-                            sandbox = SandboxExecutor(
-                                mode="host",
-                                workspace_root=Path(self._tools.workspace_root),
-                            )
-                            watch = sandbox.run_and_watch(
-                                declared_run_command,
-                                window_seconds=10,
-                            )
-                            if not (watch.ok and watch.exited_early):
+                            if fp and fp == last_launch_ok_fingerprint:
                                 emit_auto_launch_result(
                                     command=declared_run_command,
-                                    ok=False,
+                                    ok=True,
+                                    output="(skipped: no app-source change since last successful launch)",
+                                    on_event=on_event,
+                                    workspace_root=self._tools.workspace_root,
+                                )
+                            else:
+                                from aura.sandbox import SandboxExecutor
+                                sandbox = SandboxExecutor(
+                                    mode="host",
+                                    workspace_root=Path(self._tools.workspace_root),
+                                )
+                                watch = sandbox.run_and_watch(
+                                    declared_run_command,
+                                    window_seconds=10,
+                                )
+                                if not (watch.ok and watch.exited_early):
+                                    emit_auto_launch_result(
+                                        command=declared_run_command,
+                                        ok=False,
+                                        output=watch.output,
+                                        on_event=on_event,
+                                        workspace_root=self._tools.workspace_root,
+                                    )
+                                    instruction = WORKER_LAUNCH_FAILURE_INSTRUCTION.format(
+                                        command=declared_run_command,
+                                        output=watch.output,
+                                    )
+                                    self._history.append_user_text(instruction)
+                                    discard_worker_candidate_final()
+                                    continue
+                                last_launch_ok_fingerprint = fp
+                                emit_auto_launch_result(
+                                    command=declared_run_command,
+                                    ok=True,
                                     output=watch.output,
                                     on_event=on_event,
                                     workspace_root=self._tools.workspace_root,
                                 )
-                                instruction = WORKER_LAUNCH_FAILURE_INSTRUCTION.format(
-                                    command=declared_run_command,
-                                    output=watch.output,
-                                )
-                                self._history.append_user_text(instruction)
-                                discard_worker_candidate_final()
-                                continue
-                            emit_auto_launch_result(
-                                command=declared_run_command,
-                                ok=True,
-                                output=watch.output,
-                                on_event=on_event,
-                                workspace_root=self._tools.workspace_root,
-                            )
                         except Exception:
                             logging.getLogger(__name__).warning(
                                 "Launch verification failed non-fatally",
@@ -900,6 +979,7 @@ class ConversationManager:
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
                         write_attempts_by_path=write_attempts_by_path,
+                        worker_app_writes=worker_app_writes,
                     )
 
                 loop_result = self._apply_loop_detection(
@@ -1397,10 +1477,12 @@ class ConversationManager:
         syntax_repair_required: dict[str, dict[str, Any]],
         syntax_validation_required: set[str],
         write_attempts_by_path: dict[str, int],
+        worker_app_writes: set[str] | None = None,
         worker_file_state: dict[str, dict[str, Any]] | None = None,
         patch_failed_cycles: dict[str, int] | None = None,
         patch_invalid_syntax_required: dict[str, dict[str, Any]] | None = None,
     ) -> str:
+        worker_app_writes = worker_app_writes if worker_app_writes is not None else set()
         worker_file_state = worker_file_state if worker_file_state is not None else {}
         patch_failed_cycles = patch_failed_cycles if patch_failed_cycles is not None else {}
         patch_invalid_syntax_required = (
@@ -1449,6 +1531,8 @@ class ConversationManager:
                     pop_normalized_recovery_key(patch_invalid_syntax_required, path)
                     pop_syntax_repair_state(syntax_repair_required, path)
                     discard_syntax_validation_path(syntax_validation_required, path)
+                    if _is_worker_app_source_path(path):
+                        worker_app_writes.discard(path)
                     return content
 
                 pop_normalized_recovery_key(edit_fallback_required, path)
@@ -1458,6 +1542,8 @@ class ConversationManager:
                 pop_normalized_recovery_key(patch_invalid_syntax_required, path)
                 if is_python_path(path) and not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
+                    if _is_worker_app_source_path(path):
+                        worker_app_writes.add(path)
                 state = syntax_repair_state_for_path(syntax_repair_required, path)
                 if state:
                     state["repair_attempted"] = True

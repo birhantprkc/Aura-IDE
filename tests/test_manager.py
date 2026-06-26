@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
@@ -20,21 +21,20 @@ from aura.client.events import (
     ToolResult,
     WorkerDispatchRequested,
 )
-from aura.hooks import hooks
 from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
 )
 from aura.conversation.history import History
-from aura.conversation.manager import ConversationManager
+from aura.conversation.manager import ConversationManager, _fingerprint_paths
 from aura.conversation.tool_limits import MAX_TOOL_CALLS_BY_MODE
 from aura.conversation.tools._types import (
     ApprovalDecision,
     ToolExecResult,
 )
 from aura.conversation.tools.registry import ToolRegistry
+from aura.hooks import hooks
 from aura.sandbox import SandboxResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -2200,6 +2200,227 @@ class TestDeleteFileRecovery:
         )
 
         assert "new.py" in syntax_validation_required
+
+    def test_write_file_tracks_worker_app_source(self, manager):
+        """Successful app-source writes should accumulate for launch memoization."""
+        syntax_validation_required: set[str] = set()
+        worker_app_writes: set[str] = set()
+
+        manager._update_worker_recovery_state(
+            name="write_file",
+            args={"path": "aura/module.py"},
+            ok=True,
+            content='{"ok": true, "path": "aura/module.py"}',
+            edit_failed_shapes=set(),
+            edit_fallback_required={},
+            line_range_reread_required={},
+            syntax_repair_required={},
+            syntax_validation_required=syntax_validation_required,
+            write_attempts_by_path={},
+            worker_app_writes=worker_app_writes,
+        )
+
+        assert "aura/module.py" in syntax_validation_required
+        assert worker_app_writes == {"aura/module.py"}
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "tests/test_manager.py",
+            "aura/tests/helper.py",
+            "aura/test_widget.py",
+            "aura/widget_test.py",
+            ".aura/tmp/check_module.py",
+        ],
+    )
+    def test_write_file_excludes_tests_and_scratch_from_worker_app_writes(self, manager, path):
+        """Test and scratch writes still follow syntax rules but do not trigger app boot fingerprints."""
+        syntax_validation_required: set[str] = set()
+        worker_app_writes: set[str] = set()
+
+        manager._update_worker_recovery_state(
+            name="write_file",
+            args={"path": path},
+            ok=True,
+            content=json.dumps({"ok": True, "path": path}),
+            edit_failed_shapes=set(),
+            edit_fallback_required={},
+            line_range_reread_required={},
+            syntax_repair_required={},
+            syntax_validation_required=syntax_validation_required,
+            write_attempts_by_path={},
+            worker_app_writes=worker_app_writes,
+        )
+
+        assert worker_app_writes == set()
+
+    def test_delete_file_discards_worker_app_source(self, manager):
+        """Successful app-source deletes remove the path from launch memoization."""
+        syntax_validation_required: set[str] = {"aura/module.py"}
+        worker_app_writes: set[str] = {"aura/module.py"}
+
+        manager._update_worker_recovery_state(
+            name="delete_file",
+            args={"path": "aura/module.py"},
+            ok=True,
+            content='{"ok": true, "deleted": true, "path": "aura/module.py"}',
+            edit_failed_shapes=set(),
+            edit_fallback_required={},
+            line_range_reread_required={},
+            syntax_repair_required={},
+            syntax_validation_required=syntax_validation_required,
+            write_attempts_by_path={},
+            worker_app_writes=worker_app_writes,
+        )
+
+        assert "aura/module.py" not in syntax_validation_required
+        assert worker_app_writes == set()
+
+
+class TestWorkerFinishMemoization:
+    """Worker finish-time verification memoization."""
+
+    def test_launch_skips_after_only_test_write_since_success(
+        self, manager, mock_client, mock_tools, on_event, captured_events, cancel_event, tmp_path
+    ):
+        type(mock_tools).mode = PropertyMock(return_value="worker")
+
+        def execute(name, args, **_kwargs):
+            if name == "write_file":
+                path = tmp_path / args["path"]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(args.get("content", ""), encoding="utf-8")
+                return ToolExecResult(ok=True, payload={"ok": True, "path": args["path"]})
+            return ToolExecResult(ok=True, payload={"ok": True})
+
+        mock_tools.execute.side_effect = execute
+        mock_client.side_effect = [
+            iter([_make_done(tool_calls=[_tool_call("w1", "write_file", {"path": "aura/module.py", "content": "X = 1\n"})])]),
+            iter([_make_done(content="done once")]),
+            iter([_make_done(tool_calls=[_tool_call("w2", "write_file", {"path": "tests/test_module.py", "content": "def test_x(): pass\n"})])]),
+            iter([_make_done(content="done twice")]),
+        ]
+
+        validation_results = iter([
+            SimpleNamespace(ok=False, command="pytest", diagnostics="failed"),
+            SimpleNamespace(ok=True, command="pytest", diagnostics="passed"),
+        ])
+        sandbox = MagicMock()
+        sandbox.run_and_watch.return_value = SimpleNamespace(ok=True, exited_early=True, output="boot ok")
+
+        with (
+            patch("aura.conversation.manager.run_focused_py_compile", return_value=(True, "")),
+            patch("aura.conversation.manager.run_focused_import_check", return_value=(True, "")),
+            patch("aura.conversation.manager.compute_dependents", return_value=[]),
+            patch(
+                "aura.conversation.manager.run_explicit_validation_commands",
+                side_effect=lambda **_kwargs: next(validation_results),
+            ),
+            patch("aura.sandbox.SandboxExecutor", return_value=sandbox),
+        ):
+            manager.send(
+                on_event=on_event,
+                approval_cb=_make_approval_cb(),
+                cancel_event=cancel_event,
+                model="deepseek-chat",
+                thinking="off",
+                explicit_validation_commands=["pytest"],
+                declared_run_command="python -m aura --selfcheck",
+            )
+
+        assert sandbox.run_and_watch.call_count == 1
+        launch_payloads = [
+            json.loads(event.result)
+            for event in captured_events
+            if isinstance(event, ToolResult) and event.tool_call_id == "auto_launch_check"
+        ]
+        assert [payload["output"] for payload in launch_payloads] == [
+            "boot ok",
+            "(skipped: no app-source change since last successful launch)",
+        ]
+
+    def test_dependent_import_skips_when_product_fingerprint_unchanged(
+        self, manager, mock_client, mock_tools, on_event, cancel_event, tmp_path
+    ):
+        type(mock_tools).mode = PropertyMock(return_value="worker")
+
+        def execute(name, args, **_kwargs):
+            if name == "write_file":
+                path = tmp_path / args["path"]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(args.get("content", ""), encoding="utf-8")
+                return ToolExecResult(ok=True, payload={"ok": True, "path": args["path"]})
+            return ToolExecResult(ok=True, payload={"ok": True})
+
+        mock_tools.execute.side_effect = execute
+        write_args = {"path": "aura/module.py", "content": "X = 1\n"}
+        mock_client.side_effect = [
+            iter([_make_done(tool_calls=[_tool_call("w1", "write_file", write_args)])]),
+            iter([_make_done(content="done once")]),
+            iter([_make_done(tool_calls=[_tool_call("w2", "write_file", write_args)])]),
+            iter([_make_done(content="done twice")]),
+        ]
+
+        validation_results = iter([
+            SimpleNamespace(ok=False, command="pytest", diagnostics="failed"),
+            SimpleNamespace(ok=True, command="pytest", diagnostics="passed"),
+        ])
+        sandbox = MagicMock()
+        sandbox.run_and_watch.return_value = SimpleNamespace(ok=True, exited_early=True, output="boot ok")
+
+        with (
+            patch("aura.conversation.manager.run_focused_py_compile", return_value=(True, "")),
+            patch("aura.conversation.manager.run_focused_import_check", return_value=(True, "")),
+            patch("aura.conversation.manager.compute_dependents", return_value=["aura/dependent.py"]) as compute_mock,
+            patch("aura.conversation.manager.run_dependent_import_check", return_value=([], "", "")) as dep_mock,
+            patch(
+                "aura.conversation.manager.run_explicit_validation_commands",
+                side_effect=lambda **_kwargs: next(validation_results),
+            ),
+            patch("aura.sandbox.SandboxExecutor", return_value=sandbox),
+        ):
+            manager.send(
+                on_event=on_event,
+                approval_cb=_make_approval_cb(),
+                cancel_event=cancel_event,
+                model="deepseek-chat",
+                thinking="off",
+                explicit_validation_commands=["pytest"],
+                declared_run_command="python -m aura --selfcheck",
+            )
+
+        assert compute_mock.call_count == 1
+        assert dep_mock.call_count == 1
+
+
+class TestFingerprintPaths:
+    """Tests for finish-time verification fingerprints."""
+
+    def test_empty_or_missing_paths_return_empty(self, tmp_path):
+        assert _fingerprint_paths(set(), tmp_path) == ""
+        assert _fingerprint_paths({"missing.py"}, tmp_path) == ""
+
+    def test_identical_contents_yield_identical_fingerprint(self, tmp_path):
+        path = tmp_path / "aura" / "module.py"
+        path.parent.mkdir()
+        path.write_bytes(b"VALUE = 1\n")
+
+        first = _fingerprint_paths({"aura/module.py"}, tmp_path)
+        second = _fingerprint_paths({"./aura\\module.py"}, tmp_path)
+
+        assert first
+        assert first == second
+
+    def test_byte_change_changes_fingerprint(self, tmp_path):
+        path = tmp_path / "aura" / "module.py"
+        path.parent.mkdir()
+        path.write_bytes(b"VALUE = 1\n")
+
+        first = _fingerprint_paths({"aura/module.py"}, tmp_path)
+        path.write_bytes(b"VALUE = 2\n")
+        second = _fingerprint_paths({"aura/module.py"}, tmp_path)
+
+        assert first != second
 
 
 # ===================================================================
