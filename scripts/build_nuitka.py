@@ -556,6 +556,7 @@ def create_nuitka_command(
         f"--windows-icon-from-ico={ICON_PATH}",
         f"--include-data-dir={MEDIA_DIR}={MEDIA_DIR}",
         "--include-package=aura",
+        "--include-package-data=aura",
         "--include-package=playwright",
         "--include-package-data=playwright",
         f"--include-data-file={UPDATER_HELPER_SOURCE}={UPDATER_HELPER_DIST_NAME}",

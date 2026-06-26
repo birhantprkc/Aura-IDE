@@ -6,6 +6,7 @@ import re
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass, fields
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aura.drones.definition import DroneBudget, DroneDefinition, slugify
@@ -369,6 +370,66 @@ class DroneStore:
         if not (drone_dir / "drone.json").exists():
             raise ValueError("register_drone_folder is required before a Drone manifest can be updated")
         DroneStore._write_manifest(drone_dir, drone)
+
+    @staticmethod
+    def create_browse_monitor(
+        workspace_root: Path,
+        name: str,
+        start_url: str,
+        monitor_key: str | None = None,
+    ) -> DroneDefinition:
+        """Create a configured Browse Monitor drone from the bundled template.
+
+        Args:
+            workspace_root: Project workspace root.
+            name: Human-readable name for the drone (e.g. "Docs Page Watch").
+            start_url: The URL to monitor.
+            monitor_key: Stable slug for fingerprinting. Defaults to slugify(name).
+
+        Returns:
+            The newly created DroneDefinition.
+        """
+        bundled = DroneStore._bundled_drones_root() / "browse-monitor" / "drone.json"
+        if not bundled.exists():
+            raise ValueError("Browse Monitor template not found")
+
+        template = json.loads(bundled.read_text(encoding="utf-8"))
+
+        drone_id = DroneStore.next_id(workspace_root, name)
+        if monitor_key is None:
+            monitor_key = slugify(name)
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        drone = DroneDefinition(
+            id=drone_id,
+            name=name,
+            description=template["description"],
+            instructions=template["instructions"],
+            kind=template["kind"],
+            write_policy=template["write_policy"],
+            scope=template.get("scope", "global"),
+            created_by="user",
+            created_at=now,
+            updated_at=now,
+            budget=DroneBudget(**template.get("budget", {})),
+            output_contract=template.get("output_contract", {}),
+            manifest_version=template.get("manifest_version", "1"),
+            permissions={
+                "start_url": start_url,
+                "monitor_enabled": True,
+                "monitor_key": monitor_key,
+                "monitor_fields": ["title", "url", "body_excerpt"],
+                "monitor_excerpt_chars": 2000,
+                "visible": False,
+                "login_session": False,
+            },
+        )
+
+        DroneStore.validate_drone(drone)
+        drone_dir = _global_drones_root(workspace_root) / drone_id
+        DroneStore._write_manifest(drone_dir, drone)
+        return drone
 
     @staticmethod
     def drone_folder(workspace_root: Path, drone_id: str) -> Path:
