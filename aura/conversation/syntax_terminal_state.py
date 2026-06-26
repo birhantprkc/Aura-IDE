@@ -44,7 +44,7 @@ def update_syntax_state_from_terminal(
     ]
     if not targets:
         return
-    if payload.get("ok"):
+    if payload.get("exit_code") == 0:
         for path in targets:
             state = syntax_repair_state_for_path(syntax_repair_required, path)
             if state and state.get("awaiting_validation") is False:

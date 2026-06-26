@@ -330,7 +330,7 @@ class ToolRunner:
         )
 
         full_output = result.stdout
-        ok = result.ok
+        ok = result.exit_code != -1
         exit_code = result.exit_code
 
         if not ok and result.stderr and "Docker is not available" in result.stderr:

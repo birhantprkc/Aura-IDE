@@ -66,7 +66,7 @@ def is_completed_worker_result(result: WorkerDispatchResult | None) -> bool:
 
 def terminal_result_completed(info: dict[str, Any] | None) -> bool:
     payload = info.get("_terminal_payload") if isinstance(info, dict) else None
-    return isinstance(payload, dict) and payload.get("ok") is True
+    return isinstance(payload, dict) and payload.get("exit_code") == 0
 
 
 def tool_result_completes_action(name: str, ok: bool) -> bool:
