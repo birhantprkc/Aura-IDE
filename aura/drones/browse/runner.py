@@ -82,6 +82,7 @@ def run_browse_drone(
         profile_metadata = {
             "browser_profile": browser_profile if browser_profile else None,
             "visible": visible,
+            "persistent_session": bool(browser_profile),
         }
         receipt = build_failed_receipt(
             run=run,
@@ -120,12 +121,15 @@ def run_browse_drone(
         if requires_login and detect_login_required(
             before_snapshot.body_excerpt,
             before_snapshot.candidates,
+            page.url,
+            page.title(),
             login_required_text,
         ):
             on_content("Login required for this profile/session \u2014 skipping actions.")
             profile_metadata = {
                 "browser_profile": browser_profile if browser_profile else None,
                 "visible": visible,
+                "persistent_session": bool(browser_profile),
             }
             produced_artifact = build_needs_login_artifact(
                 start_url=start_url,
@@ -254,6 +258,7 @@ def run_browse_drone(
         profile_metadata = {
             "browser_profile": browser_profile if browser_profile else None,
             "visible": visible,
+            "persistent_session": bool(browser_profile),
         }
 
         # Receipt-building: branch on policy_block
@@ -308,6 +313,7 @@ def run_browse_drone(
         profile_metadata = {
             "browser_profile": browser_profile if browser_profile else None,
             "visible": visible,
+            "persistent_session": bool(browser_profile),
         }
         receipt = build_failed_receipt(
             run=run,

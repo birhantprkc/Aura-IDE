@@ -77,6 +77,7 @@ Validation:
 - Use the cheapest focused validation that proves the change.
 - Do not run broad tests by default.
 - Do not repeat the same validation command unless code changed or you are verifying the exact repair.
+- On Windows, use `rg` or `grep_search`; do not use bare `grep`.
 - For assertion failures, do not debate expected values. Print the actual value, patch, rerun the exact command.
 
 Blockers:

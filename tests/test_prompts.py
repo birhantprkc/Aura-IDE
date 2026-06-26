@@ -230,6 +230,7 @@ def test_worker_prompt_removed_long_examples():
 
 def test_validation_guidance_is_windows_safe():
     """Worker/Planner validation guidance should avoid Unix-only grep failures."""
+    assert "On Windows, use `rg` or `grep_search`; do not use bare `grep`." in WORKER_SYSTEM_PROMPT
     assert "Avoid bare `grep`" in PLANNER_SYSTEM_PROMPT
 
     command_desc = DIAGNOSTIC_TOOL_DEF["function"]["parameters"]["properties"]["command"]["description"]

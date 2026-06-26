@@ -15,25 +15,41 @@ from aura.drones.run import DroneRun
 def detect_login_required(
     body_excerpt: str,
     candidates: list[dict],
+    page_url: str,
+    page_title: str,
     login_required_text: list[str],
 ) -> bool:
     """Check whether page content suggests a login wall.
 
-    Checks the body excerpt and candidate labels (lowercased) against
-    each phrase in ``login_required_text`` (also lowercased).
-    Returns True if any match is found.
+    Checks hardcoded strong login-wall phrases against body excerpt,
+    page URL, and page title.  Then checks caller-provided phrases
+    only against the body excerpt.  Does NOT examine candidate labels.
     """
+    _ = candidates  # kept for signature compatibility
+
     excerpt_lower = body_excerpt.lower()
+    url_lower = page_url.lower()
+    title_lower = page_title.lower()
+
+    # Hardcoded strong login-wall phrases
+    strong_phrases = [
+        "please log in",
+        "please sign in",
+        "sign in to continue",
+        "login required",
+        "you must be logged in",
+        "authentication required",
+        "session expired",
+    ]
+    for phrase in strong_phrases:
+        if phrase in excerpt_lower or phrase in title_lower or phrase in url_lower:
+            return True
+
+    # Caller-provided phrases — body only
     for phrase in login_required_text:
         if phrase.lower() in excerpt_lower:
             return True
-    for candidate in candidates:
-        label = candidate.get("label", "") if isinstance(candidate, dict) else getattr(candidate, "label", "")
-        if label:
-            label_lower = label.lower()
-            for phrase in login_required_text:
-                if phrase.lower() in label_lower:
-                    return True
+
     return False
 
 

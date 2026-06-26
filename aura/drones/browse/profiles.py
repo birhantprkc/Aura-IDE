@@ -13,12 +13,13 @@ def safe_profile_name(name: str) -> str:
 
     Keeps alphanumeric, dash, underscore, and dot characters.
     Replaces all other characters with ``_``.
-    Falls back to ``"default"`` if the result is empty.
+    Falls back to ``"default"`` if the result is empty or all-dots.
     """
+    name = name.strip()
     safe = re.sub(r"[^a-zA-Z0-9_.-]", "_", name)
     # Collapse consecutive underscores
     safe = re.sub(r"_+", "_", safe)
-    if not safe:
+    if not safe or not safe.replace(".", ""):
         return "default"
     return safe
 
