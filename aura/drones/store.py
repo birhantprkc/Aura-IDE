@@ -118,6 +118,10 @@ class DroneStore:
     """Read registered folder-backed Drones from Aura's global Drone directory."""
 
     @staticmethod
+    def _bundled_drones_root() -> Path:
+        return aura_root() / "aura" / "drones" / "bundled"
+
+    @staticmethod
     def list_drones(workspace_root: Path) -> list[DroneDefinition]:
         seen: dict[str, DroneDefinition] = {}
 
@@ -137,6 +141,26 @@ class DroneStore:
                 except Exception as exc:
                     logger.warning("Skipping invalid Drone folder %s: %s", subdir, exc)
 
+        # Merge bundled drones — skip IDs already seen from user installs
+        bundled_root = DroneStore._bundled_drones_root()
+        if bundled_root.exists():
+            for subdir in sorted(bundled_root.iterdir()):
+                if not subdir.is_dir():
+                    continue
+                drone_file = subdir / "drone.json"
+                if not drone_file.exists():
+                    continue
+                drone_id = subdir.name
+                if drone_id in seen:
+                    continue
+                try:
+                    data = json.loads(drone_file.read_text(encoding="utf-8"))
+                    data["id"] = drone_id
+                    drone = _drone_from_dict(data)
+                    seen[drone.id] = drone
+                except Exception as exc:
+                    logger.warning("Skipping invalid bundled Drone %s: %s", subdir, exc)
+
         return sorted(seen.values(), key=lambda d: d.name)
 
     @staticmethod
@@ -144,53 +168,82 @@ class DroneStore:
         """Return list of ALL folder-backed Drones found on disk.
 
         Every drone folder under .aura/drones/ produces an entry.
+        Bundled drones are also included after user entries.
         Drones that parse and validate successfully are marked Ready.
         Drones with parse or validation errors are marked Needs Fix with
         the error message shown as the description.
         """
         rows: list[DroneListEntry] = []
+        seen_ids: set[str] = set()
         global_root = _global_drones_root(workspace_root)
-        if not global_root.exists():
-            return rows
+        if global_root.exists():
+            for subdir in sorted(global_root.iterdir()):
+                if not subdir.is_dir():
+                    continue
+                drone_file = subdir / "drone.json"
+                if not drone_file.exists():
+                    continue
 
-        for subdir in sorted(global_root.iterdir()):
-            if not subdir.is_dir():
-                continue
-            drone_file = subdir / "drone.json"
-            if not drone_file.exists():
-                continue
-
-            # Try to load, parse, and validate the drone
-            try:
-                data = json.loads(drone_file.read_text(encoding="utf-8"))
-                data["id"] = subdir.name
-                drone = _drone_from_dict(data)  # also validates
-                rows.append(DroneListEntry(
-                    id=drone.id,
-                    name=drone.name,
-                    description=drone.description or "",
-                    write_policy=drone.write_policy,
-                    status="Ready",
-                    ready=True,
-                ))
-            except Exception as exc:
-                # Still include an entry — marked broken
-                folder_name = subdir.name
+                # Try to load, parse, and validate the drone
                 try:
-                    raw = json.loads(drone_file.read_text(encoding="utf-8")) if drone_file.exists() else {}
-                except Exception:
-                    raw = {}
-                drone_id = folder_name
-                name = raw.get("name", folder_name) or folder_name
-                write_policy = raw.get("write_policy", "read_only") or "read_only"
-                rows.append(DroneListEntry(
-                    id=drone_id,
-                    name=name,
-                    description=str(exc),
-                    write_policy=write_policy,
-                    status="Needs Fix",
-                    ready=False,
-                ))
+                    data = json.loads(drone_file.read_text(encoding="utf-8"))
+                    data["id"] = subdir.name
+                    drone = _drone_from_dict(data)  # also validates
+                    seen_ids.add(drone.id)
+                    rows.append(DroneListEntry(
+                        id=drone.id,
+                        name=drone.name,
+                        description=drone.description or "",
+                        write_policy=drone.write_policy,
+                        status="Ready",
+                        ready=True,
+                    ))
+                except Exception as exc:
+                    # Still include an entry — marked broken
+                    folder_name = subdir.name
+                    try:
+                        raw = json.loads(drone_file.read_text(encoding="utf-8")) if drone_file.exists() else {}
+                    except Exception:
+                        raw = {}
+                    drone_id = folder_name
+                    seen_ids.add(drone_id)
+                    name = raw.get("name", folder_name) or folder_name
+                    write_policy = raw.get("write_policy", "read_only") or "read_only"
+                    rows.append(DroneListEntry(
+                        id=drone_id,
+                        name=name,
+                        description=str(exc),
+                        write_policy=write_policy,
+                        status="Needs Fix",
+                        ready=False,
+                    ))
+
+        # Merge bundled drones — skip IDs already seen from user installs
+        bundled_root = DroneStore._bundled_drones_root()
+        if bundled_root.exists():
+            for subdir in sorted(bundled_root.iterdir()):
+                if not subdir.is_dir():
+                    continue
+                drone_file = subdir / "drone.json"
+                if not drone_file.exists():
+                    continue
+                drone_id = subdir.name
+                if drone_id in seen_ids:
+                    continue
+                try:
+                    data = json.loads(drone_file.read_text(encoding="utf-8"))
+                    data["id"] = drone_id
+                    drone = _drone_from_dict(data)
+                    rows.append(DroneListEntry(
+                        id=drone.id,
+                        name=drone.name,
+                        description=drone.description or "",
+                        write_policy=drone.write_policy,
+                        status="Ready",
+                        ready=True,
+                    ))
+                except Exception as exc:
+                    logger.warning("Skipping invalid bundled Drone %s: %s", subdir, exc)
 
         return sorted(rows, key=lambda r: r.name.lower())
 
@@ -198,32 +251,63 @@ class DroneStore:
     def list_drone_folders(workspace_root: Path) -> list[DroneListEntry]:
         """Return list of folder-backed Drones — including non-ready/dev ones."""
         rows: list[DroneListEntry] = []
+        seen_ids: set[str] = set()
         global_root = _global_drones_root(workspace_root)
-        if not global_root.exists():
-            return rows
-        for subdir in sorted(global_root.iterdir()):
-            if not subdir.is_dir():
-                continue
-            drone_file = subdir / "drone.json"
-            if not drone_file.exists():
-                continue
-            try:
-                data = json.loads(drone_file.read_text(encoding="utf-8"))
+        if global_root.exists():
+            for subdir in sorted(global_root.iterdir()):
+                if not subdir.is_dir():
+                    continue
+                drone_file = subdir / "drone.json"
+                if not drone_file.exists():
+                    continue
+                try:
+                    data = json.loads(drone_file.read_text(encoding="utf-8"))
+                    drone_id = subdir.name
+                    seen_ids.add(drone_id)
+                    name = data.get("name", subdir.name) or subdir.name
+                    description = data.get("description", "") or ""
+                    write_policy = data.get("write_policy", "read_only") or "read_only"
+                    rows.append(DroneListEntry(
+                        id=drone_id,
+                        name=name,
+                        description=description,
+                        write_policy=write_policy,
+                        status="Development",
+                        ready=False,
+                    ))
+                except Exception as exc:
+                    logger.warning("Skipping invalid Drone folder %s: %s", subdir, exc)
+                    continue
+
+        # Merge bundled drones — skip IDs already seen from user installs
+        bundled_root = DroneStore._bundled_drones_root()
+        if bundled_root.exists():
+            for subdir in sorted(bundled_root.iterdir()):
+                if not subdir.is_dir():
+                    continue
+                drone_file = subdir / "drone.json"
+                if not drone_file.exists():
+                    continue
                 drone_id = subdir.name
-                name = data.get("name", subdir.name) or subdir.name
-                description = data.get("description", "") or ""
-                write_policy = data.get("write_policy", "read_only") or "read_only"
-                rows.append(DroneListEntry(
-                    id=drone_id,
-                    name=name,
-                    description=description,
-                    write_policy=write_policy,
-                    status="Development",
-                    ready=False,
-                ))
-            except Exception as exc:
-                logger.warning("Skipping invalid Drone folder %s: %s", subdir, exc)
-                continue
+                if drone_id in seen_ids:
+                    continue
+                try:
+                    data = json.loads(drone_file.read_text(encoding="utf-8"))
+                    name = data.get("name", subdir.name) or subdir.name
+                    description = data.get("description", "") or ""
+                    write_policy = data.get("write_policy", "read_only") or "read_only"
+                    rows.append(DroneListEntry(
+                        id=drone_id,
+                        name=name,
+                        description=description,
+                        write_policy=write_policy,
+                        status="Development",
+                        ready=False,
+                    ))
+                except Exception as exc:
+                    logger.warning("Skipping invalid bundled Drone %s: %s", subdir, exc)
+                    continue
+
         return rows
 
     @staticmethod
@@ -260,6 +344,17 @@ class DroneStore:
                     logger.warning("Failed to load Drone from folder %s: %s", subdir.name, exc)
                     continue
 
+        # Check bundled drones
+        bundled_file = DroneStore._bundled_drones_root() / drone_id / "drone.json"
+        if bundled_file.exists():
+            try:
+                data = json.loads(bundled_file.read_text(encoding="utf-8"))
+                data["id"] = drone_id
+                return _drone_from_dict(data)
+            except Exception as exc:
+                logger.warning("Failed to load bundled Drone %s: %s", drone_id, exc)
+                return None
+
         return None
 
     @staticmethod
@@ -277,8 +372,17 @@ class DroneStore:
 
     @staticmethod
     def drone_folder(workspace_root: Path, drone_id: str) -> Path:
-        """Return the folder for a registered Drone id under the given workspace."""
-        return _global_drones_root(workspace_root) / drone_id
+        """Return the folder for a registered Drone id under the given workspace.
+
+        Falls back to the bundled path if the user path does not exist.
+        """
+        user_path = _global_drones_root(workspace_root) / drone_id
+        if user_path.exists():
+            return user_path
+        bundled_path = DroneStore._bundled_drones_root() / drone_id
+        if (bundled_path / "drone.json").exists():
+            return bundled_path
+        return user_path
 
     @staticmethod
     def _write_manifest(drone_dir: Path, drone: DroneDefinition) -> None:
@@ -353,8 +457,15 @@ class DroneStore:
 
     @staticmethod
     def delete_drone(workspace_root: Path, drone_id: str) -> bool:
-        """Remove a drone definition. Returns True if anything was deleted."""
+        """Remove a drone definition. Returns True if anything was deleted.
+
+        Bundled drones cannot be deleted.
+        """
         if not _is_safe_drone_id(drone_id):
+            return False
+
+        # Prevent deletion of bundled drones
+        if DroneStore.is_bundled_drone(drone_id):
             return False
 
         deleted = False
@@ -378,7 +489,8 @@ class DroneStore:
 
         while True:
             global_exists = (_global_drones_root(workspace_root) / candidate / "drone.json").exists()
-            if not global_exists:
+            bundled_exists = (DroneStore._bundled_drones_root() / candidate / "drone.json").exists()
+            if not global_exists and not bundled_exists:
                 return candidate
             counter += 1
             candidate = f"{base}-{counter}"
@@ -417,6 +529,13 @@ class DroneStore:
                 raise ValueError("Drone entrypoint is required")
             _validate_entrypoint(drone.entrypoint)
 
+
+    @staticmethod
+    def is_bundled_drone(drone_id: str) -> bool:
+        """Return True if a drone.json exists in the bundled root for this ID."""
+        if not _is_safe_drone_id(drone_id):
+            return False
+        return (DroneStore._bundled_drones_root() / drone_id / "drone.json").exists()
 
     @staticmethod
     def print_entries(workspace_root: Path) -> str:
