@@ -86,12 +86,6 @@ from aura.conversation.tool_limits import (
     ToolLimitState,
     limit_reached_payload,
 )
-from aura.conversation.tool_markup_guard import (
-    RAW_TOOL_MARKUP_FAILURE_CLASS,
-    RAW_TOOL_MARKUP_RETRY_INSTRUCTION,
-    RAW_TOOL_MARKUP_SUMMARY,
-    message_contains_raw_tool_markup,
-)
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import (
     ApprovalCallback,
@@ -313,7 +307,6 @@ class ConversationManager:
         task_completion_context = False
         final_messages_after_completion = 0
         last_completion_final_text = ""
-        worker_raw_tool_markup_retry_sent = False
 
         def discard_worker_candidate_final() -> None:
             nonlocal candidate_final_message
@@ -416,29 +409,6 @@ class ConversationManager:
                 return
 
             tool_calls = full_message.get("tool_calls") or []
-            if (
-                mode == "worker"
-                and not tool_calls
-                and message_contains_raw_tool_markup(full_message)
-            ):
-                if not worker_raw_tool_markup_retry_sent:
-                    self._history.append_user_text(RAW_TOOL_MARKUP_RETRY_INSTRUCTION)
-                    worker_raw_tool_markup_retry_sent = True
-                    discard_worker_candidate_final()
-                    continue
-                self._finish_worker_unrecoverable(
-                    on_event,
-                    failure_class=RAW_TOOL_MARKUP_FAILURE_CLASS,
-                    error=RAW_TOOL_MARKUP_SUMMARY,
-                    details={
-                        "reason": RAW_TOOL_MARKUP_FAILURE_CLASS,
-                        "phase_boundary": True,
-                        "needs_followup": True,
-                    },
-                    phase_boundary=True,
-                    needs_followup=True,
-                )
-                return
             if (
                 not tool_calls
                 and mode in {"planner", "single"}
@@ -1215,19 +1185,12 @@ class ConversationManager:
         failure_class: str,
         error: str,
         details: dict[str, Any] | None = None,
-        phase_boundary: bool = False,
-        needs_followup: bool = False,
     ) -> None:
         payload = {
             "ok": False,
             "failure_class": failure_class,
             "error": error,
         }
-        if phase_boundary:
-            payload["phase_boundary"] = True
-        if needs_followup:
-            payload["needs_followup"] = True
-            payload["followup_reason"] = failure_class
         if details:
             payload["details"] = details
         content = json.dumps(payload, ensure_ascii=False)
