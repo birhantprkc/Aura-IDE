@@ -23,16 +23,16 @@ from aura.client.events import (
 
 # Regex to match invoke blocks and their parameters
 _INVOKE_RE = re.compile(
-    r'<\|\s*DSML\s*\|\s*invoke\s+name="([^"]+)"\s*>(.*?)</\|\s*DSML\s*\|\s*invoke\s*>',
+    r'<｜｜DSML｜｜invoke\s+name="([^"]+)"\s*>(.*?)</｜｜DSML｜｜invoke\s*>',
     re.DOTALL,
 )
 _PARAM_RE = re.compile(
-    r'<\|\s*DSML\s*\|\s*parameter\s+name="([^"]+)"[^>]*>(.*?)</\|\s*DSML\s*\|\s*parameter\s*>',
+    r'<｜｜DSML｜｜parameter\s+name="([^"]+)"[^>]*>(.*?)</｜｜DSML｜｜parameter\s*>',
     re.DOTALL,
 )
 
-_START_TAG = "<| DSML | tool_calls>"
-_CLOSE_TAG = "</| DSML | tool_calls>"
+_START_TAG = "<｜｜DSML｜｜tool_calls>"
+_CLOSE_TAG = "</｜｜DSML｜｜tool_calls>"
 
 
 class DsmlParser:

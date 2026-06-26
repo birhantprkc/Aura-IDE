@@ -32,6 +32,7 @@ from aura.client.events import (
     ToolCallStart,
     Usage,
 )
+from aura.client.dsml_parser import DsmlParser
 from aura.config import (
     ProviderId,
     ThinkingMode,
@@ -197,6 +198,13 @@ class DeepSeekClient:
         seen_starts: set[int] = set()
         finish_reason: str | None = None
         usage_emitted = False
+        dsml_parser = DsmlParser(start_index=1000)
+
+        def _yield_dsml_events(events: Iterator[Event]) -> Iterator[Event]:
+            for event in events:
+                if isinstance(event, ContentDelta):
+                    content_buf.append(event.text)
+                yield event
 
         try:
             stream = self._client.chat.completions.create(**kwargs)
@@ -318,8 +326,7 @@ class DeepSeekClient:
 
             # Final answer text.
             if delta.content:
-                content_buf.append(delta.content)
-                yield ContentDelta(delta.content)
+                yield from _yield_dsml_events(dsml_parser.push(delta.content))
 
             # Tool-call fragments. OpenAI streams them as deltas keyed by index.
             if delta.tool_calls:
@@ -358,6 +365,8 @@ class DeepSeekClient:
                             index=idx, args_chunk=tc.function.arguments
                         )
 
+        yield from _yield_dsml_events(dsml_parser.flush())
+
         # Close out any tool-calls we started.
         for idx in sorted(tool_calls):
             if idx in seen_starts:
@@ -370,10 +379,11 @@ class DeepSeekClient:
         }
         if not full_message["reasoning_content"]:
             full_message.pop("reasoning_content")
-        if tool_calls:
+        parsed_tool_calls = dsml_parser.get_tool_calls()
+        if tool_calls or parsed_tool_calls:
             full_message["tool_calls"] = [
                 tool_calls[i] for i in sorted(tool_calls)
-            ]
+            ] + parsed_tool_calls
             # Sanity: ensure args parse — if not, the tool runner will surface it.
             for tc in full_message["tool_calls"]:
                 if not tc["function"]["arguments"]:
