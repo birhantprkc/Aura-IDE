@@ -73,9 +73,10 @@ def web_research_folder(tmp_path: Path) -> Path:
     (target / "drone.json").write_text(
         (bundled / "drone.json").read_text(encoding="utf-8"), encoding="utf-8"
     )
-    (target / "main.py").write_text(
-        (bundled / "main.py").read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    for source_file in bundled.glob("*.py"):
+        (target / source_file.name).write_text(
+            source_file.read_text(encoding="utf-8"), encoding="utf-8"
+        )
     return target
 
 
@@ -176,11 +177,20 @@ class TestOutputShape:
     }
 
     def _run_drone(
-        self, folder: Path, goal: str, monkeypatch, block_real_subprocess
+        self,
+        folder: Path,
+        goal: str,
+        monkeypatch,
+        block_real_subprocess,
+        fixture: dict | None = None,
     ) -> dict:
         payload = {**self._PAYLOAD, "goal": goal}
         monkeypatch.setattr(subprocess, "run", block_real_subprocess)
         monkeypatch.setenv("_AURA_MOCK_WEB_RESEARCH", "1")
+        if fixture is None:
+            monkeypatch.delenv("_AURA_WEB_RESEARCH_MOCK_FIXTURE", raising=False)
+        else:
+            monkeypatch.setenv("_AURA_WEB_RESEARCH_MOCK_FIXTURE", json.dumps(fixture))
         proc = subprocess.run(
             [sys.executable, "main.py"],
             cwd=folder,
@@ -191,6 +201,26 @@ class TestOutputShape:
         )
         assert proc.returncode == 0, f"stderr: {proc.stderr}"
         return json.loads(proc.stdout.strip())
+
+    def _single_page_fixture(self, url: str, title: str, text: str) -> dict:
+        return {
+            "results": [{"url": url, "title": title}],
+            "pages": {url: {"title": title, "text": text}},
+        }
+
+    def _assert_sourced_answer(self, data: dict, expected: str) -> None:
+        assert data["ok"] is True
+        assert expected in data["answer"]
+        assert data["verified_facts"]
+        assert data["evidence"]
+        assert data["sources"]
+        for fact in data["verified_facts"]:
+            assert any(ev.get("supports_fact") == fact for ev in data["evidence"])
+        for ev in data["evidence"]:
+            assert ev.get("source_url")
+            assert ev.get("excerpt")
+            assert "supports_fact" in ev
+        assert data["confidence"] in {"medium", "high"}
 
     def test_returned_cargo_shape(
         self, web_research_folder: Path, monkeypatch, block_real_subprocess
@@ -230,6 +260,102 @@ class TestOutputShape:
         assert "query is required" in data["error"]
         assert "no query" in data["summary"].lower()
 
+    def test_generic_current_info_returns_sourced_answer(
+        self, web_research_folder: Path, monkeypatch, block_real_subprocess
+    ) -> None:
+        fixture = self._single_page_fixture(
+            "https://status.example.test/current",
+            "ExampleNet Status",
+            "ExampleNet service status: operational as of June 27, 2026.",
+        )
+        data = self._run_drone(
+            web_research_folder,
+            "What is the current status of ExampleNet service?",
+            monkeypatch,
+            block_real_subprocess,
+            fixture,
+        )
+
+        self._assert_sourced_answer(data, "operational")
+        assert all("schedule" not in step.get("step", "") for step in data["trace"] if isinstance(step, dict))
+
+    def test_latest_software_version_returns_sourced_answer(
+        self, web_research_folder: Path, monkeypatch, block_real_subprocess
+    ) -> None:
+        fixture = self._single_page_fixture(
+            "https://downloads.example.test/python",
+            "Python Downloads",
+            "Latest Python release: Python 3.14.0 is the newest stable version.",
+        )
+        data = self._run_drone(
+            web_research_folder,
+            "What is the latest Python version?",
+            monkeypatch,
+            block_real_subprocess,
+            fixture,
+        )
+
+        self._assert_sourced_answer(data, "Python 3.14.0")
+
+    def test_release_notes_question_returns_sourced_answer(
+        self, web_research_folder: Path, monkeypatch, block_real_subprocess
+    ) -> None:
+        fixture = self._single_page_fixture(
+            "https://changelog.example.test/nuitka",
+            "Nuitka Changelog",
+            (
+                "Nuitka 2.7.12 is the latest release. "
+                "Changes in Nuitka 2.7.12 include improved standalone packaging and fixes for Python 3.14."
+            ),
+        )
+        data = self._run_drone(
+            web_research_folder,
+            "What changed in the latest Nuitka release?",
+            monkeypatch,
+            block_real_subprocess,
+            fixture,
+        )
+
+        self._assert_sourced_answer(data, "improved standalone packaging")
+        assert any("fixes for Python 3.14" in fact for fact in data["verified_facts"])
+
+    def test_pricing_question_returns_sourced_answer(
+        self, web_research_folder: Path, monkeypatch, block_real_subprocess
+    ) -> None:
+        fixture = self._single_page_fixture(
+            "https://pricing.example.test/openai",
+            "OpenAI API Pricing",
+            "GPT-4.1 pricing is $2.00 per 1M input tokens and $8.00 per 1M output tokens.",
+        )
+        data = self._run_drone(
+            web_research_folder,
+            "What is the current OpenAI API price for GPT-4.1?",
+            monkeypatch,
+            block_real_subprocess,
+            fixture,
+        )
+
+        self._assert_sourced_answer(data, "$2.00 per 1M input tokens")
+        assert "$8.00 per 1M output tokens" in data["answer"]
+
+    def test_current_person_role_returns_sourced_answer(
+        self, web_research_folder: Path, monkeypatch, block_real_subprocess
+    ) -> None:
+        fixture = self._single_page_fixture(
+            "https://leadership.example.test/microsoft",
+            "Microsoft Leadership",
+            "Satya Nadella is Chairman and Chief Executive Officer of Microsoft.",
+        )
+        data = self._run_drone(
+            web_research_folder,
+            "Who is the current CEO of Microsoft?",
+            monkeypatch,
+            block_real_subprocess,
+            fixture,
+        )
+
+        self._assert_sourced_answer(data, "Satya Nadella")
+
     def test_mocked_world_cup_schedule_result(
         self, web_research_folder: Path, monkeypatch, block_real_subprocess
     ) -> None:
@@ -249,6 +375,88 @@ class TestOutputShape:
         assert data["evidence"]
         assert any("World Cup Matches Today: USA vs ENG" in ev["excerpt"] for ev in data["evidence"])
         assert any("fifa.com" in src["url"] for src in data["sources"])
+
+    def test_conflicting_sources_lower_confidence_and_report_gap(
+        self, web_research_folder: Path, monkeypatch, block_real_subprocess
+    ) -> None:
+        fixture = {
+            "results": [
+                {"url": "https://source-a.example.test/python", "title": "Python Downloads"},
+                {"url": "https://source-b.example.test/python", "title": "Python Mirror"},
+            ],
+            "pages": {
+                "https://source-a.example.test/python": {
+                    "title": "Python Downloads",
+                    "text": "Latest Python release: Python 3.14.0 is the newest stable version.",
+                },
+                "https://source-b.example.test/python": {
+                    "title": "Python Mirror",
+                    "text": "Latest Python release: Python 3.13.9 is the newest stable version.",
+                },
+            },
+        }
+        data = self._run_drone(
+            web_research_folder,
+            "What is the latest Python version?",
+            monkeypatch,
+            block_real_subprocess,
+            fixture,
+        )
+
+        assert data["answer"]
+        assert data["verified_facts"]
+        assert data["evidence"]
+        assert data["confidence"] == "low"
+        assert any("source conflict" in gap.lower() for gap in data["gaps"])
+
+    def test_no_clear_answer_returns_empty_answer_low_confidence_and_gap(
+        self, web_research_folder: Path, monkeypatch, block_real_subprocess
+    ) -> None:
+        fixture = self._single_page_fixture(
+            "https://docs.example.test/contoso",
+            "Contoso Background",
+            "Contoso is a fictional company. This page has background information but no current contact answer.",
+        )
+        data = self._run_drone(
+            web_research_folder,
+            "What is the current support phone for Contoso?",
+            monkeypatch,
+            block_real_subprocess,
+            fixture,
+        )
+
+        assert data["answer"] == ""
+        assert data["verified_facts"] == []
+        assert data["confidence"] == "low"
+        assert any("did not clearly support" in gap for gap in data["gaps"])
+
+    def test_all_source_fail_returns_empty_answer_and_confidence_none(
+        self, web_research_folder: Path, monkeypatch, block_real_subprocess
+    ) -> None:
+        fixture = {
+            "results": [],
+            "pages": {
+                "https://down.example.test/source": {
+                    "ok": False,
+                    "title": "Down",
+                    "text": "",
+                    "error": "HTTP fetch error: timeout",
+                }
+            },
+        }
+        data = self._run_drone(
+            web_research_folder,
+            "https://down.example.test/source",
+            monkeypatch,
+            block_real_subprocess,
+            fixture,
+        )
+
+        assert data["answer"] == ""
+        assert data["verified_facts"] == []
+        assert data["evidence"] == []
+        assert data["confidence"] == "none"
+        assert any("No useful evidence" in gap for gap in data["gaps"])
 
     def test_mocked_schedule_evidence_without_parse_returns_gap(
         self, web_research_folder: Path, monkeypatch, block_real_subprocess
