@@ -9,7 +9,6 @@ import pytest
 
 from aura.gui.conv_persistence import ConversationPersistence
 
-
 # Fixtures
 
 
@@ -350,7 +349,9 @@ def test_open_conversation_refuses_cross_project_path(mock_warning,
 
 import copy
 import json
+
 from aura.conversation.persistence import save_conversation
+
 
 def test_update_project_thread_creates_project_and_thread(tmp_path, persistence, mock_bridge):
     """_update_project_thread creates .aura/project.json and a thread file."""
@@ -418,6 +419,7 @@ def test_auto_save_ignores_cross_project_existing_path(tmp_path, persistence, mo
     import copy
     import json
     import threading
+
     from aura.conversation.persistence import conversations_dir, save_conversation
 
     ws_a = tmp_path / "project_a"
@@ -470,3 +472,58 @@ def test_auto_save_ignores_cross_project_existing_path(tmp_path, persistence, mo
             break
     else:
         pytest.fail("No conversation saved in project B")
+
+
+# ---- replay transient filtering ----------------------------------------
+
+
+def test_replay_skips_stale_read_invalidation(persistence, mock_bridge, mock_chat, mock_loaded):
+    """Stale-read invalidation user messages are NOT added to the chat on replay."""
+    mock_loaded.history.messages = [
+        {"role": "user", "content": "Planner stale-read invalidation:\nThe Worker modified these files:\n- foo.py\n\nRe-read..."},
+        {"role": "user", "content": "Real user message"},
+        {"role": "assistant", "content": "OK!", "tool_calls": []},
+    ]
+    with patch("aura.gui.conv_persistence.QTimer.singleShot") as mock_timer:
+        mock_timer.side_effect = lambda ms, func: func()
+        persistence.apply_loaded(mock_loaded)
+    # Only "Real user message" should have been added by replay.
+    mock_chat.add_user.assert_called_once_with("Real user message")
+
+
+def test_replay_skips_reasoning_content(persistence, mock_bridge, mock_chat, mock_loaded):
+    """reasoning_content is NOT passed to append_reasoning during replay."""
+    mock_loaded.history.messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Final answer", "reasoning_content": "Some thinking block", "tool_calls": []},
+    ]
+    with patch("aura.gui.conv_persistence.QTimer.singleShot") as mock_timer:
+        mock_timer.side_effect = lambda ms, func: func()
+        persistence.apply_loaded(mock_loaded)
+    mock_chat.add_user.assert_called_once_with("Hello")
+    mock_chat.begin_assistant.assert_called_once()
+    mock_chat.append_reasoning.assert_not_called()
+    mock_chat.append_content.assert_called_once_with("Final answer")
+    mock_chat.assistant_done.assert_called_once()
+
+
+def test_replay_skips_assistant_tool_call_messages(persistence, mock_bridge, mock_chat, mock_loaded):
+    """Assistant messages with tool_calls are skipped; only final prose is shown."""
+    mock_loaded.history.messages = [
+        {"role": "user", "content": "Implement feature"},
+        {"role": "assistant", "content": "Now I'll dispatch to worker...", "tool_calls": [{"function": {"name": "dispatch_to_worker"}, "id": "call_1"}]},
+        {"role": "user", "content": "Looks good"},
+        {"role": "assistant", "content": "Here's the result", "tool_calls": []},
+    ]
+    with patch("aura.gui.conv_persistence.QTimer.singleShot") as mock_timer:
+        mock_timer.side_effect = lambda ms, func: func()
+        persistence.apply_loaded(mock_loaded)
+    # Both user messages should be added.
+    calls = mock_chat.add_user.call_args_list
+    assert len(calls) == 2
+    assert calls[0].args[0] == "Implement feature"
+    assert calls[1].args[0] == "Looks good"
+    # Only one assistant card (the final prose without tool_calls).
+    mock_chat.begin_assistant.assert_called_once()
+    mock_chat.append_content.assert_called_once_with("Here's the result")
+    mock_chat.assistant_done.assert_called_once()

@@ -10,11 +10,10 @@ import logging
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal, Slot, QTimer
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from aura.config import APP_NAME
-from aura.settings import AppSettings
 from aura.conversation.history import History
 from aura.conversation.persistence import (
     LoadedConversation,
@@ -24,6 +23,26 @@ from aura.conversation.persistence import (
     save_conversation,
 )
 from aura.projects.store import ProjectStore
+from aura.settings import AppSettings
+
+
+def _is_transient_replay_message(m: dict) -> bool:
+    """Return True if *m* is a runtime artifact that should not appear in restored chat.
+
+    Skips:
+    - Synthetic stale-read invalidation user notices.
+    - Assistant messages whose purpose was tool dispatch/progress.
+    """
+    role = m.get("role")
+    if role == "user":
+        content = m.get("content", "")
+        if isinstance(content, str) and content.startswith("Planner stale-read invalidation:"):
+            return True
+    elif role == "assistant":
+        # Assistant messages with tool_calls are operational chatter, not final prose.
+        if m.get("tool_calls"):
+            return True
+    return False
 
 
 class ConversationPersistence(QObject):
@@ -387,8 +406,12 @@ class ConversationPersistence(QObject):
 
         self._chat.begin_bulk_update()
 
-        # Filter out tool messages as they are paired into assistant cards.
-        process_msgs = [m for m in msgs if m.get("role") != "tool"]
+        # Filter out tool messages and transient runtime artifacts.
+        process_msgs = [
+            m for m in msgs
+            if m.get("role") != "tool"
+            and not _is_transient_replay_message(m)
+        ]
         msg_iter = iter(process_msgs)
 
         def process_chunk() -> None:
@@ -414,9 +437,8 @@ class ConversationPersistence(QObject):
                             self._chat.add_user("\n".join(text_parts))
                     elif role == "assistant":
                         self._chat.begin_assistant()
-                        rc = m.get("reasoning_content")
-                        if rc:
-                            self._chat.append_reasoning(rc)
+                        # reasoning_content is never replayed — it is
+                        # transient runtime state from the LLM stream.
                         content = m.get("content")
                         if isinstance(content, str) and content:
                             self._chat.append_content(content)
