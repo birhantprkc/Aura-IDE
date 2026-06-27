@@ -12,6 +12,26 @@ from typing import Any
 
 ValidationPlan = dict[str, Any]
 
+_KIND_LABELS: dict[str, str] = {
+    "gui": "GUI",
+    "drone": "drone",
+    "provider": "provider",
+    "build": "build",
+    "general_python": "general Python",
+    "not_applicable": "skipped",
+}
+
+# Known source file to test file mappings (non-exhaustive, covers common
+# targets).  Used by _suggest_focused_tests to produce suggestions even
+# without a workspace_root.
+_KNOWN_TEST_MAPPINGS: dict[str, str] = {
+    "aura/gui/info_hub_pane.py": "tests/test_info_hub_pane.py",
+    "aura/validation/selector.py": "tests/test_validation_selector.py",
+    "aura/gui/worker_handler.py": "tests/test_worker_handler.py",
+    "aura/bridge/dispatch.py": "tests/test_dispatch.py",
+    "aura/context_gearbox/sources.py": "tests/test_context_gearbox.py",
+}
+
 
 def select_validation_plan(
     target_files: list[str],
@@ -34,7 +54,7 @@ def select_validation_plan(
     context_gearbox : dict[str, Any] | None
         Metadata from the context gearbox, including loaded source IDs.
     workspace_root : Path | None
-        Root of the workspace (unused in selection, available for future use).
+        Root of the workspace, used to verify test file existence.
     existing_validation_text : str | None
         Pre-existing validation text from a prior run (unused in selection).
 
@@ -42,7 +62,8 @@ def select_validation_plan(
     -------
     ValidationPlan
         A plain-data dict with keys ``kind``, ``commands``, ``reason``,
-        ``confidence``, and ``skipped``.
+        ``confidence``, ``skipped``, ``display``, and optionally
+        ``test_suggestions_skipped``.
     """
     # Normalise all paths to forward-slash for cross-platform glob matching.
     all_candidates: list[str] = []
@@ -51,49 +72,65 @@ def select_validation_plan(
     if changed_files:
         all_candidates.extend(p.replace("\\", "/") for p in changed_files)
 
+    # Extract changed .py files for focused compile commands.
+    changed_py_files: list[str] = []
+    if changed_files:
+        changed_py_files = [
+            p.replace("\\", "/") for p in changed_files
+            if p.replace("\\", "/").endswith(".py")
+        ]
+
     # Extract loaded context-gearbox source IDs.
     loaded_sources: list[str] = _loaded_source_ids(context_gearbox)
+
+    # Compute test suggestions once used by several lanes below.
+    _test_cmds, _test_skipped = _suggest_focused_tests(all_candidates, workspace_root)
 
     # ── Ordered selection rules ───────────────────────────────────────
 
     # 1. GUI validation
     if _any_matches(all_candidates, _GUI_PATTERNS) or "gui_rules" in loaded_sources:
+        _c = _focused_compile_commands(changed_py_files, "python -m compileall aura/gui")
         return _plan(
             kind="gui",
-            commands=["python -m compileall aura/gui", "python -m aura --selfcheck"],
+            commands=_c + _test_cmds + ["python -m aura --selfcheck"],
             reason="GUI files changed",
             confidence="focused",
+            test_suggestions_skipped=_test_skipped,
         )
 
     # 2. Drone validation
     if _any_matches(all_candidates, _DRONE_PATTERNS) or "drone_rules" in loaded_sources:
+        _c = _focused_compile_commands(changed_py_files, "python -m compileall aura/drones")
         return _plan(
             kind="drone",
-            commands=["python -m compileall aura/drones", "python -m aura --selfcheck"],
+            commands=_c + _test_cmds + ["python -m aura --selfcheck"],
             reason="Drone files changed",
             confidence="focused",
+            test_suggestions_skipped=_test_skipped,
         )
 
     # 3. Provider validation
     if _any_matches(all_candidates, _PROVIDER_PATTERNS) or "provider_rules" in loaded_sources:
+        _c = _focused_compile_commands(changed_py_files, "python -m compileall aura/providers aura/backends aura/client")
         return _plan(
             kind="provider",
-            commands=[
-                "python -m compileall aura/providers aura/backends aura/client",
-                "python -m aura --selfcheck",
-            ],
+            commands=_c + _test_cmds + ["python -m aura --selfcheck"],
             reason="Provider/backend/client files changed",
             confidence="focused",
+            test_suggestions_skipped=_test_skipped,
         )
 
     # 4. Build validation
     if _any_matches(all_candidates, _BUILD_PATTERNS) or "build_pipeline_rules" in loaded_sources:
+        _c = _focused_compile_commands(changed_py_files, "python -m compileall scripts/")
         return _plan(
             kind="build",
-            commands=["python -m compileall scripts/", "python -m aura --selfcheck"],
+            commands=_c + _test_cmds + ["python -m aura --selfcheck"],
             reason="Build/packaging files changed",
             confidence="focused",
             skipped=["packaging build skipped \u2014 use --package explicitly to run full build"],
+            test_suggestions_skipped=_test_skipped,
         )
 
     # 5. General Python validation
@@ -102,9 +139,10 @@ def select_validation_plan(
         compile_command = "python -m compileall " + " ".join(sorted(python_dirs))
         return _plan(
             kind="general_python",
-            commands=[compile_command, "python -m aura --selfcheck"],
+            commands=_test_cmds + [compile_command, "python -m aura --selfcheck"],
             reason="General Python files changed",
             confidence="general",
+            test_suggestions_skipped=_test_skipped,
         )
 
     # 6. Not applicable
@@ -153,23 +191,135 @@ def _collect_python_dirs(candidates: list[str]) -> list[str]:
     return list(dirs)
 
 
+def _focused_compile_commands(changed_py_files: list[str], fallback_compile_cmd: str) -> list[str]:
+    """Return focused ``py_compile`` commands when .py files were changed.
+
+    When ``changed_py_files`` is non-empty, produce a single
+    ``python -m py_compile`` command listing every changed .py file.
+    Otherwise fall back to the broad ``compileall`` command.
+    """
+    if changed_py_files:
+        return ["python -m py_compile " + " ".join(sorted(changed_py_files))]
+    return [fallback_compile_cmd]
+
+
+def _suggest_focused_tests(
+    files: list[str],
+    workspace_root: Path | None = None,
+) -> tuple[list[str], list[str]]:
+    """Return focused pytest command suggestions for the given files.
+
+    Attempts to map each .py file path to a likely test file using:
+
+    1.  Known project-specific mappings (see ``_KNOWN_TEST_MAPPINGS``).
+    2.  A general stem-based rule:
+        ``aura/gui/{stem}.py`` → ``tests/test_{stem}.py``.
+
+    Suggestions are only included when the test file can be verified to
+    exist on disk via ``workspace_root``, or the mapping is a known one.
+
+    Returns
+    -------
+    (suggestions, test_suggestions_skipped)
+        ``suggestions`` is at most 3 pytest command strings.
+        ``test_suggestions_skipped`` records candidate test paths that
+        could not be verified.
+    """
+    if not files:
+        return [], []
+
+    suggestions: list[str] = []
+    skipped: list[str] = []
+    seen: set[str] = set()
+
+    for file_path in files:
+        p = file_path.replace("\\", "/")
+        if not p.endswith(".py"):
+            continue
+
+        candidates = _candidate_test_paths(p)
+        for test_path in candidates:
+            if test_path in seen:
+                continue
+            seen.add(test_path)
+
+            # Known mappings are always suggested.
+            if p in _KNOWN_TEST_MAPPINGS and _KNOWN_TEST_MAPPINGS[p] == test_path:
+                suggestions.append(f"python -m pytest {test_path} -q")
+                continue
+
+            # General rule: verify existence.
+            if workspace_root is not None:
+                if (workspace_root / test_path).is_file():
+                    suggestions.append(f"python -m pytest {test_path} -q")
+                else:
+                    skipped.append(f"test file not found: {test_path}")
+            # When workspace_root is None, skip general-rule suggestions
+            # (cannot verify existence).
+            else:
+                skipped.append(f"could not verify (no workspace_root): {test_path}")
+
+    return suggestions[:3], skipped
+
+
+def _candidate_test_paths(file_path: str) -> list[str]:
+    """Generate candidate test file paths for a given source file.
+
+    Order matters — the first match is preferred.
+    """
+    # 1. Known specific mapping
+    if file_path in _KNOWN_TEST_MAPPINGS:
+        return [_KNOWN_TEST_MAPPINGS[file_path]]
+
+    # 2. Strip subdirectory prefix like /cards/ and retry.
+    #    e.g. aura/gui/cards/foo.py → aura/gui/foo.py
+    stripped = file_path
+    for subdir in ("/cards/", "/widgets/", "/panels/"):
+        if subdir in file_path:
+            parts = file_path.split(subdir, 1)
+            if len(parts) > 1:
+                candidate = parts[0] + "/" + parts[1]
+                if candidate in _KNOWN_TEST_MAPPINGS:
+                    return [_KNOWN_TEST_MAPPINGS[candidate]]
+
+    # 3. General stem rule
+    stem = file_path.rsplit("/", 1)[-1][:-3]  # e.g. "worker_handler"
+    return [f"tests/test_{stem}.py"]
+
+
 def _plan(
     kind: str,
     commands: list[str],
     reason: str,
     confidence: str,
     skipped: list[str] | None = None,
+    display: str | None = None,
+    test_suggestions_skipped: list[str] | None = None,
 ) -> ValidationPlan:
-    """Build and return a deterministic validation plan."""
+    """Build and return a deterministic validation plan.
+
+    Automatically computes the ``display`` field if not provided.
+    """
     # Deduplicate commands while preserving first-seen order.
     deduped = list(dict.fromkeys(commands))
-    return {
+    if display is None:
+        kind_label = _KIND_LABELS.get(kind, kind)
+        n = len(deduped)
+        if kind_label == confidence:
+            display = f"Validation plan: {kind_label}, {n} checks selected"
+        else:
+            display = f"Validation plan: {kind_label} {confidence}, {n} checks selected"
+    result: dict[str, Any] = {
         "kind": kind,
         "commands": deduped,
         "reason": reason,
         "confidence": confidence,
         "skipped": skipped or [],
+        "display": display,
     }
+    if test_suggestions_skipped:
+        result["test_suggestions_skipped"] = test_suggestions_skipped
+    return result
 
 
 # ── Pattern lists (static, order-sensitive) ──────────────────────────

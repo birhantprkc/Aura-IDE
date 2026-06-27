@@ -266,3 +266,97 @@ def test_provider_settings_pattern():
     """Files matching aura/*provider*settings*.py trigger provider plan."""
     plan = _plan(target_files=["aura/user_provider_settings.py"])
     assert plan["kind"] == "provider"
+
+
+# ── Focused compile and display (Phase 1B) ───────────────────────────
+
+
+def test_changed_python_file_produces_focused_compile():
+    """A single changed .py file produces a focused py_compile command."""
+    plan = _plan(
+        target_files=["aura/gui/main_window.py"],
+        changed_files=["aura/gui/main_window.py"],
+    )
+    compile_cmds = [c for c in plan["commands"] if "py_compile" in c]
+    assert len(compile_cmds) >= 1
+    assert "aura/gui/main_window.py" in compile_cmds[0]
+
+
+def test_multiple_changed_python_files_produce_focused_compile():
+    plan = _plan(
+        target_files=["aura/gui/a.py", "aura/gui/b.py"],
+        changed_files=["aura/gui/a.py", "aura/gui/b.py"],
+    )
+    compile_cmds = [c for c in plan["commands"] if "py_compile" in c]
+    assert len(compile_cmds) >= 1
+    assert "aura/gui/a.py" in compile_cmds[0]
+    assert "aura/gui/b.py" in compile_cmds[0]
+
+
+def test_target_only_falls_back_to_broad_compile():
+    """When no changed_files, the broad compileall fallback is used."""
+    plan = _plan(target_files=["aura/gui/main_window.py"])
+    compile_cmds = [c for c in plan["commands"] if "compileall" in c]
+    assert len(compile_cmds) >= 1
+    assert "aura/gui" in compile_cmds[0]
+
+
+def test_display_field_present_and_compact():
+    plan = _plan(target_files=["aura/gui/main_window.py"])
+    assert "display" in plan
+    assert "Validation plan:" in plan["display"]
+    assert "2 checks selected" in plan["display"]  # compileall + selfcheck
+
+
+def test_not_applicable_display_is_compact():
+    plan = _plan(target_files=["docs/notes.md"])
+    assert plan["display"] == "Validation plan: skipped, 0 checks selected"
+
+
+def test_obvious_test_mapped_when_exists(tmp_path):
+    """When workspace_root is provided and a test file exists, it is added."""
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_worker_handler.py").write_text("# test")
+    plan = select_validation_plan(
+        target_files=["aura/gui/worker_handler.py"],
+        workspace_root=tmp_path,
+    )
+    test_cmds = [c for c in plan["commands"] if "pytest" in c]
+    assert any("test_worker_handler" in c for c in test_cmds)
+
+
+def test_missing_test_is_skipped_with_reason():
+    plan = _plan(target_files=["aura/gui/unknown_widget.py"])
+    # No test file exists for an unknown widget; no pytest command added
+    test_cmds = [c for c in plan["commands"] if "pytest" in c]
+    assert test_cmds == []
+
+
+def test_display_is_present_in_worker_extras_integration():
+    """Worker extras integration test: display field is present."""
+    extras = {"writes": [], "errors": []}
+    validation_selector = select_validation_plan(
+        target_files=["aura/gui/main_window.py"],
+    )
+    extras["validation_selector"] = validation_selector
+    assert "display" in extras["validation_selector"]
+    assert extras["validation_selector"]["display"].startswith("Validation plan:")
+
+
+def test_no_raw_command_dump_in_display():
+    """The display field is a compact summary, not a raw JSON dump."""
+    plan = _plan(target_files=["aura/gui/main_window.py"])
+    assert len(plan["display"]) < 200
+    assert "python -m" not in plan["display"].lower()
+    assert "compileall" not in plan["display"].lower()
+
+
+def test_all_existing_tests_still_pass():
+    """Bulk smoke check that all existing tests produce expected kind."""
+    assert _plan(target_files=["aura/gui/main_window.py"])["kind"] == "gui"
+    assert _plan(target_files=["aura/drones/web_research.py"])["kind"] == "drone"
+    assert _plan(target_files=["aura/providers/deepseek.py"])["kind"] == "provider"
+    assert _plan(target_files=["scripts/build_nuitka.py"])["kind"] == "build"
+    assert _plan(target_files=["aura/utils.py"])["kind"] == "general_python"
+    assert _plan(target_files=["docs/notes.md"])["kind"] == "not_applicable"

@@ -230,6 +230,18 @@ class InfoHubPane(QWidget):
         sb = self._log_view.verticalScrollBar()
         sb.setValue(sb.maximum())
 
+    def show_validation_selector_line(self, metadata: dict | None) -> None:
+        """Append one compact validation selector line to the Worker Log."""
+        if not isinstance(metadata, dict):
+            return
+        display = metadata.get("display", "").strip()
+        if not display:
+            return
+        self._log_stream.flush()
+        self._log_view.insertPlainText("\n" + display + "\n")
+        sb = self._log_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
     def _on_copy_summary(self, btn: QToolButton, receipt_text: str) -> None:
         QGuiApplication.clipboard().setText(receipt_text)
         btn.setIcon(QIcon(str(media_path("check.svg"))))

@@ -296,6 +296,13 @@ class WorkerEventHandler(QObject):
             if callable(shower):
                 shower(context_gearbox)
 
+        # Validation selector line
+        validation_selector = metadata.get("extras", {}).get("validation_selector")
+        if isinstance(validation_selector, dict) and validation_selector.get("display"):
+            shower = getattr(self._playground, "show_validation_selector_line", None)
+            if callable(shower):
+                shower(validation_selector)
+
         if is_mismatch:
             self._chat.begin_planner_resolution_aura()
 

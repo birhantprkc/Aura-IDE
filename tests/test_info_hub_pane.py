@@ -99,3 +99,27 @@ def test_worker_log_public_boundary_api_separates_same_kind_prose(qapp) -> None:
     pane.flush_worker_log()
 
     assert pane._log_view.toPlainText() == "changes\n\nNow let me"
+
+
+def test_show_validation_selector_line_appends_compact_text(qapp) -> None:
+    pane = InfoHubPane()
+
+    pane.show_validation_selector_line(
+        {"display": "Validation plan: GUI focused, 3 checks selected"}
+    )
+    pane.flush_worker_log()
+
+    log_text = pane._log_view.toPlainText()
+    assert "Validation plan:" in log_text
+    assert "3 checks selected" in log_text
+    assert "compileall" not in log_text  # no raw commands in log line
+
+
+def test_show_validation_selector_line_ignores_empty_display(qapp) -> None:
+    pane = InfoHubPane()
+
+    before = pane._log_view.toPlainText()
+    pane.show_validation_selector_line({"display": ""})
+    pane.flush_worker_log()
+    after = pane._log_view.toPlainText()
+    assert after == before  # no change

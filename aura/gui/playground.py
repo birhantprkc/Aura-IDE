@@ -423,6 +423,9 @@ class AuraPlayground(QWidget):
     def show_context_gearbox_metadata(self, metadata: dict | None) -> None:
         self._info_hub.show_context_gearbox_metadata(metadata)
 
+    def show_validation_selector_line(self, metadata: dict | None) -> None:
+        self._info_hub.show_validation_selector_line(metadata)
+
     def worker_cancelled(self):
         self._code_editor.close_all_tabs()
         self._controllers.clear()
