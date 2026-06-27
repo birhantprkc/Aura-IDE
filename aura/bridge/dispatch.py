@@ -59,7 +59,6 @@ from aura.dependency_context import build_dependency_stanza
 from aura.prompts import (
     WORKER_SYSTEM_PROMPT,
     build_tier1_context,
-    inject_private_worker_style,
     inject_tier1_context,
 )
 
@@ -332,7 +331,6 @@ class _DispatchProxy(QObject):
             tool_call_id, (time.monotonic() - t1) * 1000,
         )
         full_prompt = inject_tier1_context(base_prompt, tier1_context)
-        full_prompt = inject_private_worker_style(full_prompt)
         worker_history.set_system(full_prompt)
         _log.info("worker_profile_detect_start tool_call_id=%s", tool_call_id)
         t2 = time.monotonic()
