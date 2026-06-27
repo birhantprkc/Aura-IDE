@@ -65,14 +65,6 @@ _CODING_TASK_KINDS = {
     "refactor",
 }
 
-GEARBOX_REBUILD_TODO = (
-    "prompt source registry",
-    "scoped context sources",
-    "prompt source ledger",
-    "deterministic current-info source gate",
-    "Worker run ledger / acceptance proof ledger",
-)
-
 CONTEXT_SOURCES: tuple[ContextSource, ...] = (
     ContextSource(
         source_id="core_kernel",
@@ -125,8 +117,7 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
 )
 
 
-def iter_context_sources(role: RuntimeRole) -> tuple[ContextSource, ...]:
-    _ = role
+def iter_registered_sources() -> tuple[ContextSource, ...]:
     return CONTEXT_SOURCES
 
 

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from aura.context_gearbox.models import ComposedContext, RuntimeRole
 from aura.context_gearbox.runtime import compose_system_prompt
+from aura.context_gearbox.sources import iter_registered_sources
 from aura.prompts import (
     PLANNER_SYSTEM_PROMPT,
     SINGLE_SYSTEM_PROMPT,
@@ -134,6 +135,9 @@ def test_worker_composition_includes_quality_contract_stack(tmp_path):
 def test_contract_ledger_order_is_deterministic_and_records_skips(tmp_path):
     composed = compose_system_prompt(RuntimeRole.PLANNER, "", tmp_path)
 
+    assert [entry.source_id for entry in composed.ledger] == [
+        source.source_id for source in iter_registered_sources()
+    ]
     contract_entries = [
         entry for entry in composed.ledger if entry.kind == "quality_contract"
     ]

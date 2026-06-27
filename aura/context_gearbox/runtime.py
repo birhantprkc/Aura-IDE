@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aura.context_gearbox.models import ComposedContext, ContextLedgerEntry, RuntimeRole
-from aura.context_gearbox.sources import collect_source_text, iter_context_sources
+from aura.context_gearbox.sources import collect_source_text, iter_registered_sources
 
 CONTEXT_PLACEHOLDER = "{TIER1_CONTEXT}"
 
@@ -50,7 +50,7 @@ def build_context_text(
     parts: list[str] = []
     ledger: list[ContextLedgerEntry] = []
     normalized_target_files = tuple(target_files or ())
-    for source in iter_context_sources(runtime_role):
+    for source in iter_registered_sources():
         text, entry = collect_source_text(
             source,
             runtime_role,
