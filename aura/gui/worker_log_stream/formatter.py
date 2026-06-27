@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 
-
 _EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
+_GLUED_SENTENCE_RE = re.compile(r'(?<=[.!?:])(?=[A-Z][a-z]{2,}\b)')
+_INLINE_CODE_RE = re.compile(r'`[^`]+`')
 
 
 def normalize_worker_log_text(text: str) -> str:
@@ -16,6 +17,46 @@ def normalize_worker_log_text(text: str) -> str:
 def compact_excess_blank_lines(text: str) -> str:
     """Limit prose spacing to one blank line between sections."""
     return _EXCESS_BLANK_LINES_RE.sub("\n\n", text)
+
+
+def separate_glued_prose(text: str) -> str:
+    """Insert paragraph breaks between glued sentences.
+
+    Skips content inside fenced code blocks (```...```) and inline
+    code spans (`...`).  Idempotent — safe to apply repeatedly.
+    """
+    if not text:
+        return text
+    lines = text.split('\n')
+    result: list[str] = []
+    in_fence = False
+    for line in lines:
+        if line.startswith('```'):
+            in_fence = not in_fence
+            result.append(line)
+        elif in_fence:
+            result.append(line)
+        else:
+            result.append(_fix_glue_in_line(line))
+    return '\n'.join(result)
+
+
+def _fix_glue_in_line(line: str) -> str:
+    """Apply glued-sentence breaks to one line, skipping inline code."""
+    # Gather inline-code spans with unique placeholders.
+    blocks: list[str] = []
+
+    def _collect(m: re.Match) -> str:
+        blocks.append(m.group(0))
+        return f'\x00I{len(blocks) - 1}\x00'
+
+    protected = _INLINE_CODE_RE.sub(_collect, line)
+    # Apply glue-breaking.
+    fixed = _GLUED_SENTENCE_RE.sub('\n\n', protected)
+    # Restore inline-code spans.
+    for i, block in enumerate(blocks):
+        fixed = fixed.replace(f'\x00I{i}\x00', block)
+    return fixed
 
 
 def needs_section_break(

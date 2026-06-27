@@ -5,6 +5,7 @@ from aura.gui.worker_log_stream.formatter import (
     compact_excess_blank_lines,
     needs_section_break,
     normalize_worker_log_text,
+    separate_glued_prose,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "compact_excess_blank_lines",
     "needs_section_break",
     "normalize_worker_log_text",
+    "separate_glued_prose",
 ]

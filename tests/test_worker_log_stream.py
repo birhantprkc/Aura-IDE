@@ -7,6 +7,7 @@ from aura.gui.worker_log_stream import (
     compact_excess_blank_lines,
     needs_section_break,
     normalize_worker_log_text,
+    separate_glued_prose,
 )
 
 
@@ -191,14 +192,14 @@ def test_buffer_glued_prose_idempotent() -> None:
 
 
 def test_glued_sentence_regex_inserts_break() -> None:
-    from aura.gui.cards._stream_label import _GLUED_SENTENCE_RE
+    from aura.gui.worker_log_stream.formatter import _GLUED_SENTENCE_RE
 
     result = _GLUED_SENTENCE_RE.sub('\n\n', "Start.Now let me check")
     assert result == "Start.\n\nNow let me check"
 
 
 def test_glued_sentence_regex_with_question_mark() -> None:
-    from aura.gui.cards._stream_label import _GLUED_SENTENCE_RE
+    from aura.gui.worker_log_stream.formatter import _GLUED_SENTENCE_RE
 
     result = _GLUED_SENTENCE_RE.sub('\n\n', "Is that correct?Here's more")
     assert result == "Is that correct?\n\nHere's more"
@@ -206,7 +207,7 @@ def test_glued_sentence_regex_with_question_mark() -> None:
 
 def test_glued_sentence_regex_no_split_on_single_letter() -> None:
     """Single-letter words like 'I' should not trigger a split."""
-    from aura.gui.cards._stream_label import _GLUED_SENTENCE_RE
+    from aura.gui.worker_log_stream.formatter import _GLUED_SENTENCE_RE
 
     result = _GLUED_SENTENCE_RE.sub('\n\n', "Am I.Indeed")
     # '.Indeed' matches (I uppercase + 'ndeed' lowercase), so break is inserted
@@ -219,14 +220,14 @@ def test_glued_sentence_regex_no_split_on_single_letter() -> None:
 
 
 def test_glued_sentence_regex_no_split_on_acronym() -> None:
-    from aura.gui.cards._stream_label import _GLUED_SENTENCE_RE
+    from aura.gui.worker_log_stream.formatter import _GLUED_SENTENCE_RE
 
     result = _GLUED_SENTENCE_RE.sub('\n\n', "U.S.A. remains")
     assert result == "U.S.A. remains"
 
 
 def test_glued_sentence_regex_code_block_preserved() -> None:
-    from aura.gui.cards._stream_label import _GLUED_SENTENCE_RE
+    from aura.gui.worker_log_stream.formatter import _GLUED_SENTENCE_RE
 
     # Pure code block (no sentence boundaries) unchanged
     text = "```\nprint(1)\n```"
@@ -242,7 +243,7 @@ def test_glued_sentence_regex_code_block_preserved() -> None:
 
 def test_glued_sentence_regex_idempotent() -> None:
     """Applying the regex twice does not add extra breaks."""
-    from aura.gui.cards._stream_label import _GLUED_SENTENCE_RE
+    from aura.gui.worker_log_stream.formatter import _GLUED_SENTENCE_RE
 
     text = "A.Now B.Then C"
     once = _GLUED_SENTENCE_RE.sub('\n\n', text)
@@ -255,3 +256,44 @@ def _ensure_qapp() -> QApplication:
     if app is None:
         app = QApplication([])
     return app
+
+
+# ── separate_glued_prose tests ──────────────────────────────────────
+
+
+def test_separate_glued_prose_splits_glued_transition() -> None:
+    assert separate_glued_prose("Start.Now") == "Start.\n\nNow"
+
+
+def test_separate_glued_prose_preserves_fenced_code() -> None:
+    text = "Check:\n```\nobj.Method\n```\nDone."
+    result = separate_glued_prose(text)
+    assert 'obj.Method' in result
+    # Verify code fence content unchanged
+    in_fence = False
+    for line in result.split('\n'):
+        if line.startswith('```'):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            assert 'obj.Method' in line
+
+
+def test_separate_glued_prose_preserves_inline_code() -> None:
+    text = "Call `obj.Method` now.Start"
+    result = separate_glued_prose(text)
+    assert '`obj.Method`' in result
+    # The prose after inline code gets glue fix
+    assert 'now.\n\nStart' in result
+
+
+def test_separate_glued_prose_idempotent() -> None:
+    text = "A.B\nC.D"
+    once = separate_glued_prose(text)
+    twice = separate_glued_prose(once)
+    assert once == twice
+
+
+def test_separate_glued_prose_handles_empty_and_simple() -> None:
+    assert separate_glued_prose("") == ""
+    assert separate_glued_prose("No dots here") == "No dots here"
