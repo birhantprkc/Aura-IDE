@@ -10,7 +10,7 @@ from query import build_search_queries
 
 
 def _source_status(source: FetchedSource) -> dict[str, Any]:
-    return {
+    status = {
         "title": source.title or source.target.title,
         "url": source.target.url,
         "fetched_at": source.fetched_at,
@@ -19,6 +19,9 @@ def _source_status(source: FetchedSource) -> dict[str, Any]:
         "error": source.error,
         "excerpt": source.excerpt,
     }
+    if source.final_url and source.final_url != source.target.url:
+        status["final_url"] = source.final_url
+    return status
 
 
 def _empty_route(attempted: list[SourceTarget]) -> dict[str, Any]:
@@ -47,6 +50,16 @@ def _build_route_used(
         "routes": routes,
         "targets": [target.url for target in targets],
         "attempted_targets": [source.target.url for source in fetched_sources],
+        "browser_fetches": [
+            {
+                "url": source.target.url,
+                "final_url": source.final_url or source.target.url,
+                "status": "ok" if source.ok else "failed",
+                "route": source.route,
+            }
+            for source in fetched_sources
+            if source.route == "browser"
+        ],
     }
     if discovery_metadata:
         route["browser_discovery"] = discovery_metadata

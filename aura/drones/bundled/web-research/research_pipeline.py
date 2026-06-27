@@ -81,7 +81,9 @@ def run_query(query: str, now: dt.datetime | None = None) -> dict:
         )
         targets = targets + candidate_targets
         fetched_sources = initial_sources + candidate_sources
-        discovery_metadata = discovery.route_metadata or browser_session.route_metadata
+        discovery_metadata = discovery.route_metadata
+    if browser_session.route_metadata:
+        discovery_metadata = {**discovery_metadata, **browser_session.route_metadata}
     extracted = extract_answer(query, tags, fetched_sources, now)
     for gap in discovery.gaps:
         if gap not in extracted.gaps:

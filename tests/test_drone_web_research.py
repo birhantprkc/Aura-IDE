@@ -491,35 +491,42 @@ class TestBrowserBackedDiscovery:
         monkeypatch.delenv("_AURA_MOCK_WEB_RESEARCH", raising=False)
         monkeypatch.delenv("_AURA_WEB_RESEARCH_MOCK_FIXTURE", raising=False)
         monkeypatch.delenv("_AURA_WEB_RESEARCH_DISABLE_BROWSER_DISCOVERY", raising=False)
+        monkeypatch.delenv("_AURA_WEB_RESEARCH_ENABLE_DDG_HTML_FALLBACK", raising=False)
         module = _load_web_research_main()
         fetching = sys.modules["fetching"]
-        return module, fetching
+        pipeline = sys.modules["research_pipeline"]
+        return module, fetching, pipeline
 
     def test_normal_question_uses_browser_discovery_as_primary(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        module, fetching = self._load_modules(monkeypatch)
+        module, fetching, _pipeline = self._load_modules(monkeypatch)
         calls: list[list[str]] = []
 
-        def fake_browser_discovery(search_queries, max_targets=8):
-            calls.append(list(search_queries))
-            return SimpleNamespace(
-                targets=[
-                    module.SourceTarget(
-                        "https://source.example.test/current",
-                        "Current Source",
-                        "candidate",
-                    )
-                ],
-                gaps=[],
-                attempted=True,
-                blocked=False,
-            )
+        class FakeSession:
+            def discover(self, search_queries, max_targets=8):
+                calls.append(list(search_queries))
+                return SimpleNamespace(
+                    targets=[
+                        module.SourceTarget(
+                            "https://source.example.test/current",
+                            "Current Source",
+                            "candidate",
+                        )
+                    ],
+                    gaps=[],
+                    attempted=True,
+                    blocked=False,
+                    route_metadata={"browser_id": "fake"},
+                )
+
+            def close(self):
+                pass
 
         def fallback_should_not_run(query, tags):
             raise AssertionError("DuckDuckGo HTML fallback should not run after browser discovery succeeds")
 
-        monkeypatch.setattr(fetching, "discover_with_browser", fake_browser_discovery)
+        monkeypatch.setattr(fetching, "BrowserResearchSession", FakeSession)
         monkeypatch.setattr(fetching, "_duckduckgo_html_fallback", fallback_should_not_run)
 
         targets = module.discover_sources(
@@ -544,19 +551,24 @@ class TestBrowserBackedDiscovery:
         assert targets
         assert all("html.duckduckgo.com" not in target.url for target in targets)
 
-    def test_duckduckgo_html_fallback_only_after_browser_failure(
+    def test_duckduckgo_html_fallback_not_used_after_browser_failure_by_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        module, fetching = self._load_modules(monkeypatch)
+        module, fetching, _pipeline = self._load_modules(monkeypatch)
         fallback_calls: list[str] = []
 
-        def failed_browser_discovery(search_queries, max_targets=8):
-            return SimpleNamespace(
-                targets=[],
-                gaps=["Browser search unavailable: test failure"],
-                attempted=True,
-                blocked=False,
-            )
+        class FailedSession:
+            def discover(self, search_queries, max_targets=8):
+                return SimpleNamespace(
+                    targets=[],
+                    gaps=["Browser search unavailable: test failure"],
+                    attempted=True,
+                    blocked=False,
+                    route_metadata={"browser_id": "fake"},
+                )
+
+            def close(self):
+                pass
 
         def fallback(query, tags):
             fallback_calls.append(query)
@@ -568,23 +580,22 @@ class TestBrowserBackedDiscovery:
                 )
             ], []
 
-        monkeypatch.setattr(fetching, "discover_with_browser", failed_browser_discovery)
+        monkeypatch.setattr(fetching, "BrowserResearchSession", FailedSession)
         monkeypatch.setattr(fetching, "_duckduckgo_html_fallback", fallback)
 
-        targets = module.discover_sources("What is the latest Python version?", ["version"])
+        discovery = module.discover_sources_with_gaps("What is the latest Python version?", ["version"])
 
-        assert fallback_calls == ["What is the latest Python version?"]
-        assert [target.url for target in targets] == ["https://fallback.example.test/source"]
+        assert fallback_calls == []
+        assert discovery.targets == []
+        assert any("Browser search unavailable" in gap for gap in discovery.gaps)
 
-    def test_duckduckgo_html_fallback_can_be_test_disabled_browser_path(
+    def test_duckduckgo_html_fallback_is_explicit_opt_in_only(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        module, fetching = self._load_modules(monkeypatch)
+        module, fetching, _pipeline = self._load_modules(monkeypatch)
         monkeypatch.setenv("_AURA_WEB_RESEARCH_DISABLE_BROWSER_DISCOVERY", "1")
+        monkeypatch.setenv("_AURA_WEB_RESEARCH_ENABLE_DDG_HTML_FALLBACK", "1")
         fallback_calls: list[str] = []
-
-        def browser_should_not_run(search_queries, max_targets=8):
-            raise AssertionError("Browser discovery should be skipped when explicitly disabled")
 
         def fallback(query, tags):
             fallback_calls.append(query)
@@ -596,7 +607,6 @@ class TestBrowserBackedDiscovery:
                 )
             ], []
 
-        monkeypatch.setattr(fetching, "discover_with_browser", browser_should_not_run)
         monkeypatch.setattr(fetching, "_duckduckgo_html_fallback", fallback)
 
         discovery = module.discover_sources_with_gaps(
@@ -611,17 +621,32 @@ class TestBrowserBackedDiscovery:
     def test_captcha_browser_search_gap_is_not_evidence(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        module, fetching = self._load_modules(monkeypatch)
+        module, fetching, pipeline = self._load_modules(monkeypatch)
 
-        def blocked_browser_discovery(search_queries, max_targets=8):
-            return SimpleNamespace(
-                targets=[],
-                gaps=[fetching.SEARCH_BLOCKED_GAP],
-                attempted=True,
-                blocked=True,
-            )
+        class BlockedSession:
+            @property
+            def route_metadata(self):
+                return {"browser_id": "fake", "browser_session_started": True}
 
-        monkeypatch.setattr(fetching, "discover_with_browser", blocked_browser_discovery)
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                pass
+
+            def discover(self, search_queries, max_targets=8):
+                return SimpleNamespace(
+                    targets=[],
+                    gaps=[fetching.SEARCH_BLOCKED_GAP],
+                    attempted=True,
+                    blocked=True,
+                    route_metadata=self.route_metadata,
+                )
+
+            def fetch_source(self, target, fetched_at):
+                raise AssertionError("No source fetch should run when search produced no targets")
+
+        monkeypatch.setattr(pipeline, "BrowserResearchSession", BlockedSession)
         monkeypatch.setattr(fetching, "_duckduckgo_html_fallback", lambda query, tags: ([], []))
 
         data = module.run_query(
@@ -636,23 +661,28 @@ class TestBrowserBackedDiscovery:
     def test_pasted_urls_are_ordinary_candidate_sources(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        module, fetching = self._load_modules(monkeypatch)
+        module, fetching, _pipeline = self._load_modules(monkeypatch)
 
-        def fake_browser_discovery(search_queries, max_targets=8):
-            return SimpleNamespace(
-                targets=[
-                    module.SourceTarget(
-                        "https://discovered.example.test/source",
-                        "Discovered Source",
-                        "candidate",
-                    )
-                ],
-                gaps=[],
-                attempted=True,
-                blocked=False,
-            )
+        class FakeSession:
+            def discover(self, search_queries, max_targets=8):
+                return SimpleNamespace(
+                    targets=[
+                        module.SourceTarget(
+                            "https://discovered.example.test/source",
+                            "Discovered Source",
+                            "candidate",
+                        )
+                    ],
+                    gaps=[],
+                    attempted=True,
+                    blocked=False,
+                    route_metadata={"browser_id": "fake"},
+                )
 
-        monkeypatch.setattr(fetching, "discover_with_browser", fake_browser_discovery)
+            def close(self):
+                pass
+
+        monkeypatch.setattr(fetching, "BrowserResearchSession", FakeSession)
         monkeypatch.setattr(fetching, "_duckduckgo_html_fallback", lambda query, tags: ([], []))
 
         targets = module.discover_sources(
@@ -665,6 +695,81 @@ class TestBrowserBackedDiscovery:
         assert "https://provided.example.test/page" in by_url
         assert by_url["https://provided.example.test/page"].kind == "candidate"
         assert by_url["https://discovered.example.test/source"].kind == "candidate"
+
+    def test_run_query_reuses_one_browser_session_for_discovery_and_fetch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        module, _fetching, pipeline = self._load_modules(monkeypatch)
+        instances: list[object] = []
+
+        class FakeSession:
+            def __init__(self):
+                self.discover_calls = 0
+                self.fetch_calls: list[str] = []
+                self.close_calls = 0
+                instances.append(self)
+
+            @property
+            def route_metadata(self):
+                return {
+                    "browser_id": "fake",
+                    "browser_session_started": True,
+                    "browser_session_closed": self.close_calls > 0,
+                }
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                self.close()
+
+            def discover(self, search_queries, max_targets=8):
+                self.discover_calls += 1
+                return SimpleNamespace(
+                    targets=[
+                        module.SourceTarget("https://source-a.example.test/python", "Python A", "candidate"),
+                        module.SourceTarget("https://source-b.example.test/python", "Python B", "candidate"),
+                    ],
+                    gaps=[],
+                    attempted=True,
+                    blocked=False,
+                    route_metadata=self.route_metadata,
+                )
+
+            def fetch_source(self, target, fetched_at):
+                self.fetch_calls.append(target.url)
+                text = "Latest Python release: Python 3.14.0 is the newest stable version."
+                return module.FetchedSource(
+                    target=target,
+                    title=target.title,
+                    text=text,
+                    fetched_at=fetched_at,
+                    ok=True,
+                    excerpt=text,
+                    route="browser",
+                    final_url=target.url,
+                )
+
+            def close(self):
+                self.close_calls += 1
+
+        monkeypatch.setattr(pipeline, "BrowserResearchSession", FakeSession)
+
+        data = module.run_query(
+            "What is the latest Python version?",
+            dt.datetime(2026, 6, 27, tzinfo=dt.timezone.utc),
+        )
+
+        assert len(instances) == 1
+        session = instances[0]
+        assert session.discover_calls == 1
+        assert session.fetch_calls == [
+            "https://source-a.example.test/python",
+            "https://source-b.example.test/python",
+        ]
+        assert session.close_calls == 1
+        assert data["route_used"]["type"] == "browser"
+        assert len(data["route_used"]["browser_fetches"]) == 2
 
 
 class TestScheduleExtraction:
