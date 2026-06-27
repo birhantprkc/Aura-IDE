@@ -25,6 +25,7 @@ from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
 )
+from aura.conversation.edit_orchestrator import EditMode, EditRetryLedger
 from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager, _fingerprint_paths
 from aura.conversation.tool_limits import MAX_TOOL_CALLS_BY_MODE
@@ -2112,6 +2113,40 @@ class TestToolLimitIntegration:
 
 class TestDeleteFileRecovery:
     """Tests for delete_file recovery state handling in _update_worker_recovery_state."""
+
+    def test_recovery_block_switches_failed_patch_to_focused_repair(self, manager):
+        """The manager must follow the edit ledger instead of repeating patch/edit."""
+        ledger = EditRetryLedger()
+        ledger.record_failure(
+            mode=EditMode.PATCH,
+            path="aura/module.py",
+            failure_class="patch_hunk_not_found",
+            error="old block missing",
+        )
+
+        blocked = manager._worker_recovery_block(
+            tool_call_id="edit1",
+            name="edit_file",
+            args={"path": "aura/module.py", "old_str": "OLD", "new_str": "NEW"},
+            edit_failed_shapes=set(),
+            edit_fallback_required={},
+            recovery_block_counts={},
+            line_range_reread_required={},
+            syntax_repair_required={},
+            syntax_validation_required=set(),
+            write_attempts_by_path={},
+            worker_file_state={},
+            patch_failed_cycles={},
+            patch_invalid_syntax_required={},
+            edit_retry_ledger=ledger,
+        )
+
+        assert blocked is not None
+        payload = json.loads(blocked["result_payload"])
+        assert payload["failure_class"] == "edit_strategy_switch_required"
+        assert payload["next_edit_mode"] == "focused_repair"
+        assert payload["suggested_next_tool"] == "patch_file"
+        assert payload["repair_context"]["last_failure"]["failure_class"] == "patch_hunk_not_found"
 
     def test_delete_file_does_not_add_to_syntax_validation(self, manager):
         """delete_file should not add path to syntax_validation_required."""

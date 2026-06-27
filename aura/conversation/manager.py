@@ -60,6 +60,11 @@ from aura.conversation.edit_recovery_state import (
     worker_file_state_for_path,
     worker_path_is_existing_file,
 )
+from aura.conversation.edit_orchestrator import (
+    EditRetryLedger,
+    load_file_edit_profile,
+    strategy_decision_for_attempt,
+)
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.path_utils import (
@@ -284,8 +289,10 @@ class ConversationManager:
         worker_file_state: dict[str, dict[str, Any]] = {}
         patch_failed_cycles: dict[str, int] = {}
         patch_invalid_syntax_required: dict[str, dict[str, Any]] = {}
+        edit_retry_ledger = EditRetryLedger()
         syntax_repair_required: dict[str, dict[str, Any]] = {}
         syntax_validation_required: set[str] = set()
+        explicit_validation_failure_counts: dict[str, int] = {}
         import_verification_required: set[str] = set()
         write_attempts_by_path: dict[str, int] = {}
         worker_recovery_nudge_sent = False
@@ -765,6 +772,28 @@ class ConversationManager:
                                     on_event=on_event,
                                     workspace_root=self._tools.workspace_root,
                                 )
+                            validation_key = val_result.command or "\n".join(
+                                explicit_validation_commands
+                            )
+                            failure_count = explicit_validation_failure_counts.get(
+                                validation_key,
+                                0,
+                            ) + 1
+                            explicit_validation_failure_counts[validation_key] = failure_count
+                            if failure_count > 1:
+                                self._finish_worker_unrecoverable(
+                                    on_event,
+                                    failure_class="product_validation_failed",
+                                    error=(
+                                        "Final acceptance validation still fails after one focused "
+                                        "repair attempt."
+                                    ),
+                                    details={
+                                        "command": val_result.command,
+                                        "diagnostics": val_result.diagnostics,
+                                    },
+                                )
+                                return
                             instruction = WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION.format(
                                 command=val_result.command,
                                 diagnostics=val_result.diagnostics,
@@ -772,6 +801,7 @@ class ConversationManager:
                             self._history.append_user_text(instruction)
                             discard_worker_candidate_final()
                             continue
+                        explicit_validation_failure_counts.clear()
                     # All gates passed — release candidate final and flush buffer
                     if candidate_final_message is not None:
                         self._history.append_assistant(candidate_final_message)
@@ -838,6 +868,7 @@ class ConversationManager:
                         worker_file_state=worker_file_state,
                         patch_failed_cycles=patch_failed_cycles,
                         patch_invalid_syntax_required=patch_invalid_syntax_required,
+                        edit_retry_ledger=edit_retry_ledger,
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
                         write_attempts_by_path=write_attempts_by_path,
@@ -988,6 +1019,7 @@ class ConversationManager:
                         worker_file_state=worker_file_state,
                         patch_failed_cycles=patch_failed_cycles,
                         patch_invalid_syntax_required=patch_invalid_syntax_required,
+                        edit_retry_ledger=edit_retry_ledger,
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
                         write_attempts_by_path=write_attempts_by_path,
@@ -1158,6 +1190,7 @@ class ConversationManager:
         worker_file_state: dict[str, dict[str, Any]] | None = None,
         patch_failed_cycles: dict[str, int] | None = None,
         patch_invalid_syntax_required: dict[str, dict[str, Any]] | None = None,
+        edit_retry_ledger: EditRetryLedger | None = None,
     ) -> dict[str, Any] | None:
         raw_path = _edit_shapes.tool_path(name, args)
         path = _normalize_worker_path(raw_path) if raw_path else ""
@@ -1168,6 +1201,7 @@ class ConversationManager:
             if patch_invalid_syntax_required is not None
             else {}
         )
+        edit_retry_ledger = edit_retry_ledger if edit_retry_ledger is not None else EditRetryLedger()
         invalid_syntax_block = self._worker_patch_invalid_syntax_block(
             tool_call_id=tool_call_id,
             name=name,
@@ -1209,6 +1243,42 @@ class ConversationManager:
             )
             record_recovery_block(payload, f"syntax:{target}:{name}", recovery_block_counts)
             return blocked_tool_result(tool_call_id, name, payload)
+
+        if path:
+            profile = load_file_edit_profile(self._tools.workspace_root, path)
+            decision = strategy_decision_for_attempt(
+                ledger=edit_retry_ledger,
+                name=name,
+                args=args,
+                path=path,
+                profile=profile,
+            )
+            if decision is not None:
+                payload = recovery_payload(
+                    path=decision.path,
+                    failure_class=decision.failure_class,
+                    error=decision.error,
+                    suggested_next_tool=decision.suggested_next_tool,
+                    suggested_next_action=decision.suggested_next_action,
+                    recoverable=decision.recoverable,
+                )
+                payload["applied"] = False
+                payload["write_outcome"] = "not_applied_edit_strategy_blocked"
+                payload["edit_mode"] = (
+                    decision.attempted_mode.value
+                    if decision.attempted_mode is not None
+                    else ""
+                )
+                payload["next_edit_mode"] = (
+                    decision.next_mode.value if decision.next_mode is not None else "none"
+                )
+                payload["repair_context"] = decision.repair_context
+                record_recovery_block(
+                    payload,
+                    f"edit-strategy:{decision.path}:{name}:{payload['next_edit_mode']}",
+                    recovery_block_counts,
+                )
+                return blocked_tool_result(tool_call_id, name, payload)
 
         if (
             path
@@ -1493,6 +1563,7 @@ class ConversationManager:
         worker_file_state: dict[str, dict[str, Any]] | None = None,
         patch_failed_cycles: dict[str, int] | None = None,
         patch_invalid_syntax_required: dict[str, dict[str, Any]] | None = None,
+        edit_retry_ledger: EditRetryLedger | None = None,
     ) -> str:
         worker_app_writes = worker_app_writes if worker_app_writes is not None else set()
         worker_file_state = worker_file_state if worker_file_state is not None else {}
@@ -1502,6 +1573,7 @@ class ConversationManager:
             if patch_invalid_syntax_required is not None
             else {}
         )
+        edit_retry_ledger = edit_retry_ledger if edit_retry_ledger is not None else EditRetryLedger()
         parsed = parse_tool_payload(content)
         record_reads_for_recovery(
             name,
@@ -1536,6 +1608,7 @@ class ConversationManager:
                     or (isinstance(parsed, dict) and parsed.get("deleted") is True)
                 )
                 if is_deletion:
+                    edit_retry_ledger.clear_path(path)
                     pop_normalized_recovery_key(edit_fallback_required, path)
                     pop_normalized_recovery_key(line_range_reread_required, path)
                     pop_normalized_key(worker_file_state, path)
@@ -1547,6 +1620,7 @@ class ConversationManager:
                         worker_app_writes.discard(path)
                     return content
 
+                edit_retry_ledger.clear_path(path)
                 pop_normalized_recovery_key(edit_fallback_required, path)
                 pop_normalized_recovery_key(line_range_reread_required, path)
                 pop_normalized_key(worker_file_state, path)
@@ -1573,6 +1647,26 @@ class ConversationManager:
 
         failure_class = str(parsed.get("failure_class", ""))
         shape = _edit_shapes.edit_shape_signature(name, args)
+        if path and failure_class and failure_class not in {
+            "approval_rejected",
+            "internal_error",
+            "path_error",
+        }:
+            profile = load_file_edit_profile(self._tools.workspace_root, path)
+            edit_mode = edit_retry_ledger.mode_for_tool_result(
+                name=name,
+                args=args,
+                path=path,
+                profile=profile,
+            )
+            if edit_mode is not None:
+                edit_retry_ledger.record_failure(
+                    mode=edit_mode,
+                    path=path,
+                    failure_class=failure_class,
+                    shape=shape,
+                    error=str(parsed.get("error") or parsed.get("output") or ""),
+                )
         prior_invalid_syntax = (
             normalized_state_value(patch_invalid_syntax_required, path)
             if path and name == "patch_file"

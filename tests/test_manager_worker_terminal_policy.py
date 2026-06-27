@@ -429,6 +429,73 @@ def test_worker_does_not_retry_malformed_explicit_validation_command(
     assert assistant_messages == ["Done after code change."]
 
 
+def test_worker_repeated_product_validation_failure_stops_cleanly(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, _tools = worker_manager
+    events: list[Event] = []
+    command = 'python -c "assert False"'
+    worker_backend.side_effect = [
+        iter([
+            ContentDelta("Done before validation."),
+            Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": "Done before validation.",
+                    "reasoning_content": None,
+                },
+            ),
+        ]),
+        iter([
+            ContentDelta("Still done."),
+            Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": "Still done.",
+                    "reasoning_content": None,
+                },
+            ),
+        ]),
+    ]
+
+    with patch("aura.conversation.manager.run_explicit_validation_commands") as run_validation:
+        run_validation.side_effect = [
+            WorkerFinalValidationResult(
+                ok=False,
+                command=command,
+                diagnostics="AssertionError",
+            ),
+            WorkerFinalValidationResult(
+                ok=False,
+                command=command,
+                diagnostics="AssertionError",
+            ),
+        ]
+        manager.send(
+            on_event=events.append,
+            approval_cb=_approval_cb,
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            hook_name="generate_worker_code",
+            explicit_validation_commands=[command],
+        )
+
+    assert worker_backend.call_count == 2
+    assistant_messages = [
+        message.get("content")
+        for message in manager.history.messages
+        if message.get("role") == "assistant"
+    ]
+    assert len(assistant_messages) == 1
+    payload = json.loads(assistant_messages[0])
+    assert payload["failure_class"] == "product_validation_failed"
+    assert "one focused repair attempt" in payload["error"]
+
+
 def test_worker_structured_read_and_patch_file_are_unaffected(
     worker_manager: tuple[ConversationManager, MagicMock],
     worker_backend: MagicMock,
