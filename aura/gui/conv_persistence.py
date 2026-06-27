@@ -6,7 +6,6 @@ in MainWindow. Emits signals so the UI layer can react.
 from __future__ import annotations
 
 import copy
-import json
 import logging
 import threading
 from pathlib import Path
@@ -371,12 +370,12 @@ class ConversationPersistence(QObject):
     # ---- replay history into view ------------------------------------------
 
     def replay_history(self, *, synchronous: bool = False) -> None:
-        """Best-effort visual replay of a loaded history into the chat view.
+        """Replay durable conversation content into the chat view.
 
-        We intentionally don't try to recreate diff cards (the underlying
-        before/after content isn't stored — only the resulting tool-message
-        from the registry is).  Tool calls are surfaced as cards with their
-        recorded args + result so the conversation reads coherently.
+        Renders only persistent conversation elements: user messages,
+        assistant text, and completed Worker dispatch summaries.
+        Transient runtime UI (tool-call cards, progress indicators,
+        in-flight state) is not recreated.
         """
         msgs = self._bridge.history.messages
         if not msgs:
@@ -385,14 +384,6 @@ class ConversationPersistence(QObject):
         # Cancel any in-flight replay
         self._active_replay_id += 1
         my_id = self._active_replay_id
-
-        # Index tool results by tool_call_id for inline pairing.
-        tool_results: dict[str, str] = {}
-        for m in msgs:
-            if m.get("role") == "tool":
-                tcid = m.get("tool_call_id")
-                if isinstance(tcid, str):
-                    tool_results[tcid] = m.get("content", "")
 
         self._chat.begin_bulk_update()
 
@@ -429,30 +420,10 @@ class ConversationPersistence(QObject):
                         content = m.get("content")
                         if isinstance(content, str) and content:
                             self._chat.append_content(content)
-                        for tc in m.get("tool_calls") or []:
-                            tcid = tc.get("id", "")
-                            fn = tc.get("function", {})
-                            name = fn.get("name", "")
-                            args_str = fn.get("arguments", "")
-
-                            self._chat.add_tool_call(tcid, name)
-                            if args_str:
-                                self._chat.append_tool_args(tcid, args_str)
-
-                            if tcid in tool_results:
-                                ok = True
-                                try:
-                                    parsed = json.loads(tool_results[tcid])
-                                    if (
-                                        isinstance(parsed, dict)
-                                        and parsed.get("ok") is False
-                                    ):
-                                        ok = False
-                                except json.JSONDecodeError:
-                                    pass
-                                self._chat.set_tool_result(
-                                    tcid, ok, tool_results[tcid]
-                                )
+                        # Tool-call cards are skipped during replay.
+                        # Completed Worker dispatches are restored
+                        # separately from persisted dispatch records
+                        # (see _replay_worker_summary_cards).
                         self._chat.assistant_done()
 
                 # Schedule next chunk
@@ -463,9 +434,30 @@ class ConversationPersistence(QObject):
             except StopIteration:
                 if self._active_replay_id == my_id:
                     self._chat.end_bulk_update()
+                    self._replay_worker_summary_cards()
 
         if synchronous:
             process_chunk()
         else:
             # Defer the first chunk as well to keep the UI thread moving.
             QTimer.singleShot(0, process_chunk)
+
+    def _replay_worker_summary_cards(self) -> None:
+        """Restore completed WorkerSummaryCards from persisted dispatch records.
+
+        Iterates the bridge's dispatch records and creates a compact summary
+        card for every completed (non-empty ``result_summary``) dispatch.
+        In-flight or interrupted dispatches (empty result summary) are silently
+        omitted.
+        """
+        for record in self._bridge.dispatch_records:
+            if not record.result_summary:
+                continue  # In-flight or interrupted — do not replay.
+            spec = record.spec or {}
+            goal = spec.get("goal", "Worker task")
+            self._chat.add_worker_summary(
+                record.tool_call_id,
+                goal,
+                True,  # ok — actual status is parsed from receipt text.
+                record.result_summary,
+            )
