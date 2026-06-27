@@ -18,7 +18,7 @@
   "permissions": {
     "browser_profile": "research",
     "visible": false,
-    "live_browser_enabled": false
+    "live_browser_enabled": true
   },
   "output_contract": {
     "oneOf": [

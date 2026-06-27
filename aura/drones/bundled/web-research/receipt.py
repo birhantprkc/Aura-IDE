@@ -30,17 +30,27 @@ def _empty_route(attempted: list[SourceTarget]) -> dict[str, Any]:
     }
 
 
-def _build_route_used(targets: list[SourceTarget], fetched_sources: list[FetchedSource]) -> dict[str, Any]:
+def _build_route_used(
+    targets: list[SourceTarget],
+    fetched_sources: list[FetchedSource],
+    discovery_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     routes = [source.route for source in fetched_sources if source.route]
     if not routes:
-        return _empty_route(targets)
+        route = _empty_route(targets)
+        if discovery_metadata:
+            route["browser_discovery"] = discovery_metadata
+        return route
     route_type = "mixed" if len(set(routes)) > 1 else routes[0]
-    return {
+    route = {
         "type": route_type,
         "routes": routes,
         "targets": [target.url for target in targets],
         "attempted_targets": [source.target.url for source in fetched_sources],
     }
+    if discovery_metadata:
+        route["browser_discovery"] = discovery_metadata
+    return route
 
 
 def build_result(
@@ -49,6 +59,7 @@ def build_result(
     targets: list[SourceTarget],
     fetched_sources: list[FetchedSource],
     extracted: ExtractedAnswer,
+    discovery_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     failed = [source for source in fetched_sources if not source.ok]
     successful = [source for source in fetched_sources if source.ok and source.text.strip()]
@@ -100,7 +111,7 @@ def build_result(
         "gaps": gaps,
         "confidence": confidence,
         "trace": trace,
-        "route_used": _build_route_used(targets, fetched_sources),
+        "route_used": _build_route_used(targets, fetched_sources, discovery_metadata),
     }
 
 

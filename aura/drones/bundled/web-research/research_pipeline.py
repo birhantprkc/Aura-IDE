@@ -12,7 +12,7 @@ from evidence import (
     _stale_source_gaps,
     select_relevant_evidence,
 )
-from fetching import discover_candidate_sources, discover_sources, fetch_sources
+from fetching import discover_candidate_sources, discover_sources_with_gaps, fetch_sources
 from models import ExtractedAnswer, FetchedSource
 from query import _parse_query_from_goal, parse_research_query
 from receipt import build_failure_receipt, build_result
@@ -68,14 +68,25 @@ def run_query(query: str, now: dt.datetime | None = None) -> dict:
     now = now or dt.datetime.now().astimezone()
     parsed = parse_research_query(query)
     tags = parsed.tags
-    targets = discover_sources(query, tags)
+    discovery = discover_sources_with_gaps(query, tags)
+    targets = discovery.targets
     initial_sources = fetch_sources(targets, now)
     candidate_targets = discover_candidate_sources(initial_sources, targets)
     candidate_sources = fetch_sources(candidate_targets, now) if candidate_targets else []
     targets = targets + candidate_targets
     fetched_sources = initial_sources + candidate_sources
     extracted = extract_answer(query, tags, fetched_sources, now)
-    return build_result(query, tags, targets, fetched_sources, extracted)
+    for gap in discovery.gaps:
+        if gap not in extracted.gaps:
+            extracted.gaps.append(gap)
+    return build_result(
+        query,
+        tags,
+        targets,
+        fetched_sources,
+        extracted,
+        discovery_metadata=discovery.route_metadata,
+    )
 
 
 def main() -> None:

@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -483,6 +484,187 @@ class TestOutputShape:
         assert data["confidence"] in ["none", "low"]
         assert len(data["gaps"]) > 0
         assert "HTTP fetch error" in data["gaps"][0]
+
+
+class TestBrowserBackedDiscovery:
+    def _load_modules(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("_AURA_MOCK_WEB_RESEARCH", raising=False)
+        monkeypatch.delenv("_AURA_WEB_RESEARCH_MOCK_FIXTURE", raising=False)
+        monkeypatch.delenv("_AURA_WEB_RESEARCH_DISABLE_BROWSER_DISCOVERY", raising=False)
+        module = _load_web_research_main()
+        fetching = sys.modules["fetching"]
+        return module, fetching
+
+    def test_normal_question_uses_browser_discovery_as_primary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        module, fetching = self._load_modules(monkeypatch)
+        calls: list[list[str]] = []
+
+        def fake_browser_discovery(search_queries, max_targets=8):
+            calls.append(list(search_queries))
+            return SimpleNamespace(
+                targets=[
+                    module.SourceTarget(
+                        "https://source.example.test/current",
+                        "Current Source",
+                        "candidate",
+                    )
+                ],
+                gaps=[],
+                attempted=True,
+                blocked=False,
+            )
+
+        def fallback_should_not_run(query, tags):
+            raise AssertionError("DuckDuckGo HTML fallback should not run after browser discovery succeeds")
+
+        monkeypatch.setattr(fetching, "discover_with_browser", fake_browser_discovery)
+        monkeypatch.setattr(fetching, "_duckduckgo_html_fallback", fallback_should_not_run)
+
+        targets = module.discover_sources(
+            "What is the current status of ExampleNet?",
+            ["current_info"],
+        )
+
+        assert calls
+        assert [target.url for target in targets] == ["https://source.example.test/current"]
+        assert targets[0].kind == "candidate"
+
+    def test_default_source_discovery_does_not_emit_duckduckgo_html_urls(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        module = _load_web_research_main()
+        monkeypatch.setenv("_AURA_MOCK_WEB_RESEARCH", "1")
+        targets = module.discover_sources(
+            "What is the latest Python version?",
+            ["current_info", "version"],
+        )
+
+        assert targets
+        assert all("html.duckduckgo.com" not in target.url for target in targets)
+
+    def test_duckduckgo_html_fallback_only_after_browser_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        module, fetching = self._load_modules(monkeypatch)
+        fallback_calls: list[str] = []
+
+        def failed_browser_discovery(search_queries, max_targets=8):
+            return SimpleNamespace(
+                targets=[],
+                gaps=["Browser search unavailable: test failure"],
+                attempted=True,
+                blocked=False,
+            )
+
+        def fallback(query, tags):
+            fallback_calls.append(query)
+            return [
+                module.SourceTarget(
+                    "https://fallback.example.test/source",
+                    "Fallback Source",
+                    "candidate",
+                )
+            ], []
+
+        monkeypatch.setattr(fetching, "discover_with_browser", failed_browser_discovery)
+        monkeypatch.setattr(fetching, "_duckduckgo_html_fallback", fallback)
+
+        targets = module.discover_sources("What is the latest Python version?", ["version"])
+
+        assert fallback_calls == ["What is the latest Python version?"]
+        assert [target.url for target in targets] == ["https://fallback.example.test/source"]
+
+    def test_duckduckgo_html_fallback_can_be_test_disabled_browser_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        module, fetching = self._load_modules(monkeypatch)
+        monkeypatch.setenv("_AURA_WEB_RESEARCH_DISABLE_BROWSER_DISCOVERY", "1")
+        fallback_calls: list[str] = []
+
+        def browser_should_not_run(search_queries, max_targets=8):
+            raise AssertionError("Browser discovery should be skipped when explicitly disabled")
+
+        def fallback(query, tags):
+            fallback_calls.append(query)
+            return [
+                module.SourceTarget(
+                    "https://fallback-disabled.example.test/source",
+                    "Fallback Source",
+                    "candidate",
+                )
+            ], []
+
+        monkeypatch.setattr(fetching, "discover_with_browser", browser_should_not_run)
+        monkeypatch.setattr(fetching, "_duckduckgo_html_fallback", fallback)
+
+        discovery = module.discover_sources_with_gaps(
+            "What is the latest Python version?",
+            ["version"],
+        )
+
+        assert fallback_calls == ["What is the latest Python version?"]
+        assert discovery.targets[0].url == "https://fallback-disabled.example.test/source"
+        assert any("disabled" in gap for gap in discovery.gaps)
+
+    def test_captcha_browser_search_gap_is_not_evidence(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        module, fetching = self._load_modules(monkeypatch)
+
+        def blocked_browser_discovery(search_queries, max_targets=8):
+            return SimpleNamespace(
+                targets=[],
+                gaps=[fetching.SEARCH_BLOCKED_GAP],
+                attempted=True,
+                blocked=True,
+            )
+
+        monkeypatch.setattr(fetching, "discover_with_browser", blocked_browser_discovery)
+        monkeypatch.setattr(fetching, "_duckduckgo_html_fallback", lambda query, tags: ([], []))
+
+        data = module.run_query(
+            "Who is the current CEO of ExampleNet?",
+            dt.datetime(2026, 6, 27, tzinfo=dt.timezone.utc),
+        )
+
+        assert fetching.SEARCH_BLOCKED_GAP in data["gaps"]
+        assert data["evidence"] == []
+        assert data["confidence"] == "none"
+
+    def test_pasted_urls_are_ordinary_candidate_sources(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        module, fetching = self._load_modules(monkeypatch)
+
+        def fake_browser_discovery(search_queries, max_targets=8):
+            return SimpleNamespace(
+                targets=[
+                    module.SourceTarget(
+                        "https://discovered.example.test/source",
+                        "Discovered Source",
+                        "candidate",
+                    )
+                ],
+                gaps=[],
+                attempted=True,
+                blocked=False,
+            )
+
+        monkeypatch.setattr(fetching, "discover_with_browser", fake_browser_discovery)
+        monkeypatch.setattr(fetching, "_duckduckgo_html_fallback", lambda query, tags: ([], []))
+
+        targets = module.discover_sources(
+            "Check https://provided.example.test/page for the current status.",
+            ["current_info"],
+        )
+        by_url = {target.url: target for target in targets}
+
+        assert "https://discovered.example.test/source" in by_url
+        assert "https://provided.example.test/page" in by_url
+        assert by_url["https://provided.example.test/page"].kind == "candidate"
+        assert by_url["https://discovered.example.test/source"].kind == "candidate"
 
 
 class TestScheduleExtraction:

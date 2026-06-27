@@ -9,7 +9,7 @@ _DRONE_DIR = Path(__file__).resolve().parent
 if str(_DRONE_DIR) not in sys.path:
     sys.path.insert(0, str(_DRONE_DIR))
 
-from fetching import discover_candidate_sources, discover_sources, fetch_sources
+from fetching import discover_candidate_sources, discover_sources, discover_sources_with_gaps, fetch_sources
 from models import EvidenceChunk, ExtractedAnswer, FetchedSource, ResearchQuestion, SourceTarget
 from query import (
     _parse_query_from_goal,
@@ -35,6 +35,7 @@ __all__ = [
     "classify_query",
     "discover_candidate_sources",
     "discover_sources",
+    "discover_sources_with_gaps",
     "extract_answer",
     "extract_schedule_answer",
     "fetch_sources",
