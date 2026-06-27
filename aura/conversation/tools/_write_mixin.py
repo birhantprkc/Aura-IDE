@@ -599,17 +599,58 @@ def _mark_delete_not_applied(payload: dict, failure_class: str | None = None) ->
     return payload
 
 
+_AURA_DELETE_ALLOWED_PREFIXES = (
+    ".aura/tmp/",
+    ".aura/drones/",
+    ".aura/drone-build/",
+    ".aura/startup-smoke-profile/",
+)
+
+_AURA_DELETE_PROTECTED_PATHS = (
+    ".aura",
+    ".aura/backups",
+    ".aura/browse_monitor_state.json",
+    ".aura/config",
+    ".aura/conversations",
+    ".aura/hazards.db",
+    ".aura/handoffs",
+    ".aura/memory.db",
+    ".aura/planner.txt",
+    ".aura/project.json",
+    ".aura/project_blueprint.md",
+    ".aura/secrets",
+    ".aura/settings",
+    ".aura/threads",
+    ".aura/toolist.txt",
+    ".aura/tokens",
+    ".aura/tools",
+)
+
+_AURA_DELETE_PROTECTED_PREFIXES = (
+    ".aura/backups/",
+    ".aura/config/",
+    ".aura/conversations/",
+    ".aura/handoffs/",
+    ".aura/secrets/",
+    ".aura/settings/",
+    ".aura/threads/",
+    ".aura/tokens/",
+    ".aura/tools/",
+)
+
+
 def _is_delete_protected_path(rel_path: str) -> bool:
     normalized = _normalize_worker_path(rel_path).lstrip("/")
     name = normalized.rsplit("/", 1)[-1]
-    return (
-        normalized == ".git"
-        or normalized.startswith(".git/")
-        or normalized == ".aura"
-        or normalized.startswith(".aura/")
-        or name == ".env"
-        or name.startswith(".env.")
-    )
+    if normalized == ".git" or normalized.startswith(".git/"):
+        return True
+    if name == ".env" or name.startswith(".env."):
+        return True
+    if normalized in _AURA_DELETE_PROTECTED_PATHS:
+        return True
+    if normalized.startswith(_AURA_DELETE_ALLOWED_PREFIXES):
+        return False
+    return normalized.startswith(_AURA_DELETE_PROTECTED_PREFIXES)
 
 
 def _python_syntax_error_payload(proposal: dict) -> dict | None:
