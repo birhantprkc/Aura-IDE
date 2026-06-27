@@ -31,6 +31,8 @@ from aura.config import (
     ProviderId,
     ThinkingMode,
 )
+from aura.context_gearbox.models import RuntimeRole
+from aura.context_gearbox.runtime import compose_system_prompt
 from aura.conversation import (
     ConversationManager,
     History,
@@ -56,11 +58,6 @@ from aura.conversation.validation_orchestrator import (
     validation_issue_message,
 )
 from aura.dependency_context import build_dependency_stanza
-from aura.prompts import (
-    WORKER_SYSTEM_PROMPT,
-    build_tier1_context,
-    inject_tier1_context,
-)
 
 __all__ = [
     "_DispatchProxy",
@@ -308,30 +305,23 @@ class _DispatchProxy(QObject):
         pending: "_DispatchPending",
     ) -> WorkerDispatchResult:
         worker_history = History()
-        base_prompt = self._worker_system_prompt if self._worker_system_prompt else WORKER_SYSTEM_PROMPT
         task_spec = normalize_worker_task(req)
-        # Refresh Tier 1 context so a prior Worker pass's blueprint is visible.
         _log.info("worker_context_build_start tool_call_id=%s", tool_call_id)
         t1 = time.monotonic()
-        if self._workspace_root is not None:
-            try:
-                tier1_context = build_tier1_context(
-                    self._workspace_root,
-                    mode="worker",
-                    model=str(self._worker_model),
-                    task_kind=task_spec.task_shape.task_kind if task_spec.task_shape is not None else None,
-                    target_files=tuple(task_spec.files),
-                )
-            except Exception:
-                tier1_context = self._tier1_context
-        else:
-            tier1_context = self._tier1_context
+        composed_prompt = compose_system_prompt(
+            RuntimeRole.WORKER,
+            self._worker_system_prompt,
+            self._workspace_root,
+            model=str(self._worker_model),
+            task_kind=task_spec.task_shape.task_kind if task_spec.task_shape is not None else None,
+            target_files=tuple(task_spec.files),
+        )
+        self._tier1_context = composed_prompt.context_text
         _log.info(
             "worker_context_build_end tool_call_id=%s duration_ms=%.0f",
             tool_call_id, (time.monotonic() - t1) * 1000,
         )
-        full_prompt = inject_tier1_context(base_prompt, tier1_context)
-        worker_history.set_system(full_prompt)
+        worker_history.set_system(composed_prompt.system_prompt)
         _log.info("worker_profile_detect_start tool_call_id=%s", tool_call_id)
         t2 = time.monotonic()
         if self._workspace_root is not None:

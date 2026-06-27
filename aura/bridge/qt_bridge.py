@@ -56,6 +56,13 @@ from aura.config import (
     ProviderId,
     ThinkingMode,
 )
+from aura.context_gearbox.models import RuntimeRole
+from aura.context_gearbox.runtime import (
+    PLANNER_SYSTEM_PROMPT,
+    SINGLE_SYSTEM_PROMPT,
+    build_context_text,
+    compose_system_prompt,
+)
 from aura.conversation import (
     ConversationManager,
     History,
@@ -64,12 +71,6 @@ from aura.conversation.tools import (
     ToolRegistry,
 )
 from aura.hooks import hooks
-from aura.prompts import (
-    PLANNER_SYSTEM_PROMPT,
-    SINGLE_SYSTEM_PROMPT,
-    build_tier1_context,
-    inject_tier1_context,
-)
 
 
 class _Worker(QObject):
@@ -343,30 +344,29 @@ class ConversationBridge(QObject):
         self._registry.set_read_only(value)
 
     def set_system_prompt(self, prompt: str) -> None:
-        # Inject Tier 1 core context (project rules + repo map) into the system prompt.
-        workspace_root = self._registry.workspace_root
-        if workspace_root is not None:
-            mode = "planner" if self._planner_worker_mode else "single"
-            self._tier1_context = build_tier1_context(workspace_root, mode=mode)
-        enriched = inject_tier1_context(prompt, self._tier1_context)
-        self._history.set_system(enriched)
+        role = self._active_runtime_role()
+        composed = self._compose_prompt(role, prompt)
+        self._history.set_system(composed.system_prompt)
 
     def _compute_and_cache_tier1(self, force_repo_map: bool = False) -> None:
-        """Recompute Tier 1 context from the current workspace root and cache it."""
-        mode = "planner" if self._planner_worker_mode else "single"
-        workspace_root = self._registry.workspace_root
-        if workspace_root is not None:
-            self._tier1_context = build_tier1_context(workspace_root, force=force_repo_map, mode=mode)
+        """Recompute runtime context from the current workspace root and cache it."""
+        context = build_context_text(
+            self._active_runtime_role(),
+            self._registry.workspace_root,
+            force=force_repo_map,
+        )
+        self._tier1_context = context.context_text
         self._dispatch_proxy.set_tier1_context(self._tier1_context)
 
     def refresh_tier1_context(self, force_repo_map: bool = False) -> None:
         """Refresh workspace context and reapply the active system prompt."""
-        self._compute_and_cache_tier1(force_repo_map=force_repo_map)
-        if self._planner_worker_mode:
-            sys_prompt = self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
-        else:
-            sys_prompt = self._single_system_prompt if self._single_system_prompt else SINGLE_SYSTEM_PROMPT
-        self._history.set_system(inject_tier1_context(sys_prompt, self._tier1_context))
+        role = self._active_runtime_role()
+        composed = self._compose_prompt(
+            role,
+            self._custom_prompt_for_role(role),
+            force_repo_map=force_repo_map,
+        )
+        self._history.set_system(composed.system_prompt)
 
     def set_planner_worker_mode(self, enabled: bool) -> None:
         self._planner_worker_mode = enabled
@@ -375,11 +375,9 @@ class ConversationBridge(QObject):
         self._registry.set_mode(mode_key)
         if self._active_prompt_mode == mode_key:
             return  # Already set, avoid churn
-        if enabled:
-            sys_prompt = self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
-        else:
-            sys_prompt = self._single_system_prompt if self._single_system_prompt else SINGLE_SYSTEM_PROMPT
-        self._history.set_system(inject_tier1_context(sys_prompt, self._tier1_context))
+        role = self._active_runtime_role()
+        composed = self._compose_prompt(role, self._custom_prompt_for_role(role))
+        self._history.set_system(composed.system_prompt)
         self._active_prompt_mode = mode_key
 
     def set_temperature(self, temperature: float) -> None:
@@ -389,13 +387,9 @@ class ConversationBridge(QObject):
         self._single_system_prompt = single
         self._planner_system_prompt = planner
         self._dispatch_proxy.set_worker_system_prompt(worker)
-        self._compute_and_cache_tier1()
-        # Apply the prompt for the current mode immediately
-        if self._planner_worker_mode:
-            sys_prompt = self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
-        else:
-            sys_prompt = self._single_system_prompt if self._single_system_prompt else SINGLE_SYSTEM_PROMPT
-        self._history.set_system(inject_tier1_context(sys_prompt, self._tier1_context))
+        role = self._active_runtime_role()
+        composed = self._compose_prompt(role, self._custom_prompt_for_role(role))
+        self._history.set_system(composed.system_prompt)
 
     def set_worker_model(self, model: ModelId) -> None:
         self._dispatch_proxy.set_worker_model(model)
@@ -412,6 +406,33 @@ class ConversationBridge(QObject):
     def set_auto_approve(self, enabled: bool) -> None:
         self._approval_proxy.set_approve_all_session(enabled)
         self._dispatch_proxy.set_auto_approve(enabled)
+
+    def _active_runtime_role(self) -> RuntimeRole:
+        return RuntimeRole.PLANNER if self._planner_worker_mode else RuntimeRole.SINGLE
+
+    def _custom_prompt_for_role(self, role: RuntimeRole) -> str:
+        if role == RuntimeRole.PLANNER:
+            return self._planner_system_prompt
+        if role == RuntimeRole.SINGLE:
+            return self._single_system_prompt
+        return ""
+
+    def _compose_prompt(
+        self,
+        role: RuntimeRole,
+        custom_prompt: str,
+        *,
+        force_repo_map: bool = False,
+    ):
+        composed = compose_system_prompt(
+            role,
+            custom_prompt,
+            self._registry.workspace_root,
+            force=force_repo_map,
+        )
+        self._tier1_context = composed.context_text
+        self._dispatch_proxy.set_tier1_context(self._tier1_context)
+        return composed
 
     def set_planner_provider(self, provider: ProviderId) -> None:
         """Update the planner provider and its backend hook."""

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from aura.context_gearbox.models import RuntimeRole
+from aura.context_gearbox.runtime import compose_system_prompt
+
 
 def stale_read_notice(modified_files: list[str]) -> str:
     """Return a planner stale-read invalidation notice.
@@ -57,12 +60,14 @@ class PlannerRefreshState:
         """
         if self._base_system_prompt is None or self._workspace_root is None:
             return
-        from aura.prompts import build_tier1_context, inject_tier1_context
-
         try:
-            tier1_text = build_tier1_context(self._workspace_root, force=True)
-            enriched = inject_tier1_context(self._base_system_prompt, tier1_text)
-            history.set_system(enriched)
+            composed = compose_system_prompt(
+                RuntimeRole.PLANNER,
+                self._base_system_prompt,
+                self._workspace_root,
+                force=True,
+            )
+            history.set_system(composed.system_prompt)
         except Exception:
             import logging
 
