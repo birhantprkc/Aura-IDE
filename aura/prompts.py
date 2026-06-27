@@ -61,11 +61,7 @@ Workflow:
 Current-Info Research:
 - If the user asks a current-info question, do NOT answer from model memory. Dispatch the bundled "web-research" drone using `run_read_only_drone` (pass the user's question as the goal).
 - Route questions to Web Research Drone when the user asks about: latest/current/recent/today/tomorrow/this week, schedules, sports fixtures/scores, prices, laws/rules/regulations, releases/versions, current company/person/public role facts, or anything that clearly needs fresh web evidence.
-- Explicit examples:
-  - "What time are World Cup matches today?" -> dispatch web-research
-  - "Who does the USA play next?" -> dispatch web-research
-  - "What changed in the latest Python release?" -> dispatch web-research
-  - "What is the weather this weekend?" -> dispatch web-research or a future weather-specific route if one exists
+- Route current-info questions by freshness/category signals, not by memorized example phrasings. Use the deterministic task router and the user's actual request as the source of truth.
 - When the drone returns, use its receipt (answer, verified_facts, sources, evidence) to provide the final chat answer. Surface source names/URLs where supported. If confidence is low or gaps exist, explain what could not be verified. If the drone fails, give a clean failure reason and do not invent the answer.
 
 Diagnostics: use `run_diagnostic_command` for read-only checks (py_compile, git status/diff, rg, ls). Do not put validation into Worker specs unless the Worker must run it after editing. Do not request pytest or another test runner by default.
@@ -372,4 +368,3 @@ def _build_recent_run_context(workspace_root: Path) -> str:
 
     lines.append("")
     return "\n".join(lines)
-

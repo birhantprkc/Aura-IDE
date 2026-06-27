@@ -24,7 +24,6 @@ from aura.gui.cards.code_block_card import CodeBlockCard
 from aura.gui.cards.tool_call_card import ToolCallCard
 from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import (
-    ACCENT,
     ACCENT_HOVER,
     BG_RAISED,
     FG,
@@ -61,7 +60,6 @@ class AssistantCard(QFrame):
         header_layout = QHBoxLayout(header_row)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(6)
-        self._header_layout = header_layout
 
         header = QLabel("Aura", parent=header_row)
         header.setObjectName("assistantHeader")
@@ -81,27 +79,35 @@ class AssistantCard(QFrame):
 
         header_layout.addStretch(1)
 
-        self._thinking_label = QLabel("", parent=header_row)
+        status_host = QWidget(header_row)
+        status_host.setStyleSheet("background: transparent;")
+        status_layout = QHBoxLayout(status_host)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(6)
+        self._status_layout = status_layout
+        header_layout.addWidget(status_host)
+
+        self._thinking_label = QLabel("", parent=status_host)
         self._thinking_label.setObjectName("thinkingIndicator")
         self._thinking_label.setVisible(False)
         f = self._thinking_label.font()
         f.setPointSize(10)
         self._thinking_label.setFont(f)
         self._thinking_label.setStyleSheet(f"color: {WARN}; font-style: italic;")
-        header_layout.addWidget(self._thinking_label)
+        status_layout.addWidget(self._thinking_label)
 
         # Animated dots for the thinking indicator
         self._thinking_anim: QVariantAnimation | None = None
         self._thinking_dots: int = 0
 
-        self._tool_status = QLabel("", parent=header_row)
+        self._tool_status = QLabel("", parent=status_host)
         self._tool_status.setObjectName("toolStatus")
         font = self._tool_status.font()
         font.setPointSize(10)
         self._tool_status.setFont(font)
         self._tool_status.setTextFormat(Qt.TextFormat.RichText)
         self._tool_status.setVisible(False)
-        header_layout.addWidget(self._tool_status)
+        status_layout.addWidget(self._tool_status)
 
         self._outer.addWidget(header_row)
 
@@ -239,29 +245,29 @@ class AssistantCard(QFrame):
         badge.setFont(font)
         badge.setStyleSheet(
             "QToolButton#assistantDroneRunBadge {"
-            "  background: #161b33;"
-            f"  color: {LABEL_FILES};"
-            f"  border: 1px solid {ACCENT};"
+            "  background: #171b2a;"
+            "  color: #c8ceda;"
+            f"  border: 1px solid {LABEL_PROJECTS};"
             "  border-radius: 7px;"
             "  padding: 2px 7px;"
             "}"
             "QToolButton#assistantDroneRunBadge:hover {"
-            "  background: #1d2f55;"
-            f"  color: {ACCENT_HOVER};"
+            "  background: #1e2540;"
+            "  color: #e4e8f0;"
             f"  border-color: {LABEL_FILES};"
             "}"
             "QToolButton#assistantDroneRunBadge:pressed {"
             "  background: #221b44;"
             f"  color: {FG};"
-            f"  border-color: {LABEL_PROJECTS};"
+            f"  border-color: {ACCENT_HOVER};"
             "}"
         )
         badge.clicked.connect(lambda _checked=False, rid=run_id: on_click(rid))
 
-        insert_at = self._header_layout.indexOf(self._thinking_label)
+        insert_at = self._status_layout.indexOf(self._tool_status)
         if insert_at < 0:
-            insert_at = self._header_layout.count()
-        self._header_layout.insertWidget(insert_at, badge)
+            insert_at = self._status_layout.count()
+        self._status_layout.insertWidget(insert_at, badge)
         self._drone_run_badges[run_id] = badge
 
     def notify_compact_tool_start(self, name: str) -> None:
