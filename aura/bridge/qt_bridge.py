@@ -73,6 +73,7 @@ from aura.conversation.tools import (
     ToolRegistry,
 )
 from aura.hooks import hooks
+from aura.research.policy import NO_RESEARCH, decide_research_policy
 
 
 class _Worker(QObject):
@@ -282,6 +283,7 @@ class ConversationBridge(QObject):
         self._auto_dispatch: bool = False
         self._pre_worker_sha: str | None = None
         self._active_prompt_mode: str | None = None
+        self._turn_task_kind: str | None = None
 
         # Re-emit dispatch proxy signals on the bridge so the GUI binds once.
         self._dispatch_proxy.showSpecCard.connect(self.workerDispatchRequested)
@@ -361,6 +363,7 @@ class ConversationBridge(QObject):
             self._active_runtime_role(),
             self._registry.workspace_root,
             force=force_repo_map,
+            task_kind=self._turn_task_kind,
         )
         self._context_gearbox_metadata = context_gearbox_metadata(context.ledger)
         self._tier1_context = context.context_text
@@ -437,6 +440,7 @@ class ConversationBridge(QObject):
             custom_prompt,
             self._registry.workspace_root,
             force=force_repo_map,
+            task_kind=self._turn_task_kind,
         )
         self._context_gearbox_metadata = context_gearbox_metadata(composed.ledger)
         self._tier1_context = composed.context_text
@@ -530,6 +534,7 @@ class ConversationBridge(QObject):
     def send(self, model: ModelId, thinking: ThinkingMode, max_tool_rounds: int | None = None) -> None:
         if self.is_running():
             return
+        self._prepare_turn_context()
         # Capture pre-worker snapshot for reliable /undo
         if self._registry.workspace_root is not None:
             from aura.git_ops import snapshot
@@ -666,6 +671,40 @@ class ConversationBridge(QObject):
             thread.deleteLater()
         self.finished.emit()
 
+    def _prepare_turn_context(self) -> None:
+        task_kind = _research_task_kind_for_text(_latest_user_text(self._history))
+        if task_kind == self._turn_task_kind:
+            return
+        self._turn_task_kind = task_kind
+        if self._registry.workspace_root is None:
+            return
+        role = self._active_runtime_role()
+        composed = self._compose_prompt(role, self._custom_prompt_for_role(role))
+        self._history.set_system(composed.system_prompt)
+
 
 def _dummy_root():
     return Path.home()
+
+
+def _research_task_kind_for_text(text: str) -> str | None:
+    decision = decide_research_policy(text)
+    if decision.route == NO_RESEARCH:
+        return None
+    return decision.route
+
+
+def _latest_user_text(history: History) -> str:
+    for message in reversed(history.messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(str(item.get("text") or ""))
+            return "\n".join(part for part in parts if part)
+    return ""

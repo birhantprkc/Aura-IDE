@@ -1,0 +1,73 @@
+"""Adapter from ResearchRequest to the existing web-research Drone seam."""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+
+from aura.drones.definition import DroneDefinition
+from aura.drones.store import DroneStore
+from aura.drones.sync_runner import run_read_only_drone_sync
+
+WEB_RESEARCH_DRONE_ID = "web-research"
+
+Runner = Callable[..., dict[str, Any]]
+DroneLoader = Callable[[Path, str], DroneDefinition | None]
+
+
+@dataclass(frozen=True)
+class ResearchAdapterCall:
+    drone_id: str
+    goal: str
+    upstream: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def build_adapter_call(request: Any) -> ResearchAdapterCall:
+    """Return the sync-runner call shape for a ResearchRequest-like object."""
+    question = str(getattr(request, "question", "") or "").strip()
+    return ResearchAdapterCall(
+        drone_id=WEB_RESEARCH_DRONE_ID,
+        goal=question,
+        upstream={
+            "research_request": (
+                request.to_dict() if hasattr(request, "to_dict") else {}
+            )
+        },
+    )
+
+
+def execute_web_research_request(
+    workspace_root: Path,
+    request: Any,
+    *,
+    runner: Runner = run_read_only_drone_sync,
+    drone_loader: DroneLoader = DroneStore.load_drone,
+) -> dict[str, Any]:
+    """Run the existing read-only web-research Drone for a request."""
+    call = build_adapter_call(request)
+    if not call.goal:
+        return {
+            "ok": False,
+            "drone_id": call.drone_id,
+            "error": "research question is required",
+        }
+
+    drone = drone_loader(Path(workspace_root), call.drone_id)
+    if drone is None:
+        return {
+            "ok": False,
+            "drone_id": call.drone_id,
+            "error": "web-research Drone is not registered",
+        }
+
+    return runner(
+        workspace_root=Path(workspace_root),
+        drone_id=call.drone_id,
+        drone=drone,
+        goal=call.goal,
+        upstream=call.upstream,
+    )

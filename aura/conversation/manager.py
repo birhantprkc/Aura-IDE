@@ -136,6 +136,7 @@ from aura.conversation.worker_validation import (
 )
 from aura.dependency_context import compute_dependents
 from aura.hooks import hooks
+from aura.research.policy import ANSWER_ONLY, decide_research_policy
 from aura.verify import run_dependent_import_check, run_focused_import_check
 
 EventCallback = Callable[[Event], None]
@@ -303,6 +304,7 @@ class ConversationManager:
         task_completion_context = False
         final_messages_after_completion = 0
         last_completion_final_text = ""
+        research_policy = decide_research_policy(_latest_user_text(self._history))
 
         def discard_worker_candidate_final() -> None:
             nonlocal candidate_final_message
@@ -880,6 +882,16 @@ class ConversationManager:
                         return blocked
 
                 if name == "dispatch_to_worker":
+                    if research_policy.route == ANSWER_ONLY:
+                        self._append_pure_research_dispatch_block(
+                            tool_call_id=tool_call_id,
+                            on_event=on_event,
+                        )
+                        return {
+                            "id": tool_call_id,
+                            "skip": True,
+                            "completed_dispatch_for_final": False,
+                        }
                     result = self._tool_runner.handle_dispatch(
                         tool_call_id=tool_call_id,
                         args=args,
@@ -1843,6 +1855,44 @@ class ConversationManager:
             )
         )
 
+    def _append_pure_research_dispatch_block(
+        self,
+        tool_call_id: str,
+        on_event: EventCallback,
+    ) -> None:
+        summary = (
+            "Worker was not started because this turn is a pure external "
+            "research request. Run web research and answer from sourced evidence."
+        )
+        payload = json.dumps(
+            {
+                "ok": False,
+                "summary": summary,
+                "recoverable": True,
+                "extras": {
+                    "dispatch_not_started": True,
+                    "pure_research": True,
+                    "research_route": "answer_only",
+                },
+            },
+            ensure_ascii=False,
+        )
+        self._history.append_tool_result(tool_call_id, payload)
+        on_event(
+            ToolResult(
+                tool_call_id=tool_call_id,
+                name="dispatch_to_worker",
+                ok=True,
+                result=payload,
+                extras={
+                    "dispatch_not_started": True,
+                    "pure_research": True,
+                    "recoverable": True,
+                    "summary": summary,
+                },
+            )
+        )
+
     def _append_dispatch_blocker_message(
         self,
         result: WorkerDispatchResult,
@@ -1992,6 +2042,22 @@ def _mark_patch_invalid_syntax_reread(
     path = _edit_shapes.tool_path(name, args, parsed)
     if path:
         mark_one(path, parsed)
+
+
+def _latest_user_text(history: History) -> str:
+    for message in reversed(history.messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(str(item.get("text") or ""))
+            return "\n".join(part for part in parts if part)
+    return ""
 
 
 __all__ = [

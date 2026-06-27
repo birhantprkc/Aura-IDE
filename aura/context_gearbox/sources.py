@@ -22,6 +22,13 @@ PLANNER_DISPATCH_CONTRACT = """### planner_dispatch_contract
 - Do not over-plan simple work.
 - Worker specs need exact goal, known files, acceptance, validation, and non-goals."""
 
+WEB_RESEARCH_RULES = """### web_research_rules
+- Use run_read_only_drone with drone_id "web-research" for latest/current facts, external docs/API examples, pricing, versions/releases/changelogs, schedules, current people/roles, error lookup, URLs, and external references.
+- Do not use web research for local repo, file, workspace, git, or ordinary coding tasks unless the user explicitly needs current external facts.
+- Pure research answers must use the sourced research result and must not dispatch Worker.
+- Hybrid research-plus-code must research first; dispatch Worker only after findings create a concrete code objective with target files and acceptance.
+- Keep chat output compact and sourced; keep raw metadata in tool logs."""
+
 WORKER_EXECUTION_CONTRACT = """### worker_execution_contract
 - Execute only the requested change.
 - Read relevant files before editing.
@@ -92,6 +99,10 @@ _SCOPED_PACK_TEXT: dict[str, str] = {
     "drone_rules": DRONE_RULES,
     "provider_rules": PROVIDER_RULES,
     "build_pipeline_rules": BUILD_PIPELINE_RULES,
+}
+
+_PLANNER_RESEARCH_PACK_TEXT: dict[str, str] = {
+    "web_research_rules": WEB_RESEARCH_RULES,
 }
 
 _CODING_TASK_KINDS = {
@@ -245,6 +256,12 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
         reason="planner coding-harness dispatch quality contract",
     ),
     ContextSource(
+        source_id="web_research_rules",
+        kind="planner_research_pack",
+        roles=(RuntimeRole.PLANNER,),
+        reason="turn is shaped as external web research",
+    ),
+    ContextSource(
         source_id="worker_execution_contract",
         kind="quality_contract",
         roles=(RuntimeRole.WORKER,),
@@ -351,6 +368,8 @@ def _load_source_text(
         return "", f"not scoped to {role.value} role"
     if source.kind == "quality_contract":
         return _load_quality_contract(source, role, task_kind, target_files)
+    if source.kind == "planner_research_pack":
+        return _load_planner_research_pack(source, role, task_kind)
     if source.kind == "scoped_coding_pack":
         return _load_scoped_coding_pack(
             source,
@@ -395,6 +414,21 @@ def _load_quality_contract(
         return "", "unknown quality contract"
     if role == RuntimeRole.SINGLE and not _single_contract_applies(task_kind, target_files):
         return "", "single-mode request has no coding task shape"
+    return text, source.reason
+
+
+def _load_planner_research_pack(
+    source: ContextSource,
+    role: RuntimeRole,
+    task_kind: str | None,
+) -> tuple[str, str]:
+    text = _PLANNER_RESEARCH_PACK_TEXT.get(source.source_id, "")
+    if not text:
+        return "", "unknown planner research pack"
+    if role != RuntimeRole.PLANNER:
+        return "", f"not scoped to {role.value} role"
+    if not _task_kind_is_research_shaped(task_kind):
+        return "", "turn is not research-shaped"
     return text, source.reason
 
 
@@ -515,6 +549,16 @@ def _task_kind_has_any_hint(task_kind: str | None, hints: tuple[str, ...]) -> bo
 
 def _is_coding_task_kind(task_kind: str | None) -> bool:
     return _normalize_task_kind(task_kind) in _CODING_TASK_KINDS
+
+
+def _task_kind_is_research_shaped(task_kind: str | None) -> bool:
+    normalized = _normalize_task_kind(task_kind)
+    return normalized in {
+        "answer only",
+        "research",
+        "web research",
+        "research then worker",
+    }
 
 
 def _normalize_task_kind(value: Any) -> str:

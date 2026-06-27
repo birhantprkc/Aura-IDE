@@ -118,7 +118,7 @@ def test_docs_lookup_routes_to_research() -> None:
     route = classify_user_request("look up ComfyUI docs")
 
     assert route.lane == TaskLane.research
-    assert route.action == "research"
+    assert route.action == "web_research"
 
 
 def test_world_cup_today_routes_to_web_research() -> None:

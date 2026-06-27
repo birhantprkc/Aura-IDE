@@ -43,6 +43,10 @@ SCOPED_PACK_IDS = [
     "build_pipeline_rules",
 ]
 
+RESEARCH_PACK_IDS = [
+    "web_research_rules",
+]
+
 SCOPED_PACK_SKIP_REASONS = {
     "gui_rules": "target files do not match gui scope",
     "drone_rules": "target files do not match drone scope",
@@ -153,6 +157,34 @@ def test_planner_composition_includes_dispatch_contract(tmp_path):
     entry = _entry_by_id(composed, "planner_dispatch_contract")
     assert entry.included is True
     assert entry.reason == "planner coding-harness dispatch quality contract"
+
+
+def test_web_research_rules_load_for_planner_research_requests(tmp_path):
+    composed = compose_system_prompt(
+        RuntimeRole.PLANNER,
+        "",
+        tmp_path,
+        task_kind="answer_only",
+    )
+
+    entry = _entry_by_id(composed, "web_research_rules")
+    assert entry.included is True
+    assert "web_research_rules" in composed.context_text
+    assert "Pure research answers" in composed.context_text
+
+
+def test_web_research_rules_do_not_load_for_normal_coding_tasks(tmp_path):
+    composed = compose_system_prompt(
+        RuntimeRole.PLANNER,
+        "",
+        tmp_path,
+        task_kind="bugfix",
+    )
+
+    entry = _entry_by_id(composed, "web_research_rules")
+    assert entry.included is False
+    assert entry.reason == "turn is not research-shaped"
+    assert "web_research_rules" not in composed.context_text
 
 
 def test_worker_composition_includes_quality_contract_stack(tmp_path):
@@ -303,6 +335,12 @@ def test_contract_ledger_order_is_deterministic_and_records_skips(tmp_path):
         entry for entry in composed.ledger if entry.kind == "scoped_coding_pack"
     ]
     assert [entry.source_id for entry in scoped_entries] == SCOPED_PACK_IDS
+    research_entries = [
+        entry for entry in composed.ledger if entry.kind == "planner_research_pack"
+    ]
+    assert [entry.source_id for entry in research_entries] == RESEARCH_PACK_IDS
+    assert research_entries[0].included is False
+    assert research_entries[0].reason == "turn is not research-shaped"
     skipped = [
         entry for entry in contract_entries
         if entry.source_id != "planner_dispatch_contract"
@@ -336,7 +374,7 @@ def test_contracts_do_not_appear_in_prompts_py():
     prompts_path = Path(__file__).resolve().parent.parent / "aura" / "prompts.py"
     source = prompts_path.read_text(encoding="utf-8")
 
-    for source_id in CONTRACT_IDS + SCOPED_PACK_IDS:
+    for source_id in CONTRACT_IDS + SCOPED_PACK_IDS + RESEARCH_PACK_IDS:
         assert source_id not in source
 
 
@@ -446,12 +484,12 @@ def test_context_gearbox_summary_counts_include_scoped_packs(tmp_path):
 
     assert "gui_rules" in summary["loaded"]
     assert summary["loaded_count"] == 6
-    assert summary["skipped_count"] == 6
+    assert summary["skipped_count"] == 7
     assert {
         "source_id": "drone_rules",
         "reason": "target files do not match drone scope",
     } in summary["skipped"]
-    assert summary["display"] == "Context: 6 loaded, 6 skipped"
+    assert summary["display"] == "Context: 6 loaded, 7 skipped"
 
 
 def test_context_gearbox_metadata_exposes_no_prompt_or_context_text(tmp_path):
