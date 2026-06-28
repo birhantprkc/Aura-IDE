@@ -62,8 +62,6 @@ from aura.conversation.edit_orchestrator import (
 from aura.conversation.edit_recovery_state import (
     default_edit_failure_class,
     edit_recovery_details,
-    worker_file_state_for_path,
-    worker_path_is_existing_file,
 )
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
@@ -112,6 +110,7 @@ from aura.conversation.worker_flow import (
     WORKER_FLOW_VALIDATION_REQUIRED_TEXT,
     WorkerFlowHarness,
 )
+from aura.conversation.worker_patch_state_policy import patch_file_state_block
 from aura.conversation.worker_recovery_messages import (
     PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
     WORKER_AUTO_PY_COMPILE_INSTRUCTION,
@@ -120,7 +119,6 @@ from aura.conversation.worker_recovery_messages import (
     WORKER_IMPORT_FAILURE_INSTRUCTION,
     WORKER_LAUNCH_FAILURE_INSTRUCTION,
 )
-from aura.conversation.worker_patch_state_policy import patch_file_state_block
 from aura.conversation.worker_recovery_payload import (
     blocked_tool_result,
     is_recoverable_phase_boundary,
