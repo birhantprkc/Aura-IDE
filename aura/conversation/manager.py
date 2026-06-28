@@ -65,6 +65,7 @@ from aura.conversation.edit_recovery_state import (
 )
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
+from aura.conversation.manager_send_state import _SendState
 from aura.conversation.path_utils import (
     is_validation_scratch_path as _is_validation_scratch_path,
 )
@@ -86,7 +87,6 @@ from aura.conversation.terminal_syntax import (
 )
 from aura.conversation.tool_limits import (
     WRITE_TOOLS,
-    ToolLimitState,
     limit_reached_payload,
 )
 from aura.conversation.tool_runner import ToolRunner
@@ -108,7 +108,6 @@ from aura.conversation.worker_finish import (
 )
 from aura.conversation.worker_flow import (
     WORKER_FLOW_VALIDATION_REQUIRED_TEXT,
-    WorkerFlowHarness,
 )
 from aura.conversation.worker_patch_state_policy import patch_file_state_block
 from aura.conversation.worker_recovery_messages import (
@@ -133,7 +132,6 @@ from aura.conversation.worker_recovery_state import (
     pop_normalized_recovery_key,
     record_reads_for_recovery,
 )
-from aura.conversation.worker_stream_buffer import WorkerStreamBuffer
 from aura.conversation.worker_validation import (
     emit_auto_dependent_import_info,
     emit_auto_import_result,
@@ -294,71 +292,36 @@ class ConversationManager:
         """
         import concurrent.futures
 
-        reject_all_for_turn = False
         mode = getattr(self._tools, "mode", "single")
-        limits = ToolLimitState(mode=mode)
-        stream_buffer = WorkerStreamBuffer() if mode == "worker" else None
-        worker_flow = WorkerFlowHarness() if mode == "worker" else None
-        candidate_final_message: dict[str, Any] | None = None
-        rounds_used = 0
-        worker_needs_final_report = False
-        worker_phase_boundary_info: dict[str, Any] | None = None
-        worker_redispatches = 0
-        worker_dispatch_failures: dict[str, int] = {}
-        edit_failed_shapes: set[str] = set()
-        edit_fallback_required: dict[str, dict[str, Any]] = {}
-        recovery_block_counts: dict[str, int] = {}
-        line_range_reread_required: dict[str, dict[str, Any]] = {}
-        worker_file_state: dict[str, dict[str, Any]] = {}
-        patch_failed_cycles: dict[str, int] = {}
-        patch_invalid_syntax_required: dict[str, dict[str, Any]] = {}
-        edit_retry_ledger = EditRetryLedger()
-        syntax_repair_required: dict[str, dict[str, Any]] = {}
-        syntax_validation_required: set[str] = set()
-        explicit_validation_failure_counts: dict[str, int] = {}
-        import_verification_required: set[str] = set()
-        write_attempts_by_path: dict[str, int] = {}
-        worker_recovery_nudge_sent = False
-        worker_validation_nudge_sent = False
-        stale_validation_notes: list[str] = []
-        worker_app_writes: set[str] = set()
-        last_launch_ok_fingerprint: str | None = None
-        last_dependent_ok_fingerprint: str | None = None
-        task_completion_context = False
-        final_messages_after_completion = 0
-        last_completion_final_text = ""
-        research_policy = decide_research_policy(_latest_user_text(self._history))
-
-        def discard_worker_candidate_final() -> None:
-            nonlocal candidate_final_message
-            candidate_final_message = None
-            if stream_buffer is not None:
-                stream_buffer.discard()
+        state = _SendState(
+            mode=mode,
+            research_policy=decide_research_policy(_latest_user_text(self._history)),
+        )
 
         while True:
             if (
-                mode in {"planner", "single"}
-                and task_completion_context
-                and final_messages_after_completion >= 1
+                state.mode in {"planner", "single"}
+                and state.task_completion_context
+                and state.final_messages_after_completion >= 1
             ):
                 return
 
-            rounds_used += 1
-            if max_tool_rounds is not None and rounds_used > max_tool_rounds:
+            state.rounds_used += 1
+            if max_tool_rounds is not None and state.rounds_used > max_tool_rounds:
                 on_event(ApiError(status_code=None, message=f"Exceeded max tool rounds ({max_tool_rounds})."))
                 return
 
-            limits.begin_model_round()
+            state.limits.begin_model_round()
             if cancel_event.is_set():
                 self._cleanup_cancelled(on_event)
                 return
 
             full_message: dict[str, Any] | None = None
-            tool_defs = [] if worker_needs_final_report else self._tools.tool_defs()
-            if worker_flow is not None:
-                tool_defs = worker_flow.filter_tool_defs(tool_defs)
-            if stream_buffer is not None:
-                stream_buffer.begin_round()
+            tool_defs = [] if state.worker_needs_final_report else self._tools.tool_defs()
+            if state.worker_flow is not None:
+                tool_defs = state.worker_flow.filter_tool_defs(tool_defs)
+            if state.stream_buffer is not None:
+                state.stream_buffer.begin_round()
 
             label = "planner_stream" if "planner" in hook_name else "worker_stream"
             _log.info(
@@ -379,8 +342,8 @@ class ConversationManager:
                 if _first_event:
                     _log.info("%s_first_event model=%s", label, model)
                     _first_event = False
-                if mode == "worker" and stream_buffer is not None:
-                    stream_buffer.capture_or_forward(ev, on_event)
+                if state.mode == "worker" and state.stream_buffer is not None:
+                    state.stream_buffer.capture_or_forward(ev, on_event)
                 else:
                     on_event(ev)
                 if isinstance(ev, Done):
@@ -418,54 +381,54 @@ class ConversationManager:
                 return
 
             tool_calls = full_message.get("tool_calls") or []
-            if worker_flow is not None:
-                worker_flow.observe_assistant_message(full_message)
+            if state.worker_flow is not None:
+                state.worker_flow.observe_assistant_message(full_message)
             if (
                 not tool_calls
-                and mode in {"planner", "single"}
-                and task_completion_context
+                and state.mode in {"planner", "single"}
+                and state.task_completion_context
             ):
                 content_text = assistant_message_text(full_message)
-                if final_messages_after_completion >= 1:
+                if state.final_messages_after_completion >= 1:
                     if is_repetitive_completion_final(
                         content_text,
-                        last_completion_final_text,
+                        state.last_completion_final_text,
                     ):
                         return
                     return
                 self._history.append_assistant(full_message)
-                final_messages_after_completion += 1
-                last_completion_final_text = content_text
+                state.final_messages_after_completion += 1
+                state.last_completion_final_text = content_text
                 return
 
             # Worker final quarantine: hold candidate until validation gates pass
-            if not tool_calls and mode == "worker":
-                candidate_final_message = full_message
+            if not tool_calls and state.mode == "worker":
+                state.candidate_final_message = full_message
             else:
                 self._history.append_assistant(full_message)
-                if tool_calls and stream_buffer is not None:
-                    stream_buffer.discard()
+                if tool_calls and state.stream_buffer is not None:
+                    state.stream_buffer.discard()
 
-            if worker_needs_final_report:
+            if state.worker_needs_final_report:
                 if not tool_calls:
-                    if candidate_final_message is not None:
-                        self._history.append_assistant(candidate_final_message)
-                        candidate_final_message = None
-                    if stream_buffer is not None:
-                        stream_buffer.flush(on_event)
+                    if state.candidate_final_message is not None:
+                        self._history.append_assistant(state.candidate_final_message)
+                        state.candidate_final_message = None
+                    if state.stream_buffer is not None:
+                        state.stream_buffer.flush(on_event)
                     return
                 for tc in tool_calls:
                     fn = tc["function"]
                     name = fn["name"]
                     tool_call_id = tc["id"]
                     reason = (
-                        str(worker_phase_boundary_info.get("reason"))
-                        if worker_phase_boundary_info
+                        str(state.worker_phase_boundary_info.get("reason"))
+                        if state.worker_phase_boundary_info
                         else "worker_phase_boundary"
                     )
                     message = (
-                        str(worker_phase_boundary_info.get("message"))
-                        if worker_phase_boundary_info
+                        str(state.worker_phase_boundary_info.get("message"))
+                        if state.worker_phase_boundary_info
                         else (
                             "Worker reached a recoverable phase boundary for this pass. "
                             "Produce the continuation report now."
@@ -474,33 +437,33 @@ class ConversationManager:
                     info = {
                         "ok": False,
                         "limit_reached": bool(
-                            worker_phase_boundary_info
-                            and worker_phase_boundary_info.get("limit_reached")
+                            state.worker_phase_boundary_info
+                            and state.worker_phase_boundary_info.get("limit_reached")
                         ),
                         "loop_detected": bool(
-                            worker_phase_boundary_info
-                            and worker_phase_boundary_info.get("loop_detected")
+                            state.worker_phase_boundary_info
+                            and state.worker_phase_boundary_info.get("loop_detected")
                         ),
                         "recoverable": True,
                         "phase_boundary": True,
                         "reason": reason,
                         "tool": name,
                         "message": message,
-                        "counts": limits.to_dict(),
+                        "counts": state.limits.to_dict(),
                     }
                     self._append_limit_tool_result(tool_call_id, name, info, on_event)
-                if stream_buffer is not None:
-                    stream_buffer.discard()
+                if state.stream_buffer is not None:
+                    state.stream_buffer.discard()
                 return
 
             if not tool_calls:
-                if mode == "worker":
-                    if has_terminal_syntax_failure(syntax_repair_required):
-                        if not worker_recovery_nudge_sent:
+                if state.mode == "worker":
+                    if has_terminal_syntax_failure(state.syntax_repair_required):
+                        if not state.worker_recovery_nudge_sent:
                             diagnostic_parts = []
-                            for path, state in syntax_repair_required.items():
-                                if state.get("repair_failed") and state.get("error"):
-                                    diagnostic_parts.append(f"{path}:\n{state['error']}")
+                            for path, s in state.syntax_repair_required.items():
+                                if s.get("repair_failed") and s.get("error"):
+                                    diagnostic_parts.append(f"{path}:\n{s['error']}")
                             diagnostic_text = "\n\n".join(diagnostic_parts)
                             instruction = (
                                 "Terminal py_compile still failing after repair. "
@@ -511,8 +474,8 @@ class ConversationManager:
                             if diagnostic_text:
                                 instruction += f"\n\nDiagnostic output:\n{diagnostic_text}"
                             self._history.append_user_text(instruction)
-                            worker_recovery_nudge_sent = True
-                            discard_worker_candidate_final()
+                            state.worker_recovery_nudge_sent = True
+                            state.discard_worker_candidate_final()
                             continue
                         self._finish_worker_unrecoverable(
                             on_event,
@@ -521,27 +484,27 @@ class ConversationManager:
                         )
                         return
                     # Carry import-verification paths forward for re-check
-                    if import_verification_required:
-                        for path in import_verification_required:
-                            syntax_validation_required.add(path)
+                    if state.import_verification_required:
+                        for path in state.import_verification_required:
+                            state.syntax_validation_required.add(path)
                     edit_recovery_pending = bool(
-                        edit_fallback_required
-                        or line_range_reread_required
-                        or patch_invalid_syntax_required
+                        state.edit_fallback_required
+                        or state.line_range_reread_required
+                        or state.patch_invalid_syntax_required
                     )
                     syntax_repair_pending = bool(
-                        syntax_repair_paths(syntax_repair_required)
+                        syntax_repair_paths(state.syntax_repair_required)
                     )
                     if (
                         edit_recovery_pending
                         or syntax_repair_pending
                     ):
-                        if not worker_recovery_nudge_sent:
+                        if not state.worker_recovery_nudge_sent:
                             if edit_recovery_pending:
                                 if (
-                                    patch_invalid_syntax_required
-                                    and not edit_fallback_required
-                                    and not line_range_reread_required
+                                    state.patch_invalid_syntax_required
+                                    and not state.edit_fallback_required
+                                    and not state.line_range_reread_required
                                 ):
                                     instruction = PATCH_CANDIDATE_INVALID_SYNTAX_ACTION
                                 else:
@@ -549,8 +512,8 @@ class ConversationManager:
                             else:
                                 # Distinguish craft-gate failures from terminal py_compile failures
                                 any_repair_failed = any(
-                                    state.get("repair_failed")
-                                    for state in syntax_repair_required.values()
+                                    s.get("repair_failed")
+                                    for s in state.syntax_repair_required.values()
                                 )
                                 if any_repair_failed:
                                     instruction = (
@@ -567,19 +530,19 @@ class ConversationManager:
                                     )
                             if not edit_recovery_pending:
                                 diagnostic_parts = []
-                                for path, state in syntax_repair_required.items():
+                                for path, s in state.syntax_repair_required.items():
                                     if (
-                                        not state.get("awaiting_validation")
-                                        and not state.get("repair_failed")
-                                        and state.get("error")
+                                        not s.get("awaiting_validation")
+                                        and not s.get("repair_failed")
+                                        and s.get("error")
                                     ):
-                                        diagnostic_parts.append(f"{path}:\n{state['error']}")
+                                        diagnostic_parts.append(f"{path}:\n{s['error']}")
                                 diagnostic_text = "\n\n".join(diagnostic_parts)
                                 if diagnostic_text:
                                     instruction += f"\n\nDiagnostic output:\n{diagnostic_text}"
                             self._history.append_user_text(instruction)
-                            worker_recovery_nudge_sent = True
-                            discard_worker_candidate_final()
+                            state.worker_recovery_nudge_sent = True
+                            state.discard_worker_candidate_final()
                             continue
                         error_parts = [
                             "Worker stopped before recovering from a recoverable failure."
@@ -587,7 +550,7 @@ class ConversationManager:
                         details: dict[str, Any] = {}
                         if syntax_repair_pending:
                             sync_paths = sorted(
-                                syntax_repair_paths(syntax_repair_required)
+                                syntax_repair_paths(state.syntax_repair_required)
                             )
                             error_parts.append(
                                 f" Syntax repair pending on: {', '.join(sync_paths)}."
@@ -598,12 +561,12 @@ class ConversationManager:
                                 " Edit mechanics recovery pending."
                             )
                             details.update(edit_recovery_details(
-                                edit_fallback_required,
-                                line_range_reread_required,
+                                state.edit_fallback_required,
+                                state.line_range_reread_required,
                             ))
-                            if patch_invalid_syntax_required:
+                            if state.patch_invalid_syntax_required:
                                 details["patch_invalid_syntax_paths"] = sorted(
-                                    patch_invalid_syntax_required
+                                    state.patch_invalid_syntax_required
                                 )
                         self._finish_worker_unrecoverable(
                             on_event,
@@ -612,13 +575,13 @@ class ConversationManager:
                             details=details or None,
                         )
                         return
-                    syntax_validation_required.difference_update(
-                        path for path in set(syntax_validation_required)
+                    state.syntax_validation_required.difference_update(
+                        path for path in set(state.syntax_validation_required)
                         if _is_validation_scratch_path(path)
                     )
-                    if syntax_validation_required:
+                    if state.syntax_validation_required:
                         product_paths = sorted(
-                            _normalize_worker_path(path) for path in syntax_validation_required
+                            _normalize_worker_path(path) for path in state.syntax_validation_required
                             if not _is_validation_scratch_path(path)
                         )
                         if product_paths:
@@ -634,9 +597,9 @@ class ConversationManager:
                                 workspace_root=self._tools.workspace_root,
                             )
                             if all_ok:
-                                syntax_validation_required.clear()
-                                if worker_flow is not None:
-                                    worker_flow.mark_validation_satisfied()
+                                state.syntax_validation_required.clear()
+                                if state.worker_flow is not None:
+                                    state.worker_flow.mark_validation_satisfied()
                                 # --- Import verification rung ---
                                 import_ok, import_diag = run_focused_import_check(
                                     Path(self._tools.workspace_root),
@@ -644,7 +607,7 @@ class ConversationManager:
                                 )
                                 if not import_ok:
                                     for path in product_paths:
-                                        import_verification_required.add(path)
+                                        state.import_verification_required.add(path)
                                     emit_auto_import_result(
                                         paths=product_paths,
                                         diagnostics=import_diag,
@@ -655,11 +618,11 @@ class ConversationManager:
                                         diagnostics=import_diag,
                                     )
                                     self._history.append_user_text(instruction)
-                                    discard_worker_candidate_final()
+                                    state.discard_worker_candidate_final()
                                     continue
                                 else:
                                     for path in product_paths:
-                                        import_verification_required.discard(path)
+                                        state.import_verification_required.discard(path)
                                     # --- Dependent import verification rung ---
                                     fp_dep = _fingerprint_paths(
                                         set(product_paths),
@@ -667,7 +630,7 @@ class ConversationManager:
                                     )
                                     try:
                                         gating_paths: list[str] = []
-                                        if fp_dep and fp_dep == last_dependent_ok_fingerprint:
+                                        if fp_dep and fp_dep == state.last_dependent_ok_fingerprint:
                                             pass
                                         else:
                                             deps = compute_dependents(
@@ -690,7 +653,7 @@ class ConversationManager:
                                                     )
                                                 if gating_paths:
                                                     for path in product_paths:
-                                                        import_verification_required.add(path)
+                                                        state.import_verification_required.add(path)
                                                     emit_auto_import_result(
                                                         paths=gating_paths,
                                                         diagnostics=gating_diag,
@@ -703,10 +666,10 @@ class ConversationManager:
                                                         diagnostics=gating_diag,
                                                     )
                                                     self._history.append_user_text(instruction)
-                                                    discard_worker_candidate_final()
+                                                    state.discard_worker_candidate_final()
                                                     continue
                                         if fp_dep and not gating_paths:
-                                            last_dependent_ok_fingerprint = fp_dep
+                                            state.last_dependent_ok_fingerprint = fp_dep
                                     except Exception:
                                         logging.getLogger(__name__).warning(
                                             "Dependent import check failed non-fatally",
@@ -716,25 +679,25 @@ class ConversationManager:
                             else:
                                 # Auto-py_compile failed — feed diagnostics back for repair
                                 for path in product_paths:
-                                    set_syntax_repair_state(syntax_repair_required, path, {
+                                    set_syntax_repair_state(state.syntax_repair_required, path, {
                                         "error": diagnostics,
                                         "failed_repairs": 0,
                                     })
-                                syntax_validation_required.clear()
+                                state.syntax_validation_required.clear()
                                 instruction = WORKER_AUTO_PY_COMPILE_INSTRUCTION.format(
                                     diagnostics=diagnostics,
                                 )
                                 self._history.append_user_text(instruction)
-                                discard_worker_candidate_final()
+                                state.discard_worker_candidate_final()
                                 continue
                     # --- Launch verification rung ---
                     if declared_run_command:
                         fp = _fingerprint_paths(
-                            worker_app_writes,
+                            state.worker_app_writes,
                             self._tools.workspace_root,
                         )
                         try:
-                            if fp and fp == last_launch_ok_fingerprint:
+                            if fp and fp == state.last_launch_ok_fingerprint:
                                 emit_auto_launch_result(
                                     command=declared_run_command,
                                     ok=True,
@@ -765,10 +728,10 @@ class ConversationManager:
                                         output=watch.output,
                                     )
                                     self._history.append_user_text(instruction)
-                                    discard_worker_candidate_final()
+                                    state.discard_worker_candidate_final()
                                     continue
                                 if fp:
-                                    last_launch_ok_fingerprint = fp
+                                    state.last_launch_ok_fingerprint = fp
                                 emit_auto_launch_result(
                                     command=declared_run_command,
                                     ok=True,
@@ -806,11 +769,11 @@ class ConversationManager:
                             validation_key = val_result.command or "\n".join(
                                 explicit_validation_commands
                             )
-                            failure_count = explicit_validation_failure_counts.get(
+                            failure_count = state.explicit_validation_failure_counts.get(
                                 validation_key,
                                 0,
                             ) + 1
-                            explicit_validation_failure_counts[validation_key] = failure_count
+                            state.explicit_validation_failure_counts[validation_key] = failure_count
                             if failure_count > 1:
                                 self._finish_worker_unrecoverable(
                                     on_event,
@@ -830,23 +793,23 @@ class ConversationManager:
                                 diagnostics=val_result.diagnostics,
                             )
                             self._history.append_user_text(instruction)
-                            discard_worker_candidate_final()
+                            state.discard_worker_candidate_final()
                             continue
-                        explicit_validation_failure_counts.clear()
-                        if worker_flow is not None:
-                            worker_flow.mark_validation_satisfied()
+                        state.explicit_validation_failure_counts.clear()
+                        if state.worker_flow is not None:
+                            state.worker_flow.mark_validation_satisfied()
                     if (
-                        worker_flow is not None
-                        and worker_flow.requires_validation_before_final()
+                        state.worker_flow is not None
+                        and state.worker_flow.requires_validation_before_final()
                     ):
-                        if not worker_validation_nudge_sent:
+                        if not state.worker_validation_nudge_sent:
                             self._history.append_user_text(
                                 WORKER_FLOW_VALIDATION_REQUIRED_TEXT
                             )
-                            worker_validation_nudge_sent = True
-                            discard_worker_candidate_final()
+                            state.worker_validation_nudge_sent = True
+                            state.discard_worker_candidate_final()
                             continue
-                        discard_worker_candidate_final()
+                        state.discard_worker_candidate_final()
                         self._finish_worker_recoverable_followup(
                             on_event,
                             failure_class="worker_validation_required",
@@ -864,11 +827,11 @@ class ConversationManager:
                         )
                         return
                     # All gates passed — release candidate final and flush buffer
-                    if candidate_final_message is not None:
-                        self._history.append_assistant(candidate_final_message)
-                        candidate_final_message = None
-                    if stream_buffer is not None:
-                        stream_buffer.flush(on_event)
+                    if state.candidate_final_message is not None:
+                        self._history.append_assistant(state.candidate_final_message)
+                        state.candidate_final_message = None
+                    if state.stream_buffer is not None:
+                        state.stream_buffer.flush(on_event)
                     return
                 return
 
@@ -899,8 +862,8 @@ class ConversationManager:
                     continue
 
                 flow_block = (
-                    worker_flow.should_block_tool(name, args)
-                    if worker_flow is not None
+                    state.worker_flow.should_block_tool(name, args)
+                    if state.worker_flow is not None
                     else None
                 )
                 if flow_block is not None:
@@ -912,15 +875,15 @@ class ConversationManager:
                     })
                     continue
 
-                allowed, limit_info = limits.check(name)
+                allowed, limit_info = state.limits.check(name)
                 if not allowed:
                     self._append_limit_tool_result(tool_call_id, name, limit_info, on_event)
                     if is_recoverable_phase_boundary(limit_info):
                         _worker_phase_boundary_info = limit_info
                     continue
-                limits.record(name)
-                if worker_flow is not None:
-                    worker_flow.observe_tool_call(name, args)
+                state.limits.record(name)
+                if state.worker_flow is not None:
+                    state.worker_flow.observe_tool_call(name, args)
                 tasks.append({"id": tool_call_id, "name": name, "args": args})
 
             if cancel_event.is_set():
@@ -928,7 +891,7 @@ class ConversationManager:
                 return
 
             def process_task(task: dict[str, Any]) -> dict[str, Any]:
-                nonlocal _terminal_dispatch, _worker_phase_boundary_info, reject_all_for_turn, worker_redispatches, stale_validation_notes
+                nonlocal _terminal_dispatch, _worker_phase_boundary_info
                 tool_call_id = task["id"]
                 name = task["name"]
                 args = task["args"]
@@ -937,22 +900,22 @@ class ConversationManager:
                 if isinstance(flow_block, dict):
                     return blocked_tool_result(tool_call_id, name, flow_block)
 
-                if mode == "worker":
+                if state.mode == "worker":
                     blocked = self._worker_recovery_block(
                         tool_call_id=tool_call_id,
                         name=name,
                         args=args,
-                        edit_failed_shapes=edit_failed_shapes,
-                        edit_fallback_required=edit_fallback_required,
-                        recovery_block_counts=recovery_block_counts,
-                        line_range_reread_required=line_range_reread_required,
-                        worker_file_state=worker_file_state,
-                        patch_failed_cycles=patch_failed_cycles,
-                        patch_invalid_syntax_required=patch_invalid_syntax_required,
-                        edit_retry_ledger=edit_retry_ledger,
-                        syntax_repair_required=syntax_repair_required,
-                        syntax_validation_required=syntax_validation_required,
-                        write_attempts_by_path=write_attempts_by_path,
+                        edit_failed_shapes=state.edit_failed_shapes,
+                        edit_fallback_required=state.edit_fallback_required,
+                        recovery_block_counts=state.recovery_block_counts,
+                        line_range_reread_required=state.line_range_reread_required,
+                        worker_file_state=state.worker_file_state,
+                        patch_failed_cycles=state.patch_failed_cycles,
+                        patch_invalid_syntax_required=state.patch_invalid_syntax_required,
+                        edit_retry_ledger=state.edit_retry_ledger,
+                        syntax_repair_required=state.syntax_repair_required,
+                        syntax_validation_required=state.syntax_validation_required,
+                        write_attempts_by_path=state.write_attempts_by_path,
                     )
                     if blocked is not None:
                         blocked_payload = parse_tool_payload(str(blocked.get("result_payload", "")))
@@ -961,7 +924,7 @@ class ConversationManager:
                         return blocked
 
                 if name == "dispatch_to_worker":
-                    if research_policy.route == ANSWER_ONLY:
+                    if state.research_policy.route == ANSWER_ONLY:
                         self._append_pure_research_dispatch_block(
                             tool_call_id=tool_call_id,
                             on_event=on_event,
@@ -984,11 +947,11 @@ class ConversationManager:
                             action = classify_failed_worker_dispatch(
                                 args=args,
                                 result=result,
-                                failures=worker_dispatch_failures,
-                                failed_attempts=worker_redispatches,
+                                failures=state.worker_dispatch_failures,
+                                failed_attempts=state.worker_redispatches,
                             )
                             if action["counts_as_attempt"]:
-                                worker_redispatches += 1
+                                state.worker_redispatches += 1
                             blocker_reason = action["blocker_reason"]
                             if blocker_reason:
                                 return {
@@ -1037,17 +1000,17 @@ class ConversationManager:
                         args=args,
                         on_event=on_event,
                         cancel_event=cancel_event,
-                        mode=mode,
+                        mode=state.mode,
                         explicit_validation_commands=explicit_validation_commands,
                     )
-                    if mode == "worker":
+                    if state.mode == "worker":
                         update_syntax_state_from_terminal(
                             args=args,
                             loop_info=loop_info,
                             workspace_root=Path(self._tools.workspace_root),
-                            syntax_repair_required=syntax_repair_required,
-                            syntax_validation_required=syntax_validation_required,
-                            stale_validation_notes=stale_validation_notes,
+                            syntax_repair_required=state.syntax_repair_required,
+                            syntax_validation_required=state.syntax_validation_required,
+                            stale_validation_notes=state.stale_validation_notes,
                         )
                     if is_recoverable_phase_boundary(loop_info):
                         _worker_phase_boundary_info = loop_info
@@ -1063,7 +1026,7 @@ class ConversationManager:
                         },
                     }
 
-                if reject_all_for_turn and name in WRITE_TOOLS:
+                if state.reject_all_for_turn and name in WRITE_TOOLS:
                     payload = json.dumps(
                         {
                             "ok": False,
@@ -1100,30 +1063,30 @@ class ConversationManager:
 
                 # Check rejection state after execute (approval_cb could set it)
                 if exec_result.extras.get("approval") == "reject_all":
-                    reject_all_for_turn = True
+                    state.reject_all_for_turn = True
 
                 tool_msg_content = exec_result.to_tool_message_content()
-                if mode == "worker":
+                if state.mode == "worker":
                     tool_msg_content = self._update_worker_recovery_state(
                         name=name,
                         args=args,
                         ok=exec_result.ok,
                         content=tool_msg_content,
-                        edit_failed_shapes=edit_failed_shapes,
-                        edit_fallback_required=edit_fallback_required,
-                        line_range_reread_required=line_range_reread_required,
-                        worker_file_state=worker_file_state,
-                        patch_failed_cycles=patch_failed_cycles,
-                        patch_invalid_syntax_required=patch_invalid_syntax_required,
-                        edit_retry_ledger=edit_retry_ledger,
-                        syntax_repair_required=syntax_repair_required,
-                        syntax_validation_required=syntax_validation_required,
-                        write_attempts_by_path=write_attempts_by_path,
-                        worker_app_writes=worker_app_writes,
+                        edit_failed_shapes=state.edit_failed_shapes,
+                        edit_fallback_required=state.edit_fallback_required,
+                        line_range_reread_required=state.line_range_reread_required,
+                        worker_file_state=state.worker_file_state,
+                        patch_failed_cycles=state.patch_failed_cycles,
+                        patch_invalid_syntax_required=state.patch_invalid_syntax_required,
+                        edit_retry_ledger=state.edit_retry_ledger,
+                        syntax_repair_required=state.syntax_repair_required,
+                        syntax_validation_required=state.syntax_validation_required,
+                        write_attempts_by_path=state.write_attempts_by_path,
+                        worker_app_writes=state.worker_app_writes,
                     )
 
                 loop_result = self._apply_loop_detection(
-                    mode=mode,
+                    mode=state.mode,
                     name=name,
                     args=args,
                     ok=exec_result.ok,
@@ -1191,8 +1154,8 @@ class ConversationManager:
             results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
 
             flow_steering_suppressed = False
-            if stale_validation_notes:
-                note_text = "\n".join(stale_validation_notes)
+            if state.stale_validation_notes:
+                note_text = "\n".join(state.stale_validation_notes)
                 self._history.append_user_text(note_text)
                 flow_steering_suppressed = True
 
@@ -1223,9 +1186,9 @@ class ConversationManager:
                     completed_dispatch_for_final = True
                 if res.get("completed_tool_result_for_final"):
                     completed_tool_result_for_final = True
-                if worker_flow is not None and res.get("flow_result"):
+                if state.worker_flow is not None and res.get("flow_result"):
                     flow_result = res["flow_result"]
-                    worker_flow.observe_tool_result(
+                    state.worker_flow.observe_tool_result(
                         flow_result.get("name", task["name"]),
                         flow_result.get("args", task["args"]),
                         flow_result.get("ok"),
@@ -1243,16 +1206,16 @@ class ConversationManager:
             )
 
             if _worker_phase_boundary_info is not None:
-                worker_phase_boundary_info = _worker_phase_boundary_info
-                if worker_phase_boundary_info.get("message"):
-                    self._history.append_user_text(str(worker_phase_boundary_info["message"]))
-                worker_needs_final_report = True
+                state.worker_phase_boundary_info = _worker_phase_boundary_info
+                if state.worker_phase_boundary_info.get("message"):
+                    self._history.append_user_text(str(state.worker_phase_boundary_info["message"]))
+                state.worker_needs_final_report = True
                 continue
 
             if completed_dispatch_for_final:
                 return
             if completed_tool_result_for_final:
-                task_completion_context = True
+                state.task_completion_context = True
                 continue
 
             # If research completed, stop the loop.
@@ -1260,8 +1223,8 @@ class ConversationManager:
             if _terminal_dispatch:
                 return
 
-            if worker_flow is not None and not flow_steering_suppressed:
-                steering = worker_flow.pop_pending_steering()
+            if state.worker_flow is not None and not flow_steering_suppressed:
+                steering = state.worker_flow.pop_pending_steering()
                 if steering:
                     self._history.append_user_text(steering)
 
