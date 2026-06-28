@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -35,14 +34,11 @@ from aura.project_env import (
     project_environment_missing_payload,
 )
 from aura.sandbox import SandboxExecutor, SandboxResult, WatchResult
-
-DEFAULT_TERMINAL_TIMEOUT_SECONDS = 300
-DEFAULT_PY_COMPILE_TIMEOUT_SECONDS = 30
-MAX_TERMINAL_TIMEOUT_SECONDS = 300
-
-_CD_WRAPPER_RE = re.compile(
-    r'^(?:cd|chdir)\s+(?:"/workspace"|\'/workspace\'|/workspace)\s*(?:&&|;)\s*',
-    re.IGNORECASE,
+from aura.conversation.tool_runner_terminal_policy import (
+    _CD_WRAPPER_RE,
+    is_py_compile_command,
+    matches_explicit_validation,
+    resolve_terminal_timeout,
 )
 
 
@@ -233,7 +229,7 @@ class ToolRunner:
         command = validation_command.command or requested_command
 
         if mode == "worker":
-            explicit = self._matches_explicit_validation(
+            explicit = matches_explicit_validation(
                 str(command),
                 explicit_validation_commands,
             )
@@ -301,9 +297,9 @@ class ToolRunner:
             original_command = command_plan.original_command or requested_command
 
         command = _CD_WRAPPER_RE.sub('', command, count=1).lstrip()
-        timeout = self._resolve_terminal_timeout(
-            command=command,
-            timeout_arg=args.get("timeout"),
+        timeout = resolve_terminal_timeout(
+            command,
+            args.get("timeout"),
         )
 
         on_event(ToolCallStart(index=0, id=tool_call_id, name="run_terminal_command"))
@@ -480,42 +476,4 @@ class ToolRunner:
 
         return {"_terminal_payload": payload_dict}
 
-    def _resolve_terminal_timeout(
-        self,
-        command: str,
-        timeout_arg: Any,
-    ) -> int:
-        if timeout_arg is None:
-            if self._is_py_compile_command(command):
-                return DEFAULT_PY_COMPILE_TIMEOUT_SECONDS
-            return DEFAULT_TERMINAL_TIMEOUT_SECONDS
 
-        try:
-            timeout = int(timeout_arg)
-        except (TypeError, ValueError):
-            if self._is_py_compile_command(command):
-                return DEFAULT_PY_COMPILE_TIMEOUT_SECONDS
-            return DEFAULT_TERMINAL_TIMEOUT_SECONDS
-
-        return max(1, min(timeout, MAX_TERMINAL_TIMEOUT_SECONDS))
-
-    @staticmethod
-    def _matches_explicit_validation(
-        command: str,
-        explicit_validation_commands: list[str] | None,
-    ) -> bool:
-        normalized = " ".join(str(command or "").strip().lower().split())
-        return any(
-            normalized == " ".join(
-                parse_validation_command(str(explicit or ""), source="explicit_task_command")
-                .command
-                .strip()
-                .lower()
-                .split()
-            )
-            for explicit in explicit_validation_commands or []
-        )
-
-    def _is_py_compile_command(self, command: str) -> bool:
-        normalized = " ".join(command.strip().lower().split())
-        return " -m py_compile" in normalized or "python -m py_compile" in normalized

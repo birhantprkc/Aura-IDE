@@ -1,0 +1,64 @@
+"""Pure terminal/run policy helpers extracted from ToolRunner."""
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from aura.conversation.validation_orchestrator import parse_validation_command
+
+
+DEFAULT_TERMINAL_TIMEOUT_SECONDS = 300
+DEFAULT_PY_COMPILE_TIMEOUT_SECONDS = 30
+MAX_TERMINAL_TIMEOUT_SECONDS = 300
+
+_CD_WRAPPER_RE = re.compile(
+    r'^(?:cd|chdir)\s+(?:"/workspace"|\'/workspace\'|/workspace)\s*(?:&&|;)\s*',
+    re.IGNORECASE,
+)
+
+
+def is_py_compile_command(command: str) -> bool:
+    """Check whether *command* is a ``python -m py_compile`` invocation."""
+    normalized = " ".join(command.strip().lower().split())
+    return " -m py_compile" in normalized or "python -m py_compile" in normalized
+
+
+def matches_explicit_validation(
+    command: str,
+    explicit_validation_commands: list[str] | None,
+) -> bool:
+    """Return True when *command* is identical to an explicit validation command."""
+    normalized = " ".join(str(command or "").strip().lower().split())
+    return any(
+        normalized
+        == " ".join(
+            parse_validation_command(
+                str(explicit or ""), source="explicit_task_command"
+            )
+            .command.strip()
+            .lower()
+            .split()
+        )
+        for explicit in explicit_validation_commands or []
+    )
+
+
+def resolve_terminal_timeout(command: str, timeout_arg: Any, /) -> int:
+    """Resolve the timeout (seconds) for a terminal command.
+
+    Returns the appropriate default based on the command type, or the
+    user-provided *timeout_arg* clamped to ``MAX_TERMINAL_TIMEOUT_SECONDS``.
+    """
+    if timeout_arg is None:
+        if is_py_compile_command(command):
+            return DEFAULT_PY_COMPILE_TIMEOUT_SECONDS
+        return DEFAULT_TERMINAL_TIMEOUT_SECONDS
+
+    try:
+        timeout = int(timeout_arg)
+    except (TypeError, ValueError):
+        if is_py_compile_command(command):
+            return DEFAULT_PY_COMPILE_TIMEOUT_SECONDS
+        return DEFAULT_TERMINAL_TIMEOUT_SECONDS
+
+    return max(1, min(timeout, MAX_TERMINAL_TIMEOUT_SECONDS))
