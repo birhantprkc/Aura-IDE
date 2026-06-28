@@ -58,7 +58,7 @@ def compute_eviction_verdicts(
     *,
     task_kind: str | None = None,
     min_arm: int = 3,
-    negative_lift_threshold: float = 0.0,
+    negative_lift_threshold: float = -0.05,
 ) -> list[EvictionVerdict]:
     """Compute dry-run eviction verdicts for all skills.
 
@@ -122,6 +122,21 @@ def compute_eviction_verdicts(
             utility_lift_float = (
                 None if utility_lift is None else float(utility_lift)
             )
+
+            if not current_task_kind:
+                verdicts.append(EvictionVerdict(
+                    skill_id=skill_id,
+                    skill_text_prefix=prefix,
+                    provenance=skill.provenance,
+                    would_evict=False,
+                    reason=f"missing current terrain: current={task_kind!r}, "
+                           f"utility={utility_task_kind_text!r}",
+                    lift=utility_lift_float,
+                    loaded_n=loaded_n,
+                    not_loaded_n=not_loaded_n,
+                    task_kind=utility_task_kind_text,
+                ))
+                continue
 
             if _normalize_task_kind(utility_task_kind_text) != current_task_kind:
                 verdicts.append(EvictionVerdict(
@@ -255,7 +270,7 @@ def format_eviction_report(verdicts: list[EvictionVerdict]) -> str:
         lines.append("--- Evicted Skills ---")
         for v in evicted:
             lines.append(f"  {v.skill_id}")
-            lines.append(f"    provenace: {v.provenance.value}")
+            lines.append(f"    provenance: {v.provenance.value}")
             lines.append(f"    reason: {v.reason}")
             lines.append(f"    lift: {v.lift:+.3f}" if v.lift is not None else "    lift: N/A")
             if v.task_kind:

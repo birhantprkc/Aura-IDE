@@ -351,7 +351,8 @@ def _compute_single_verdict(
     skill: Skill,
     utility: _FakeSourceUtility | None,
     *,
-    task_kind: str = "bugfix",
+    task_kind: str | None = "bugfix",
+    negative_lift_threshold: float | None = None,
 ) -> EvictionVerdict:
     skill_id = compute_skill_id(skill)
     monkeypatch.setattr("aura.skills.eviction.read_skills", lambda _: [skill])
@@ -360,7 +361,15 @@ def _compute_single_verdict(
         lambda _ws, min_arm=3: {} if utility is None else {skill_id: utility},
     )
 
-    verdicts = compute_eviction_verdicts(tmp_path, task_kind=task_kind, min_arm=3)
+    if negative_lift_threshold is None:
+        verdicts = compute_eviction_verdicts(tmp_path, task_kind=task_kind, min_arm=3)
+    else:
+        verdicts = compute_eviction_verdicts(
+            tmp_path,
+            task_kind=task_kind,
+            min_arm=3,
+            negative_lift_threshold=negative_lift_threshold,
+        )
 
     assert len(verdicts) == 1
     return verdicts[0]
@@ -549,6 +558,79 @@ class TestComputeEvictionVerdictsNegativeLift:
         assert verdict.would_evict is True
         assert "negative lift" in verdict.reason
 
+    def test_default_margin_retains_small_negative_lift(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        skill = MockSkill.make(provenance=SkillProvenance.FAILURE_GRADUATED)
+
+        verdict = _compute_single_verdict(
+            tmp_path,
+            monkeypatch,
+            skill,
+            _FakeSourceUtility(
+                status="measured",
+                lift=-0.01,
+                loaded_n=10,
+                not_loaded_n=10,
+                task_kind="bugfix",
+            ),
+            task_kind="bugfix",
+        )
+
+        assert verdict.would_evict is False
+        assert ">= threshold" in verdict.reason
+
+    def test_default_margin_evicts_lift_below_margin(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        skill = MockSkill.make(provenance=SkillProvenance.FAILURE_GRADUATED)
+
+        verdict = _compute_single_verdict(
+            tmp_path,
+            monkeypatch,
+            skill,
+            _FakeSourceUtility(
+                status="measured",
+                lift=-0.06,
+                loaded_n=10,
+                not_loaded_n=10,
+                task_kind="bugfix",
+            ),
+            task_kind="bugfix",
+        )
+
+        assert verdict.would_evict is True
+        assert "negative lift" in verdict.reason
+
+    def test_custom_negative_lift_threshold_override(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        skill = MockSkill.make(provenance=SkillProvenance.FAILURE_GRADUATED)
+
+        verdict = _compute_single_verdict(
+            tmp_path,
+            monkeypatch,
+            skill,
+            _FakeSourceUtility(
+                status="measured",
+                lift=-0.01,
+                loaded_n=10,
+                not_loaded_n=10,
+                task_kind="bugfix",
+            ),
+            task_kind="bugfix",
+            negative_lift_threshold=-0.005,
+        )
+
+        assert verdict.would_evict is True
+        assert "negative lift" in verdict.reason
+
     def test_different_terrain_keeps_skill(
         self,
         tmp_path: Path,
@@ -572,6 +654,30 @@ class TestComputeEvictionVerdictsNegativeLift:
 
         assert verdict.would_evict is False
         assert verdict.reason.startswith("different terrain")
+
+    def test_missing_current_task_kind_keeps_skill(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        skill = MockSkill.make(provenance=SkillProvenance.FAILURE_GRADUATED)
+
+        verdict = _compute_single_verdict(
+            tmp_path,
+            monkeypatch,
+            skill,
+            _FakeSourceUtility(
+                status="measured",
+                lift=-0.25,
+                loaded_n=10,
+                not_loaded_n=10,
+                task_kind="bugfix",
+            ),
+            task_kind=None,
+        )
+
+        assert verdict.would_evict is False
+        assert verdict.reason.startswith("missing current terrain")
 
 
 class TestComputeEvictionVerdictsNonNegativeLift:
@@ -631,6 +737,22 @@ class TestFormatEvictionReport:
         )
         result = format_eviction_report([v])
         assert "Evicted Skills" in result or "evicted" in result.lower()
+
+    def test_evicted_skill_uses_provenance_label(self) -> None:
+        v = EvictionVerdict(
+            skill_id="skill_bad",
+            skill_text_prefix="bad",
+            provenance=SkillProvenance.FAILURE_GRADUATED,
+            would_evict=True,
+            reason="negative lift",
+            lift=-0.1,
+            loaded_n=5,
+            not_loaded_n=5,
+            task_kind="bugfix",
+        )
+        result = format_eviction_report([v])
+        assert "provenance: failure_graduated" in result
+        assert "provenace" not in result
 
     def test_lists_retained_skills(self) -> None:
         v = EvictionVerdict(
