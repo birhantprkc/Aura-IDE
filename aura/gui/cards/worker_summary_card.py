@@ -27,7 +27,7 @@ def parse_worker_summary_receipt(summary: str) -> dict[str, Any]:
     """Parse a structured worker receipt into a compact dict.
 
     The receipt is built by ``_build_worker_summary`` in
-    ``aura/bridge/dispatch.py``.
+    ``aura/bridge/worker_report.py``.
 
     Returns
     -------

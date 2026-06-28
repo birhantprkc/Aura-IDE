@@ -23,6 +23,18 @@ from PySide6.QtCore import (
 
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.event_relay import WorkerEventRelay
+from aura.bridge.worker_recording import _record_worker_completion
+from aura.bridge.worker_report import (
+    _build_worker_summary,
+    _dedupe_summary_writes,
+    _final_report_claims_failure,
+    _final_report_claims_validation,
+    _format_recoverable_write_failure,
+    _format_spec_as_user_message,
+    _format_structured_worker_failure,
+    _format_worker_write_failure,
+    _parse_structured_worker_failure,
+)
 from aura.config import (
     DEFAULT_WORKER_MODEL,
     DEFAULT_WORKER_THINKING,
@@ -44,7 +56,6 @@ from aura.conversation import (
 from aura.conversation.path_utils import normalize_worker_path as _shared_normalize_worker_path
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.project_profile import detect_project_profile
-from aura.conversation.task_shape import task_shape_contract_lines
 from aura.conversation.tool_limits import WRITE_TOOLS
 from aura.conversation.validation_orchestrator import (
     MALFORMED_VALIDATION_COMMAND,
@@ -54,7 +65,6 @@ from aura.conversation.validation_orchestrator import (
     POLICY_BLOCKED,
     TEST_SELECTION_EMPTY,
     TIMEOUT,
-    validation_issue_message,
 )
 from aura.dependency_context import build_dependency_stanza
 from aura.validation.selector import ValidationPlan, select_validation_plan
@@ -385,11 +395,140 @@ class _DispatchProxy(QObject):
 
     # ---- worker run ------
 
-    def _run_worker(        self,
+    def _run_worker(
+        self,
         tool_call_id: str,
         req: WorkerDispatchRequest,
         pending: "_DispatchPending",
     ) -> WorkerDispatchResult:
+        worker_history, task_spec, context_gearbox, worker_manager = self._prepare_worker_conversation(
+            tool_call_id,
+            req,
+        )
+        self.workerStarted.emit(tool_call_id)
+        cancel_event = threading.Event()
+        pending.cancel_event = cancel_event
+
+        relay = self._create_worker_relay()
+        (
+            final_validation_commands,
+            validation_selector,
+            validation_selector_key,
+            validation_selector_failed,
+            internal_error,
+            cleaned_scratch_files,
+        ) = self._execute_worker_conversation(
+            tool_call_id=tool_call_id,
+            req=req,
+            task_spec=task_spec,
+            context_gearbox=context_gearbox,
+            worker_manager=worker_manager,
+            worker_history=worker_history,
+            relay=relay,
+            cancel_event=cancel_event,
+        )
+
+        completion = self._collect_worker_completion_data(
+            req=req,
+            worker_history=worker_history,
+            relay=relay,
+            final_validation_commands=final_validation_commands,
+        )
+        messages = self._build_worker_completion_messages(
+            req=req,
+            relay=relay,
+            completion=completion,
+            internal_error=internal_error,
+            cleaned_scratch_files=cleaned_scratch_files,
+        )
+        outcome = self._classify_worker_completion(
+            relay=relay,
+            completion=completion,
+            messages=messages,
+            internal_error=internal_error,
+        )
+
+        try:
+            validation_selector, validation_selector_key, validation_selector_failed = (
+                self._refresh_worker_validation_selector_plan(
+                    relay=relay,
+                    task_spec=task_spec,
+                    task_kind=task_spec.task_shape.task_kind if task_spec.task_shape is not None else "unknown",
+                    context_gearbox=context_gearbox,
+                    final_validation_commands=final_validation_commands,
+                    validation_selector=validation_selector,
+                    validation_selector_key=validation_selector_key,
+                    validation_selector_failed=validation_selector_failed,
+                )
+            )
+        except Exception:
+            _log.exception("Failed to build validation selector plan")
+
+        summary, modified_files, extras, task_shape_summary = self._build_worker_result_payload(
+            req=req,
+            worker_history=worker_history,
+            task_spec=task_spec,
+            relay=relay,
+            context_gearbox=context_gearbox,
+            internal_error=internal_error,
+            completion=completion,
+            messages=messages,
+            outcome=outcome,
+            validation_selector=validation_selector,
+        )
+
+        continuation = completion["continuation"]
+        _record_worker_completion(
+            records=self._records,
+            result_metadata=self._result_metadata,
+            workspace_root=self._workspace_root,
+            worker_model=str(self._worker_model),
+            tool_call_id=tool_call_id,
+            req=req,
+            task_spec=task_spec,
+            worker_history=worker_history,
+            summary=summary,
+            modified_files=modified_files,
+            continuation=continuation,
+            extras=extras,
+            status=outcome["status"],
+            structured_failure=messages["structured_failure"],
+            task_shape_summary=task_shape_summary,
+            result_errors=messages["result_errors"],
+        )
+
+        self.workerFinished.emit(
+            tool_call_id,
+            outcome["ok"],
+            summary,
+            outcome["needs_followup"],
+            outcome["status"],
+        )
+        return WorkerDispatchResult(
+            ok=outcome["ok"],
+            summary=summary,
+            status=outcome["status"],
+            cancelled=False,
+            needs_followup=outcome["needs_followup"],
+            phase_boundary=outcome["phase_boundary"],
+            followup_reason=(
+                str(relay.phase_boundary_info.get("reason")) if relay.phase_boundary_info else None
+            ),
+            recoverable=outcome["recoverable"],
+            completed=continuation.get("completed", []),
+            remaining=continuation.get("remaining", []),
+            modified_files=modified_files,
+            validation=continuation.get("validation_text"),
+            suggested_next_spec=continuation.get("recommended_next_step"),
+            extras=extras,
+            mismatch=outcome["mismatch"],
+        )
+
+    def _prepare_worker_conversation(
+        self,
+        tool_call_id: str,
+        req: WorkerDispatchRequest,
+    ) -> tuple[History, WorkerTaskSpec, dict[str, Any], ConversationManager]:
         worker_history = History()
         task_spec = normalize_worker_task(req)
         _log.info("worker_context_build_start tool_call_id=%s", tool_call_id)
@@ -431,11 +570,9 @@ class _DispatchProxy(QObject):
         if task_spec.task_shape is not None and hasattr(worker_registry, "set_task_shape"):
             worker_registry.set_task_shape(task_spec.task_shape)
         worker_manager = ConversationManager(worker_history, worker_registry)
+        return worker_history, task_spec, context_gearbox, worker_manager
 
-        self.workerStarted.emit(tool_call_id)
-        cancel_event = threading.Event()
-        pending.cancel_event = cancel_event
-
+    def _create_worker_relay(self) -> WorkerEventRelay:
         relay = WorkerEventRelay(
             approval_proxy=self._approval_proxy,
             worker_model=str(self._worker_model),
@@ -456,7 +593,55 @@ class _DispatchProxy(QObject):
         relay.agentProcessStarted.connect(self.workerAgentProcessStarted)
         relay.agentProcessOutput.connect(self.workerAgentProcessOutput)
         relay.agentProcessFinished.connect(self.workerAgentProcessFinished)
+        return relay
 
+    def _refresh_worker_validation_selector_plan(
+        self,
+        *,
+        relay: WorkerEventRelay,
+        task_spec: WorkerTaskSpec,
+        task_kind: str,
+        context_gearbox: dict[str, Any],
+        final_validation_commands: list[str],
+        validation_selector: ValidationPlan | None,
+        validation_selector_key: tuple[str, ...] | None,
+        validation_selector_failed: bool,
+    ) -> tuple[ValidationPlan | None, tuple[str, ...] | None, bool]:
+        changed_files = _validation_selector_changed_files(relay)
+        key = tuple(changed_files)
+        if validation_selector is not None and key == validation_selector_key:
+            return validation_selector, validation_selector_key, validation_selector_failed
+        validation_selector_key = key
+        try:
+            validation_selector = _build_worker_validation_selector_plan(
+                changed_files=changed_files,
+                task_kind=task_kind,
+                context_gearbox=context_gearbox,
+                workspace_root=self._workspace_root,
+            )
+            final_validation_commands[:] = _combine_validation_commands(
+                task_spec.validation_commands,
+                _validation_selector_commands(validation_selector),
+            )
+        except Exception:
+            if not validation_selector_failed:
+                _log.exception("Failed to build validation selector plan")
+            validation_selector_failed = True
+            final_validation_commands[:] = list(task_spec.validation_commands)
+        return validation_selector, validation_selector_key, validation_selector_failed
+
+    def _execute_worker_conversation(
+        self,
+        *,
+        tool_call_id: str,
+        req: WorkerDispatchRequest,
+        task_spec: WorkerTaskSpec,
+        context_gearbox: dict[str, Any],
+        worker_manager: ConversationManager,
+        worker_history: History,
+        relay: WorkerEventRelay,
+        cancel_event: threading.Event,
+    ) -> tuple[list[str], ValidationPlan | None, tuple[str, ...] | None, bool, str | None, list[str]]:
         task_kind = task_spec.task_shape.task_kind if task_spec.task_shape is not None else "unknown"
         final_validation_commands = list(task_spec.validation_commands)
         validation_selector: ValidationPlan | None = None
@@ -465,27 +650,18 @@ class _DispatchProxy(QObject):
 
         def refresh_validation_selector_plan() -> None:
             nonlocal validation_selector, validation_selector_key, validation_selector_failed
-            changed_files = _validation_selector_changed_files(relay)
-            key = tuple(changed_files)
-            if validation_selector is not None and key == validation_selector_key:
-                return
-            validation_selector_key = key
-            try:
-                validation_selector = _build_worker_validation_selector_plan(
-                    changed_files=changed_files,
+            validation_selector, validation_selector_key, validation_selector_failed = (
+                self._refresh_worker_validation_selector_plan(
+                    relay=relay,
+                    task_spec=task_spec,
                     task_kind=task_kind,
                     context_gearbox=context_gearbox,
-                    workspace_root=self._workspace_root,
+                    final_validation_commands=final_validation_commands,
+                    validation_selector=validation_selector,
+                    validation_selector_key=validation_selector_key,
+                    validation_selector_failed=validation_selector_failed,
                 )
-                final_validation_commands[:] = _combine_validation_commands(
-                    task_spec.validation_commands,
-                    _validation_selector_commands(validation_selector),
-                )
-            except Exception:
-                if not validation_selector_failed:
-                    _log.exception("Failed to build validation selector plan")
-                validation_selector_failed = True
-                final_validation_commands[:] = list(task_spec.validation_commands)
+            )
 
         refresh_validation_selector_plan()
 
@@ -517,7 +693,22 @@ class _DispatchProxy(QObject):
         if cancel_event.is_set():
             worker_history.pop_if_empty_assistant_message()
 
-        cleaned_scratch_files: list[str] = []
+        cleaned_scratch_files = self._cleanup_worker_scratch_outputs(req, relay, scratch_before)
+        return (
+            final_validation_commands,
+            validation_selector,
+            validation_selector_key,
+            validation_selector_failed,
+            internal_error,
+            cleaned_scratch_files,
+        )
+
+    def _cleanup_worker_scratch_outputs(
+        self,
+        req: WorkerDispatchRequest,
+        relay: WorkerEventRelay,
+        scratch_before: set[Path],
+    ) -> list[str]:
         if self._workspace_root is not None and not _request_allows_root_check_files(req):
             cleaned_scratch_files = _cleanup_new_validation_scratch_files(self._workspace_root, scratch_before)
             if cleaned_scratch_files:
@@ -530,7 +721,17 @@ class _DispatchProxy(QObject):
                 relay.edited_existing_files = [
                     path for path in relay.edited_existing_files if path not in cleaned_set
                 ]
+            return cleaned_scratch_files
+        return []
 
+    def _collect_worker_completion_data(
+        self,
+        *,
+        req: WorkerDispatchRequest,
+        worker_history: History,
+        relay: WorkerEventRelay,
+        final_validation_commands: list[str],
+    ) -> dict[str, Any]:
         final_report = _last_assistant_content(worker_history)
         continuation = _parse_continuation_report(final_report)
         is_partial = bool(continuation.get("status") == "needs_followup" or continuation.get("remaining"))
@@ -590,11 +791,57 @@ class _DispatchProxy(QObject):
             if not is_partial and not claimed_validation and not validation_ran:
                 acceptance_unverified = True
         validation_not_run = bool(relay.write_results) and not validation_ran
+        is_implementation = not (
+            "blueprint" in req.spec.lower()[:200]
+            or "inspect" in req.goal.lower()[:100]
+            or "diagnostic" in req.goal.lower()[:100]
+        )
 
+        return {
+            "final_report": final_report,
+            "continuation": continuation,
+            "diagnostic_environment_caveats": diagnostic_environment_caveats,
+            "validation_results": validation_results,
+            "validation_command_issues": validation_command_issues,
+            "has_writes": has_writes,
+            "internal_recovery_steers": internal_recovery_steers,
+            "write_failures": write_failures,
+            "source_inspection_blockers": source_inspection_blockers,
+            "terminal_policy_blockers": terminal_policy_blockers,
+            "environment_setup_blockers": environment_setup_blockers,
+            "failed_validation": failed_validation,
+            "not_applied_writes": not_applied_writes,
+            "unrecovered_not_applied_writes": unrecovered_not_applied_writes,
+            "acceptance_unverified": acceptance_unverified,
+            "validation_not_run": validation_not_run,
+            "is_implementation": is_implementation,
+        }
+
+    def _build_worker_completion_messages(
+        self,
+        *,
+        req: WorkerDispatchRequest,
+        relay: WorkerEventRelay,
+        completion: dict[str, Any],
+        internal_error: str | None,
+        cleaned_scratch_files: list[str],
+    ) -> dict[str, Any]:
         # Build structured errors and caveats
         result_errors = list(relay.api_errors)
         if internal_error:
             result_errors.insert(0, "Harness error due to an internal Worker exception.")
+
+        final_report = completion["final_report"]
+        continuation = completion["continuation"]
+        write_failures = completion["write_failures"]
+        source_inspection_blockers = completion["source_inspection_blockers"]
+        terminal_policy_blockers = completion["terminal_policy_blockers"]
+        environment_setup_blockers = completion["environment_setup_blockers"]
+        failed_validation = completion["failed_validation"]
+        validation_not_run = completion["validation_not_run"]
+        validation_command_issues = completion["validation_command_issues"]
+        diagnostic_environment_caveats = completion["diagnostic_environment_caveats"]
+        acceptance_unverified = completion["acceptance_unverified"]
 
         structured_failure = _parse_structured_worker_failure(final_report)
         if structured_failure:
@@ -706,7 +953,7 @@ class _DispatchProxy(QObject):
             result_caveats.append(phrase_caveat)
 
         # --- Post-edit structural audit ---
-        if self._workspace_root is not None and has_writes and relay.touched_files:
+        if self._workspace_root is not None and completion["has_writes"] and relay.touched_files:
             try:
                 from aura.code_intel.audit import audit_changed_files
                 touched = sorted(relay.touched_files)
@@ -726,17 +973,45 @@ class _DispatchProxy(QObject):
                 _log.exception("Post-edit structural audit failed")
 
         # No-work detection
-        phase_boundary = relay.phase_boundary_info is not None
-        is_implementation = not (
-            "blueprint" in req.spec.lower()[:200]
-            or "inspect" in req.goal.lower()[:100]
-            or "diagnostic" in req.goal.lower()[:100]
-        )
-        if is_implementation and not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors:
+        if completion["is_implementation"] and not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors:
             result_caveats.append("Worker made no changes, reported no blocker, and ran no meaningful validation.")
 
+        return {
+            "structured_failure": structured_failure,
+            "recoverable_write_failures": recoverable_write_failures,
+            "failed_write_tools": failed_write_tools,
+            "result_errors": result_errors,
+            "result_caveats": result_caveats,
+        }
+
+    def _classify_worker_completion(
+        self,
+        *,
+        relay: WorkerEventRelay,
+        completion: dict[str, Any],
+        messages: dict[str, Any],
+        internal_error: str | None,
+    ) -> dict[str, Any]:
         # Planner control-flow: a structured mismatch report is not a failure.
         # Parse it once here so the severity branch and extras can both reuse it.
+        continuation = completion["continuation"]
+        result_errors = messages["result_errors"]
+        result_caveats = messages["result_caveats"]
+        structured_failure = messages["structured_failure"]
+        recoverable_write_failures = messages["recoverable_write_failures"]
+        failed_validation = completion["failed_validation"]
+        not_applied_writes = completion["not_applied_writes"]
+        unrecovered_not_applied_writes = completion["unrecovered_not_applied_writes"]
+        source_inspection_blockers = completion["source_inspection_blockers"]
+        terminal_policy_blockers = completion["terminal_policy_blockers"]
+        environment_setup_blockers = completion["environment_setup_blockers"]
+        diagnostic_environment_caveats = completion["diagnostic_environment_caveats"]
+        acceptance_unverified = completion["acceptance_unverified"]
+        validation_not_run = completion["validation_not_run"]
+        write_failures = completion["write_failures"]
+        is_implementation = completion["is_implementation"]
+
+        phase_boundary = relay.phase_boundary_info is not None
         mismatch = WorkerMismatch.from_dict(continuation.get("mismatch"))
         has_planner_resolution_mismatch = (
             mismatch is not None
@@ -837,6 +1112,48 @@ class _DispatchProxy(QObject):
             structured_failure=structured_failure,
             write_failures=write_failures,
         )
+        return {
+            "mismatch": mismatch,
+            "phase_boundary": phase_boundary,
+            "summary_continuation": summary_continuation,
+            "status": status,
+            "ok": ok,
+            "needs_followup": needs_followup,
+            "recoverable": recoverable,
+        }
+
+    def _build_worker_result_payload(
+        self,
+        *,
+        req: WorkerDispatchRequest,
+        worker_history: History,
+        task_spec: WorkerTaskSpec,
+        relay: WorkerEventRelay,
+        context_gearbox: dict[str, Any],
+        internal_error: str | None,
+        completion: dict[str, Any],
+        messages: dict[str, Any],
+        outcome: dict[str, Any],
+        validation_selector: ValidationPlan | None,
+    ) -> tuple[str, list[str], dict[str, Any], dict[str, Any]]:
+        result_errors = messages["result_errors"]
+        result_caveats = messages["result_caveats"]
+        validation_results = completion["validation_results"]
+        validation_command_issues = completion["validation_command_issues"]
+        unrecovered_not_applied_writes = completion["unrecovered_not_applied_writes"]
+        not_applied_writes = completion["not_applied_writes"]
+        failed_write_tools = messages["failed_write_tools"]
+        internal_recovery_steers = completion["internal_recovery_steers"]
+        recoverable_write_failures = messages["recoverable_write_failures"]
+        source_inspection_blockers = completion["source_inspection_blockers"]
+        terminal_policy_blockers = completion["terminal_policy_blockers"]
+        environment_setup_blockers = completion["environment_setup_blockers"]
+        validation_not_run = completion["validation_not_run"]
+        summary_continuation = outcome["summary_continuation"]
+        status = outcome["status"]
+        recoverable = outcome["recoverable"]
+        needs_followup = outcome["needs_followup"]
+        mismatch = outcome["mismatch"]
 
         summary = _build_worker_summary(
             req,
@@ -901,65 +1218,8 @@ class _DispatchProxy(QObject):
             extras["mismatch_kind"] = mismatch.kind
             extras["mismatch_question"] = mismatch.question_for_planner
 
-        # Validation selector
-        try:
-            refresh_validation_selector_plan()
-            extras["validation_selector"] = validation_selector
-        except Exception:
-            _log.exception("Failed to build validation selector plan")
-
-        spec_dict = req.to_dict()
-        spec_dict["task_spec"] = task_spec.to_dict()
-        record = WorkerDispatchRecord(
-            after_message_index=-1,
-            tool_call_id=tool_call_id,
-            spec=spec_dict,
-            worker_history=list(worker_history.messages),
-            result_summary=summary,
-        )
-        self._records.append(record)
-
-        # Auto-save this dispatch record to project memory (Tier 2).
-        if self._workspace_root is not None:
-            from aura.conversation.persistence import save_dispatch_record_to_memory
-            save_dispatch_record_to_memory(record, self._workspace_root)
-            from aura.hazard.capture import record_hazard
-            record_hazard(
-                workspace_root=self._workspace_root,
-                model=str(self._worker_model),
-                status=status,
-                structured_failure=structured_failure,
-                target_files=spec_dict.get("files") or [],
-                task_shape=task_shape_summary,
-                errors=result_errors,
-                tool_call_id=tool_call_id,
-            )
-
-        self._result_metadata[tool_call_id] = {
-            "modified_files": modified_files,
-            "validation": continuation.get("validation_text"),
-            "extras": extras,
-        }
-        self.workerFinished.emit(tool_call_id, ok, summary, needs_followup, status)
-        return WorkerDispatchResult(
-            ok=ok,
-            summary=summary,
-            status=status,
-            cancelled=False,
-            needs_followup=needs_followup,
-            phase_boundary=phase_boundary,
-            followup_reason=(
-                str(relay.phase_boundary_info.get("reason")) if relay.phase_boundary_info else None
-            ),
-            recoverable=recoverable,
-            completed=continuation.get("completed", []),
-            remaining=continuation.get("remaining", []),
-            modified_files=modified_files,
-            validation=continuation.get("validation_text"),
-            suggested_next_spec=continuation.get("recommended_next_step"),
-            extras=extras,
-            mismatch=mismatch,
-        )
+        extras["validation_selector"] = validation_selector
+        return summary, modified_files, extras, task_shape_summary
 
 
 def _compute_outcome_status(
@@ -1035,152 +1295,6 @@ def _compute_outcome_status(
     return S.completed.value
 
 
-def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -> str:
-    """Format a structured task spec (or raw dispatch request) as a user message
-    for the worker. Accepts both types for backward compatibility."""
-    if isinstance(task, WorkerDispatchRequest):
-        task = normalize_worker_task(task)
-
-    def _lines(items: list[str], default: str = "(none listed)") -> str:
-        if not items:
-            return default
-        return "\n".join(f"- {item}" for item in items)
-
-    def _target_region_lines(regions: list[dict[str, Any]]) -> list[str]:
-        lines: list[str] = []
-        for region in regions:
-            if not isinstance(region, dict):
-                continue
-            path = str(region.get("path") or "").strip()
-            symbol = str(region.get("symbol") or "").strip()
-            note = str(region.get("note") or "").strip()
-            start_line = _positive_line_number(region.get("start_line"))
-            end_line = _positive_line_number(region.get("end_line"))
-            line_text = _target_line_text(start_line, end_line)
-
-            detail_parts = [part for part in (symbol, line_text) if part]
-            detail = " ".join(detail_parts)
-            if path and detail:
-                line = f"{path} :: {detail}" if symbol else f"{path} {detail}"
-            else:
-                line = path or detail
-            if note:
-                line = f"{line} \u2014 {note}" if line else note
-            if line:
-                lines.append(line)
-        return lines
-
-    parts: list[str] = []
-
-    # ---- Project Profile (injected by dispatch) -----------------------------
-    if task.project_profile is not None:
-        summary = task.project_profile.summarize()
-        parts.append("\u2500\u2500 Project Profile " + "\u2500" * 42)
-        for line in summary.split("\n"):
-            parts.append(line)
-        parts.append("\u2500" * 60)
-        parts.append("")
-
-    if task.task_shape is not None:
-        parts.extend([*task_shape_contract_lines(task.task_shape), ""])
-
-    parts.extend([
-        "Goal",
-        task.goal,
-        "",
-        "Files",
-        _lines(task.files),
-        "",
-    ])
-
-    target_regions = _target_region_lines(task.target_regions)
-    if target_regions:
-        parts.extend([
-            "Target Regions",
-            _lines(target_regions),
-            "",
-        ])
-
-    parts.extend([
-        "Builder Note",
-        task.builder_note,
-        "",
-    ])
-
-    if task.allowed_responsibilities:
-        parts.extend([
-            "Allowed Responsibilities",
-            _lines(task.allowed_responsibilities),
-            "",
-        ])
-
-    if task.forbidden_responsibilities:
-        parts.extend([
-            "Forbidden Responsibilities",
-            _lines(task.forbidden_responsibilities),
-            "",
-        ])
-
-    if task.required_outputs:
-        parts.extend([
-            "Required Outputs",
-            _lines(task.required_outputs),
-            "",
-        ])
-
-    if task.non_goals:
-        parts.extend([
-            "Non-Goals",
-            _lines(task.non_goals),
-            "",
-        ])
-
-    parts.extend([
-        "Acceptance / Validation",
-        task.acceptance,
-    ])
-
-    if task.validation_commands:
-        parts.extend([
-            "",
-            "Validation Commands",
-            "```",
-            "\n".join(task.validation_commands),
-            "```",
-        ])
-
-    parts.extend([
-        "",
-        "Begin.",
-    ])
-
-    return "\n".join(parts)
-
-
-def _positive_line_number(value: Any) -> int | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, int):
-        line = value
-    elif isinstance(value, str) and value.strip().isdigit():
-        line = int(value.strip())
-    else:
-        return None
-    return line if line > 0 else None
-
-
-def _target_line_text(start_line: int | None, end_line: int | None) -> str:
-    if start_line is not None and end_line is not None:
-        if start_line == end_line:
-            return f"line {start_line}"
-        return f"lines {start_line}-{end_line}"
-    if start_line is not None:
-        return f"line {start_line}"
-    if end_line is not None:
-        return f"through line {end_line}"
-    return ""
-
-
 def _last_assistant_content(history: History) -> str:
     for msg in reversed(history.messages):
         if msg.get("role") == "assistant":
@@ -1190,93 +1304,6 @@ def _last_assistant_content(history: History) -> str:
     return ""
 
 
-def _final_report_claims_failure(content: str) -> bool:
-    text = content.lower()
-    if re.search(r"\bno\s+(?:blocker|blockers|blocked)\b", text):
-        text = re.sub(r"\bno\s+(?:blocker|blockers|blocked)\b", "", text)
-    return any(
-        re.search(pattern, text)
-        for pattern in (
-            r"\bblocker(?:s)?\b",
-            r"\bblocked\b",
-            r"\bfailed\s+validation\b",
-            r"\bvalidation\s+failed\b",
-            r"\bfailed\s+acceptance\b",
-            r"\bacceptance\s+failed\b",
-            r"\bcould\s+not\s+verify\b",
-            r"\bcouldn't\s+verify\b",
-            r"\bcannot\s+verify\b",
-            r"\bunable\s+to\s+verify\b",
-            r"\bnot\s+verified\b",
-            r"\bcould\s+not\s+run\b",
-            r"\bcouldn't\s+run\b",
-            r"\bunable\s+to\s+run\b",
-            r"\btests?\s+failed\b",
-            r"\bpytest\s+failed\b",
-            r"\blint\s+failed\b",
-        )
-    )
-
-
-def _final_report_claims_validation(content: str) -> bool:
-    text = content.lower()
-    if re.search(r"\bnot\s+(?:tested|validated|verified)\b", text):
-        text = re.sub(r"\bnot\s+(?:tested|validated|verified)\b", "", text)
-    return any(
-        re.search(pattern, text)
-        for pattern in (
-            r"\bverified\b",
-            r"\bvalidated\b",
-            r"\bpytest\b",
-            r"\bpy_compile\b",
-            r"\bruff\b",
-            r"\bmypy\b",
-            r"\btests?\s+pass(?:ed|es)?\b",
-            r"\bcompiled\b",
-            r"\bexit\s+code\s+0\b",
-            r"\bexits\s+0\b",
-        )
-    )
-
-
-def _parse_structured_worker_failure(content: str) -> dict[str, Any]:
-    try:
-        parsed = json.loads(content)
-    except (TypeError, json.JSONDecodeError):
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
-    # Recognize needs_planner_resolution as a structured handoff, not a failure.
-    if parsed.get("status") == "needs_planner_resolution" and isinstance(parsed.get("mismatch"), dict):
-        return parsed
-    if parsed.get("ok") is not False:
-        return {}
-    failure_class = parsed.get("failure_class")
-    error = parsed.get("error")
-    if not failure_class or not error:
-        return {}
-    return parsed
-
-
-def _format_structured_worker_failure(result: dict[str, Any]) -> str:
-    error = str(result.get("error") or "Harness error.")
-    failure_class = str(result.get("failure_class") or "worker_failed")
-    detail = result.get("details")
-    if isinstance(detail, dict) and detail:
-        path = str(detail.get("path") or "")
-        tool = str(detail.get("tool") or "")
-        reason = str(detail.get("reason") or detail.get("failure_class") or "")
-        op = detail.get("failed_operation")
-        op_text = ""
-        if isinstance(op, dict) and op:
-            op_text = f" Failed operation: {json.dumps(op, ensure_ascii=False, sort_keys=True)}."
-        target = f" Path: {path}." if path else ""
-        tool_text = f" Tool: {tool}." if tool else ""
-        reason_text = f" Reason: {reason}." if reason else ""
-        return f"{error} ({failure_class}).{target}{tool_text}{reason_text}{op_text}"
-    return f"{error} ({failure_class})."
-
-
 def _is_recoverable_worker_write_failure(result: dict[str, Any]) -> bool:
     if result.get("internal_recovery_steer"):
         return True
@@ -1284,28 +1311,6 @@ def _is_recoverable_worker_write_failure(result: dict[str, Any]) -> bool:
     if failure_class == "syntax_invalid" and result.get("recoverable") is False:
         return False
     return failure_class in RECOVERABLE_WORKER_WRITE_FAILURE_CLASSES
-
-
-def _format_worker_write_failure(result: dict[str, Any]) -> str:
-    name = str(result.get("name") or "write_tool")
-    path = str(result.get("path") or "")
-    error = str(result.get("error") or result.get("result_preview") or "unknown error")
-    failure_class = str(result.get("failure_class") or "internal_error")
-    target = f" on {path}" if path else ""
-    return f"Write tool '{name}' failed{target}: {error} ({failure_class})."
-
-
-def _format_recoverable_write_failure(result: dict[str, Any]) -> str:
-    name = str(result.get("name") or "write_tool")
-    path = str(result.get("path") or "")
-    error = str(result.get("error") or result.get("result_preview") or "recoverable edit mechanics failure")
-    suggested = str(result.get("suggested_next_tool") or result.get("suggested_tool") or "patch_file")
-    target = f" on {path}" if path else ""
-    op = result.get("failed_operation")
-    op_text = ""
-    if isinstance(op, dict) and op:
-        op_text = f" Failed operation: {json.dumps(op, ensure_ascii=False, sort_keys=True)}."
-    return f"Recoverable edit mechanics failure from {name}{target}: {error}. Next tactic: {suggested}.{op_text}"
 
 
 def _unrecovered_validation_failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1492,257 +1497,6 @@ def _normalize_py_compile_path(raw: str) -> str:
     if p.startswith("./"):
         p = p[2:]
     return p
-
-def _build_worker_summary(
-    req: WorkerDispatchRequest,
-    history: History,
-    writes: list[dict[str, Any]],
-    errors: list[str],
-    continuation: dict[str, Any] | None = None,
-    caveats: list[str] | None = None,
-    validation_results: list[dict[str, Any]] | None = None,
-    validation_command_issues: list[dict[str, Any]] | None = None,
-    not_applied_writes: list[dict[str, Any]] | None = None,
-    status: str | None = None,
-    internal_error: str | None = None,
-) -> str:
-    continuation = continuation or {}
-    caveats = caveats or []
-    validation_results = validation_results or []
-    validation_command_issues = validation_command_issues or []
-    not_applied_writes = not_applied_writes or []
-
-    # Derive status if not provided (backward compat for callers without status)
-    if not status:
-        if errors:
-            if _is_internal_error_summary(errors[0]):
-                status = "harness_error"
-            elif errors[0].startswith("Validation command failed"):
-                status = "validation_failed"
-            else:
-                status = "needs_followup"
-        elif continuation.get("status") == "needs_followup":
-            status = "needs_followup"
-        elif caveats:
-            status = "completed_with_caveats"
-        else:
-            status = "completed"
-
-    STATUS_LABELS = {
-        "completed": "✅  Worker completed successfully",
-        "completed_with_caveats": "✅  Worker completed with caveats",
-        "needs_followup": "⚠️  Worker needs follow-up",
-        "needs_planner_resolution": "⚠️  Worker needs Planner resolution",
-        "validation_failed": "❌  Validation failed",
-        "edit_mechanics_blocked": "⚠️  Edit mechanics blocked",
-        "craft_blocked": "❌  Craft blocked",
-        "craft_rejected": "❌  Craft rejected",
-        "scope_mismatch": "⚠️  Scope mismatch",
-        "approval_rejected": "❌  Approval rejected",
-        "cancelled": "🔶  Worker cancelled",
-        "harness_error": "❌  Harness error",
-    }
-    ACTION_LABELS = {
-        "completed": "None — ready for review",
-        "completed_with_caveats": "Review caveats below",
-        "needs_followup": "Re-dispatch with follow-up",
-        "needs_planner_resolution": "Planner will revise the handoff",
-        "validation_failed": "Fix validation failure — see below",
-        "edit_mechanics_blocked": "Re-dispatch — edit tool failure",
-        "craft_blocked": "Review and re-specify",
-        "craft_rejected": "Review and re-specify",
-        "scope_mismatch": "Review and re-specify",
-        "approval_rejected": "N/A — was not approved",
-        "cancelled": "N/A — was cancelled",
-        "harness_error": "Check logs and retry",
-    }
-
-    status_label = STATUS_LABELS.get(status, "❓  Unknown outcome")
-    action_needed = ACTION_LABELS.get(status, "Review details below")
-
-    BORDER = "\u2550" * 38
-    DIVIDER = "\u2500" * 38
-
-    lines: list[str] = []
-    displayed_writes = _dedupe_summary_writes(writes)
-
-    # === Files changed count ===
-    deleted_count = sum(1 for w in displayed_writes if w.get("deleted"))
-    edited_count = sum(1 for w in displayed_writes if not w.get("is_new_file") and not w.get("deleted"))
-    new_count = sum(1 for w in displayed_writes if w.get("is_new_file"))
-    total_count = len(displayed_writes)
-    if total_count > 0:
-        parts = []
-        if edited_count:
-            parts.append(f"{edited_count} edited")
-        if new_count:
-            parts.append(f"{new_count} new")
-        if deleted_count:
-            parts.append(f"{deleted_count} deleted")
-        files_changed_str = f"{total_count} ({', '.join(parts)})"
-    else:
-        files_changed_str = "0"
-
-    # === Validation glance ===
-    py_compile_results = [v for v in validation_results if "py_compile" in str(v.get("command", ""))]
-    if not validation_results:
-        validation_str = "\u2014 (not yet verified)"
-    elif py_compile_results:
-        pc_passed = sum(1 for v in py_compile_results if v.get("ok"))
-        pc_total = len(py_compile_results)
-        pc_ok = pc_passed == pc_total
-        pc_prefix = "\u2713" if pc_ok else "\u2717"
-        validation_str = f"{pc_prefix} py_compile ({pc_passed}/{pc_total} passed)"
-    else:
-        passed = sum(1 for v in validation_results if v.get("ok"))
-        total = len(validation_results)
-        ok = passed == total
-        prefix = "\u2713" if ok else "\u2717"
-        validation_str = f"{prefix} {passed}/{total} passed"
-
-    # === Top section ===
-    lines.append(BORDER)
-    lines.append(f" {status_label}")
-    lines.append(DIVIDER)
-
-    # Glance line
-    lines.append(f" Files changed   : {files_changed_str}")
-    lines.append(f" Validation      : {validation_str}")
-    lines.append(f" Action needed   : {action_needed}")
-    lines.append(DIVIDER)
-
-    # === Modified files ===
-    if displayed_writes:
-        lines.append("")
-        lines.append(" Modified files:")
-        for w in displayed_writes:
-            tag = "(deleted)" if w.get("deleted") else ("(new)" if w.get("is_new_file") else "(edit)")
-            path = str(w.get("path") or "").strip()
-            lines.append(f"  \u2022 {path}   {tag}")
-    else:
-        lines.append("")
-        lines.append(" Worker made no changes.")
-
-    # === Validation detail ===
-    if validation_results:
-        passed_v = [v for v in validation_results if v.get("ok")]
-        failed_v = [
-            v for v in validation_results
-            if not v.get("ok") and v.get("counts_as_product_failure") is not False
-        ]
-
-        if passed_v:
-            lines.append("")
-            lines.append(" Validated:")
-            for v in passed_v:
-                cmd = str(v.get("command") or "")
-                lines.append(f"  \u2022 {cmd}  \u2192  passed")
-
-        if failed_v:
-            lines.append("")
-            lines.append(" Product failures:")
-            for v in failed_v:
-                cmd = str(v.get("command") or "")
-                exit_code = v.get("exit_code")
-                exit_str = f" (exit {exit_code})" if exit_code is not None else ""
-                lines.append(f"  \u2022 {cmd}  \u2192  failed{exit_str}")
-                output = v.get("output") or v.get("output_preview") or ""
-                if output:
-                    first_line = output.strip().split("\n")[0][:200]
-                    if first_line:
-                        lines.append(f"    {first_line}")
-
-    if validation_command_issues:
-        lines.append("")
-        lines.append(" Validation command issues:")
-        for issue in validation_command_issues[:5]:
-            lines.append(f"  \u2022 {validation_issue_message(issue)}")
-
-    # === Harness errors ===
-    if internal_error:
-        lines.append("")
-        lines.append(" Harness errors:")
-        lines.append(f"  \u2022 {internal_error}")
-
-    # === Other errors (filter harness prefix to avoid duplication) ===
-    other_errors: list[str] = []
-    for err in errors:
-        if internal_error and ("Harness error" in err or "internal Worker exception" in err):
-            continue
-        other_errors.append(err)
-    if other_errors:
-        lines.append("")
-        lines.append(" Errors:")
-        for err in other_errors:
-            lines.append(f"  \u2022 {err}")
-
-    # === Caveats ===
-    if caveats:
-        lines.append("")
-        lines.append(" Caveats:")
-        for c in caveats:
-            lines.append(f"  \u2022 {c}")
-
-    # === Failed writes ===
-    if not_applied_writes:
-        lines.append("")
-        lines.append(" Failed writes:")
-        deduped_not_applied = _dedupe_summary_writes(not_applied_writes)
-        for w in deduped_not_applied[:5]:
-            path = str(w.get("path") or "(unknown path)")
-            failure = str(w.get("failure_class") or "")
-            lines.append(f"  \u2022 {path}   ({failure})")
-
-    # === Summary ===
-    if req.summary:
-        lines.append("")
-        lines.append(" Summary:")
-        for s_line in req.summary.strip().split("\n"):
-            lines.append(f" {s_line}")
-
-    # === Remaining work ===
-    remaining = continuation.get("remaining", [])
-    if remaining:
-        lines.append("")
-        lines.append(" Remaining work:")
-        for item in remaining:
-            lines.append(f"  \u2022 {item}")
-
-    lines.append(BORDER)
-    return "\n".join(lines)
-
-
-def _dedupe_summary_writes(writes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    deduped: list[dict[str, Any]] = []
-    by_path: dict[str, dict[str, Any]] = {}
-    for write in writes:
-        path = str(write.get("path") or "").strip()
-        if not path:
-            continue
-        existing = by_path.get(path)
-        if existing is None:
-            record = dict(write)
-            record["path"] = path
-            deduped.append(record)
-            by_path[path] = record
-            continue
-        if write.get("is_new_file"):
-            existing["is_new_file"] = True
-        if write.get("deleted"):
-            existing["deleted"] = True
-    return deduped
-
-
-def _is_internal_error_summary(error: str) -> bool:
-    text = error.lower()
-    return (
-        text.startswith("harness error")
-        or "internal worker exception" in text
-        or "internal worker dispatch exception" in text
-        or "worker_internal_error" in text
-        or "internal_error" in text
-    )
-
 
 def _final_write_outcome(
     writes: list[dict[str, Any]],

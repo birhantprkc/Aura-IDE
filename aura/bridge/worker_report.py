@@ -1,0 +1,529 @@
+"""Worker prompt and report formatting helpers."""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import Any
+
+from aura.conversation import History, WorkerDispatchRequest, WorkerTaskSpec, normalize_worker_task
+from aura.conversation.task_shape import task_shape_contract_lines
+from aura.conversation.validation_orchestrator import validation_issue_message
+
+__all__ = [
+    "_format_spec_as_user_message",
+    "_build_worker_summary",
+    "_dedupe_summary_writes",
+    "_final_report_claims_failure",
+    "_final_report_claims_validation",
+    "_parse_structured_worker_failure",
+    "_format_structured_worker_failure",
+    "_format_worker_write_failure",
+    "_format_recoverable_write_failure",
+]
+
+
+def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -> str:
+    """Format a structured task spec (or raw dispatch request) as a user message
+    for the worker. Accepts both types for backward compatibility."""
+    if isinstance(task, WorkerDispatchRequest):
+        task = normalize_worker_task(task)
+
+    def _lines(items: list[str], default: str = "(none listed)") -> str:
+        if not items:
+            return default
+        return "\n".join(f"- {item}" for item in items)
+
+    def _target_region_lines(regions: list[dict[str, Any]]) -> list[str]:
+        lines: list[str] = []
+        for region in regions:
+            if not isinstance(region, dict):
+                continue
+            path = str(region.get("path") or "").strip()
+            symbol = str(region.get("symbol") or "").strip()
+            note = str(region.get("note") or "").strip()
+            start_line = _positive_line_number(region.get("start_line"))
+            end_line = _positive_line_number(region.get("end_line"))
+            line_text = _target_line_text(start_line, end_line)
+
+            detail_parts = [part for part in (symbol, line_text) if part]
+            detail = " ".join(detail_parts)
+            if path and detail:
+                line = f"{path} :: {detail}" if symbol else f"{path} {detail}"
+            else:
+                line = path or detail
+            if note:
+                line = f"{line} \u2014 {note}" if line else note
+            if line:
+                lines.append(line)
+        return lines
+
+    parts: list[str] = []
+
+    # ---- Project Profile (injected by dispatch) -----------------------------
+    if task.project_profile is not None:
+        summary = task.project_profile.summarize()
+        parts.append("\u2500\u2500 Project Profile " + "\u2500" * 42)
+        for line in summary.split("\n"):
+            parts.append(line)
+        parts.append("\u2500" * 60)
+        parts.append("")
+
+    if task.task_shape is not None:
+        parts.extend([*task_shape_contract_lines(task.task_shape), ""])
+
+    parts.extend([
+        "Goal",
+        task.goal,
+        "",
+        "Files",
+        _lines(task.files),
+        "",
+    ])
+
+    target_regions = _target_region_lines(task.target_regions)
+    if target_regions:
+        parts.extend([
+            "Target Regions",
+            _lines(target_regions),
+            "",
+        ])
+
+    parts.extend([
+        "Builder Note",
+        task.builder_note,
+        "",
+    ])
+
+    if task.allowed_responsibilities:
+        parts.extend([
+            "Allowed Responsibilities",
+            _lines(task.allowed_responsibilities),
+            "",
+        ])
+
+    if task.forbidden_responsibilities:
+        parts.extend([
+            "Forbidden Responsibilities",
+            _lines(task.forbidden_responsibilities),
+            "",
+        ])
+
+    if task.required_outputs:
+        parts.extend([
+            "Required Outputs",
+            _lines(task.required_outputs),
+            "",
+        ])
+
+    if task.non_goals:
+        parts.extend([
+            "Non-Goals",
+            _lines(task.non_goals),
+            "",
+        ])
+
+    parts.extend([
+        "Acceptance / Validation",
+        task.acceptance,
+    ])
+
+    if task.validation_commands:
+        parts.extend([
+            "",
+            "Validation Commands",
+            "```",
+            "\n".join(task.validation_commands),
+            "```",
+        ])
+
+    parts.extend([
+        "",
+        "Begin.",
+    ])
+
+    return "\n".join(parts)
+
+
+def _positive_line_number(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        line = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        line = int(value.strip())
+    else:
+        return None
+    return line if line > 0 else None
+
+
+def _target_line_text(start_line: int | None, end_line: int | None) -> str:
+    if start_line is not None and end_line is not None:
+        if start_line == end_line:
+            return f"line {start_line}"
+        return f"lines {start_line}-{end_line}"
+    if start_line is not None:
+        return f"line {start_line}"
+    if end_line is not None:
+        return f"through line {end_line}"
+    return ""
+
+
+def _final_report_claims_failure(content: str) -> bool:
+    text = content.lower()
+    if re.search(r"\bno\s+(?:blocker|blockers|blocked)\b", text):
+        text = re.sub(r"\bno\s+(?:blocker|blockers|blocked)\b", "", text)
+    return any(
+        re.search(pattern, text)
+        for pattern in (
+            r"\bblocker(?:s)?\b",
+            r"\bblocked\b",
+            r"\bfailed\s+validation\b",
+            r"\bvalidation\s+failed\b",
+            r"\bfailed\s+acceptance\b",
+            r"\bacceptance\s+failed\b",
+            r"\bcould\s+not\s+verify\b",
+            r"\bcouldn't\s+verify\b",
+            r"\bcannot\s+verify\b",
+            r"\bunable\s+to\s+verify\b",
+            r"\bnot\s+verified\b",
+            r"\bcould\s+not\s+run\b",
+            r"\bcouldn't\s+run\b",
+            r"\bunable\s+to\s+run\b",
+            r"\btests?\s+failed\b",
+            r"\bpytest\s+failed\b",
+            r"\blint\s+failed\b",
+        )
+    )
+
+
+def _final_report_claims_validation(content: str) -> bool:
+    text = content.lower()
+    if re.search(r"\bnot\s+(?:tested|validated|verified)\b", text):
+        text = re.sub(r"\bnot\s+(?:tested|validated|verified)\b", "", text)
+    return any(
+        re.search(pattern, text)
+        for pattern in (
+            r"\bverified\b",
+            r"\bvalidated\b",
+            r"\bpytest\b",
+            r"\bpy_compile\b",
+            r"\bruff\b",
+            r"\bmypy\b",
+            r"\btests?\s+pass(?:ed|es)?\b",
+            r"\bcompiled\b",
+            r"\bexit\s+code\s+0\b",
+            r"\bexits\s+0\b",
+        )
+    )
+
+
+def _parse_structured_worker_failure(content: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    # Recognize needs_planner_resolution as a structured handoff, not a failure.
+    if parsed.get("status") == "needs_planner_resolution" and isinstance(parsed.get("mismatch"), dict):
+        return parsed
+    if parsed.get("ok") is not False:
+        return {}
+    failure_class = parsed.get("failure_class")
+    error = parsed.get("error")
+    if not failure_class or not error:
+        return {}
+    return parsed
+
+
+def _format_structured_worker_failure(result: dict[str, Any]) -> str:
+    error = str(result.get("error") or "Harness error.")
+    failure_class = str(result.get("failure_class") or "worker_failed")
+    detail = result.get("details")
+    if isinstance(detail, dict) and detail:
+        path = str(detail.get("path") or "")
+        tool = str(detail.get("tool") or "")
+        reason = str(detail.get("reason") or detail.get("failure_class") or "")
+        op = detail.get("failed_operation")
+        op_text = ""
+        if isinstance(op, dict) and op:
+            op_text = f" Failed operation: {json.dumps(op, ensure_ascii=False, sort_keys=True)}."
+        target = f" Path: {path}." if path else ""
+        tool_text = f" Tool: {tool}." if tool else ""
+        reason_text = f" Reason: {reason}." if reason else ""
+        return f"{error} ({failure_class}).{target}{tool_text}{reason_text}{op_text}"
+    return f"{error} ({failure_class})."
+
+
+def _format_worker_write_failure(result: dict[str, Any]) -> str:
+    name = str(result.get("name") or "write_tool")
+    path = str(result.get("path") or "")
+    error = str(result.get("error") or result.get("result_preview") or "unknown error")
+    failure_class = str(result.get("failure_class") or "internal_error")
+    target = f" on {path}" if path else ""
+    return f"Write tool '{name}' failed{target}: {error} ({failure_class})."
+
+
+def _format_recoverable_write_failure(result: dict[str, Any]) -> str:
+    name = str(result.get("name") or "write_tool")
+    path = str(result.get("path") or "")
+    error = str(result.get("error") or result.get("result_preview") or "recoverable edit mechanics failure")
+    suggested = str(result.get("suggested_next_tool") or result.get("suggested_tool") or "patch_file")
+    target = f" on {path}" if path else ""
+    op = result.get("failed_operation")
+    op_text = ""
+    if isinstance(op, dict) and op:
+        op_text = f" Failed operation: {json.dumps(op, ensure_ascii=False, sort_keys=True)}."
+    return f"Recoverable edit mechanics failure from {name}{target}: {error}. Next tactic: {suggested}.{op_text}"
+
+
+def _build_worker_summary(
+    req: WorkerDispatchRequest,
+    history: History,
+    writes: list[dict[str, Any]],
+    errors: list[str],
+    continuation: dict[str, Any] | None = None,
+    caveats: list[str] | None = None,
+    validation_results: list[dict[str, Any]] | None = None,
+    validation_command_issues: list[dict[str, Any]] | None = None,
+    not_applied_writes: list[dict[str, Any]] | None = None,
+    status: str | None = None,
+    internal_error: str | None = None,
+) -> str:
+    continuation = continuation or {}
+    caveats = caveats or []
+    validation_results = validation_results or []
+    validation_command_issues = validation_command_issues or []
+    not_applied_writes = not_applied_writes or []
+
+    # Derive status if not provided (backward compat for callers without status)
+    if not status:
+        if errors:
+            if _is_internal_error_summary(errors[0]):
+                status = "harness_error"
+            elif errors[0].startswith("Validation command failed"):
+                status = "validation_failed"
+            else:
+                status = "needs_followup"
+        elif continuation.get("status") == "needs_followup":
+            status = "needs_followup"
+        elif caveats:
+            status = "completed_with_caveats"
+        else:
+            status = "completed"
+
+    STATUS_LABELS = {
+        "completed": "\u2705  Worker completed successfully",
+        "completed_with_caveats": "\u2705  Worker completed with caveats",
+        "needs_followup": "\u26a0\ufe0f  Worker needs follow-up",
+        "needs_planner_resolution": "\u26a0\ufe0f  Worker needs Planner resolution",
+        "validation_failed": "\u274c  Validation failed",
+        "edit_mechanics_blocked": "\u26a0\ufe0f  Edit mechanics blocked",
+        "craft_blocked": "\u274c  Craft blocked",
+        "craft_rejected": "\u274c  Craft rejected",
+        "scope_mismatch": "\u26a0\ufe0f  Scope mismatch",
+        "approval_rejected": "\u274c  Approval rejected",
+        "cancelled": "\U0001f536  Worker cancelled",
+        "harness_error": "\u274c  Harness error",
+    }
+    ACTION_LABELS = {
+        "completed": "None \u2014 ready for review",
+        "completed_with_caveats": "Review caveats below",
+        "needs_followup": "Re-dispatch with follow-up",
+        "needs_planner_resolution": "Planner will revise the handoff",
+        "validation_failed": "Fix validation failure \u2014 see below",
+        "edit_mechanics_blocked": "Re-dispatch \u2014 edit tool failure",
+        "craft_blocked": "Review and re-specify",
+        "craft_rejected": "Review and re-specify",
+        "scope_mismatch": "Review and re-specify",
+        "approval_rejected": "N/A \u2014 was not approved",
+        "cancelled": "N/A \u2014 was cancelled",
+        "harness_error": "Check logs and retry",
+    }
+
+    status_label = STATUS_LABELS.get(status, "\u2753  Unknown outcome")
+    action_needed = ACTION_LABELS.get(status, "Review details below")
+
+    BORDER = "\u2550" * 38
+    DIVIDER = "\u2500" * 38
+
+    lines: list[str] = []
+    displayed_writes = _dedupe_summary_writes(writes)
+
+    # === Files changed count ===
+    deleted_count = sum(1 for w in displayed_writes if w.get("deleted"))
+    edited_count = sum(1 for w in displayed_writes if not w.get("is_new_file") and not w.get("deleted"))
+    new_count = sum(1 for w in displayed_writes if w.get("is_new_file"))
+    total_count = len(displayed_writes)
+    if total_count > 0:
+        parts = []
+        if edited_count:
+            parts.append(f"{edited_count} edited")
+        if new_count:
+            parts.append(f"{new_count} new")
+        if deleted_count:
+            parts.append(f"{deleted_count} deleted")
+        files_changed_str = f"{total_count} ({', '.join(parts)})"
+    else:
+        files_changed_str = "0"
+
+    # === Validation glance ===
+    py_compile_results = [v for v in validation_results if "py_compile" in str(v.get("command", ""))]
+    if not validation_results:
+        validation_str = "\u2014 (not yet verified)"
+    elif py_compile_results:
+        pc_passed = sum(1 for v in py_compile_results if v.get("ok"))
+        pc_total = len(py_compile_results)
+        pc_ok = pc_passed == pc_total
+        pc_prefix = "\u2713" if pc_ok else "\u2717"
+        validation_str = f"{pc_prefix} py_compile ({pc_passed}/{pc_total} passed)"
+    else:
+        passed = sum(1 for v in validation_results if v.get("ok"))
+        total = len(validation_results)
+        ok = passed == total
+        prefix = "\u2713" if ok else "\u2717"
+        validation_str = f"{prefix} {passed}/{total} passed"
+
+    # === Top section ===
+    lines.append(BORDER)
+    lines.append(f" {status_label}")
+    lines.append(DIVIDER)
+
+    # Glance line
+    lines.append(f" Files changed   : {files_changed_str}")
+    lines.append(f" Validation      : {validation_str}")
+    lines.append(f" Action needed   : {action_needed}")
+    lines.append(DIVIDER)
+
+    # === Modified files ===
+    if displayed_writes:
+        lines.append("")
+        lines.append(" Modified files:")
+        for w in displayed_writes:
+            tag = "(deleted)" if w.get("deleted") else ("(new)" if w.get("is_new_file") else "(edit)")
+            path = str(w.get("path") or "").strip()
+            lines.append(f"  \u2022 {path}   {tag}")
+    else:
+        lines.append("")
+        lines.append(" Worker made no changes.")
+
+    # === Validation detail ===
+    if validation_results:
+        passed_v = [v for v in validation_results if v.get("ok")]
+        failed_v = [
+            v for v in validation_results
+            if not v.get("ok") and v.get("counts_as_product_failure") is not False
+        ]
+
+        if passed_v:
+            lines.append("")
+            lines.append(" Validated:")
+            for v in passed_v:
+                cmd = str(v.get("command") or "")
+                lines.append(f"  \u2022 {cmd}  \u2192  passed")
+
+        if failed_v:
+            lines.append("")
+            lines.append(" Product failures:")
+            for v in failed_v:
+                cmd = str(v.get("command") or "")
+                exit_code = v.get("exit_code")
+                exit_str = f" (exit {exit_code})" if exit_code is not None else ""
+                lines.append(f"  \u2022 {cmd}  \u2192  failed{exit_str}")
+                output = v.get("output") or v.get("output_preview") or ""
+                if output:
+                    first_line = output.strip().split("\n")[0][:200]
+                    if first_line:
+                        lines.append(f"    {first_line}")
+
+    if validation_command_issues:
+        lines.append("")
+        lines.append(" Validation command issues:")
+        for issue in validation_command_issues[:5]:
+            lines.append(f"  \u2022 {validation_issue_message(issue)}")
+
+    # === Harness errors ===
+    if internal_error:
+        lines.append("")
+        lines.append(" Harness errors:")
+        lines.append(f"  \u2022 {internal_error}")
+
+    # === Other errors (filter harness prefix to avoid duplication) ===
+    other_errors: list[str] = []
+    for err in errors:
+        if internal_error and ("Harness error" in err or "internal Worker exception" in err):
+            continue
+        other_errors.append(err)
+    if other_errors:
+        lines.append("")
+        lines.append(" Errors:")
+        for err in other_errors:
+            lines.append(f"  \u2022 {err}")
+
+    # === Caveats ===
+    if caveats:
+        lines.append("")
+        lines.append(" Caveats:")
+        for c in caveats:
+            lines.append(f"  \u2022 {c}")
+
+    # === Failed writes ===
+    if not_applied_writes:
+        lines.append("")
+        lines.append(" Failed writes:")
+        deduped_not_applied = _dedupe_summary_writes(not_applied_writes)
+        for w in deduped_not_applied[:5]:
+            path = str(w.get("path") or "(unknown path)")
+            failure = str(w.get("failure_class") or "")
+            lines.append(f"  \u2022 {path}   ({failure})")
+
+    # === Summary ===
+    if req.summary:
+        lines.append("")
+        lines.append(" Summary:")
+        for s_line in req.summary.strip().split("\n"):
+            lines.append(f" {s_line}")
+
+    # === Remaining work ===
+    remaining = continuation.get("remaining", [])
+    if remaining:
+        lines.append("")
+        lines.append(" Remaining work:")
+        for item in remaining:
+            lines.append(f"  \u2022 {item}")
+
+    lines.append(BORDER)
+    return "\n".join(lines)
+
+
+def _dedupe_summary_writes(writes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    by_path: dict[str, dict[str, Any]] = {}
+    for write in writes:
+        path = str(write.get("path") or "").strip()
+        if not path:
+            continue
+        existing = by_path.get(path)
+        if existing is None:
+            record = dict(write)
+            record["path"] = path
+            deduped.append(record)
+            by_path[path] = record
+            continue
+        if write.get("is_new_file"):
+            existing["is_new_file"] = True
+        if write.get("deleted"):
+            existing["deleted"] = True
+    return deduped
+
+
+def _is_internal_error_summary(error: str) -> bool:
+    text = error.lower()
+    return (
+        text.startswith("harness error")
+        or "internal worker exception" in text
+        or "internal worker dispatch exception" in text
+        or "worker_internal_error" in text
+        or "internal_error" in text
+    )
