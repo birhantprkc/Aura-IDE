@@ -237,7 +237,6 @@ class WorkerSummaryCard(QFrame):
         summary_text = parsed["summary_text"]
         file_counts = parsed["file_counts"]
         validation = parsed["validation"]
-        caveats = parsed["caveats"]
         has_box_borders = parsed["has_box_borders"]
 
         if summary_text:
@@ -262,11 +261,7 @@ class WorkerSummaryCard(QFrame):
         self._rebuild_stats(file_counts, validation, context_gearbox)
 
         # Footer
-        footer_parts: list[str] = []
-        footer_parts.append("Details are in Worker Log.")
-        if caveats:
-            footer_parts.append("Review caveats in Worker Log.")
-        self._footer.setText(" ".join(footer_parts))
+        self._footer.setText("Details are in Worker Log.")
         self._footer.setVisible(bool(summary))
 
     def _rebuild_stats(
@@ -382,7 +377,7 @@ class WorkerSummaryCard(QFrame):
 
             mapping = {
                 WorkerOutcomeStatus.completed.value: ("✅ Done", SUCCESS),
-                WorkerOutcomeStatus.completed_with_caveats.value: ("✅ Done with caveats", WARN),
+                WorkerOutcomeStatus.completed_with_caveats.value: ("✅ Done", SUCCESS),
                 WorkerOutcomeStatus.needs_followup.value: ("⚠️ Needs follow-up", WARN),
                 WorkerOutcomeStatus.validation_failed.value: ("❌ Failed validation", DANGER),
                 WorkerOutcomeStatus.edit_mechanics_blocked.value: ("⚠️ Edit mechanics blocked", WARN),

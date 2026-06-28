@@ -163,7 +163,7 @@ def test_status_driven_labels() -> None:
     """Test each WorkerOutcomeStatus maps to the expected label and color."""
     tests = [
         (WorkerOutcomeStatus.completed.value, "✅ Done", SUCCESS),
-        (WorkerOutcomeStatus.completed_with_caveats.value, "✅ Done with caveats", WARN),
+        (WorkerOutcomeStatus.completed_with_caveats.value, "✅ Done", SUCCESS),
         (WorkerOutcomeStatus.validation_failed.value, "❌ Failed validation", DANGER),
         (WorkerOutcomeStatus.harness_error.value, "❌ Harness error", DANGER),
         (WorkerOutcomeStatus.cancelled.value, "🔶 Cancelled", "#6b7280"),
@@ -237,6 +237,41 @@ def test_card_shows_compact_summary(qapp) -> None:
     assert not any("Validation:" in t for t in labels)
     # Footer should appear
     assert any("Details are in Worker Log." in t for t in labels)
+
+
+def test_successful_card_with_parsed_caveats_has_calm_footer(qapp) -> None:
+    """Parsed caveats stay out of the final report card UI."""
+    card = WorkerSummaryCard(
+        tool_call_id="t1",
+        goal="Fix the bug",
+        ok=True,
+        summary=FULL_RECEIPT,
+    )
+    labels = [w.text() for w in card.findChildren(QLabel)]
+    combined = "\n".join(labels)
+
+    assert any(t == "✅ Done" for t in labels)
+    assert any(t == "Details are in Worker Log." for t in labels)
+    assert "Done with caveats" not in combined
+    assert "Review caveats" not in combined
+    assert "caveat" not in combined.lower()
+
+
+def test_completed_with_caveats_status_renders_plain_done(qapp) -> None:
+    card = WorkerSummaryCard(
+        tool_call_id="t1",
+        goal="Fix the bug",
+        ok=True,
+        summary=FULL_RECEIPT,
+        status=WorkerOutcomeStatus.completed_with_caveats.value,
+    )
+    labels = [w.text() for w in card.findChildren(QLabel)]
+    combined = "\n".join(labels)
+
+    assert any(t == "✅ Done" for t in labels)
+    assert "Done with caveats" not in combined
+    assert "with caveats" not in combined
+    assert "caveat" not in combined.lower()
 
 
 def test_card_shows_stats_chips(qapp) -> None:

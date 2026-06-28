@@ -54,16 +54,16 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
 )
 from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
+from aura.conversation.edit_orchestrator import (
+    EditRetryLedger,
+    load_file_edit_profile,
+    strategy_decision_for_attempt,
+)
 from aura.conversation.edit_recovery_state import (
     default_edit_failure_class,
     edit_recovery_details,
     worker_file_state_for_path,
     worker_path_is_existing_file,
-)
-from aura.conversation.edit_orchestrator import (
-    EditRetryLedger,
-    load_file_edit_profile,
-    strategy_decision_for_attempt,
 )
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
@@ -100,9 +100,13 @@ from aura.conversation.tools._types import (
 from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.worker_final_validation import (
     WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION,
-    emit_explicit_validation_runs,
     emit_explicit_validation_result,
+    emit_explicit_validation_runs,
     run_explicit_validation_commands,
+)
+from aura.conversation.worker_finish import (
+    build_worker_recoverable_followup_message,
+    build_worker_unrecoverable_message,
 )
 from aura.conversation.worker_flow import (
     WORKER_FLOW_VALIDATION_REQUIRED_TEXT,
@@ -1270,19 +1274,11 @@ class ConversationManager:
         error: str,
         details: dict[str, Any] | None = None,
     ) -> None:
-        payload = {
-            "ok": False,
-            "failure_class": failure_class,
-            "error": error,
-        }
-        if details:
-            payload["details"] = details
-        content = json.dumps(payload, ensure_ascii=False)
-        full_message = {
-            "role": "assistant",
-            "content": content,
-            "reasoning_content": None,
-        }
+        content, full_message = build_worker_unrecoverable_message(
+            failure_class=failure_class,
+            error=error,
+            details=details,
+        )
         self._history.append_assistant(full_message)
         on_event(ContentDelta(text=content))
         on_event(Done(finish_reason="stop", full_message=full_message))
@@ -1295,21 +1291,11 @@ class ConversationManager:
         error: str,
         details: dict[str, Any] | None = None,
     ) -> None:
-        payload = {
-            "ok": False,
-            "recoverable": True,
-            "needs_follow_up": True,
-            "failure_class": failure_class,
-            "error": error,
-        }
-        if details:
-            payload["details"] = details
-        content = json.dumps(payload, ensure_ascii=False)
-        full_message = {
-            "role": "assistant",
-            "content": content,
-            "reasoning_content": None,
-        }
+        content, full_message = build_worker_recoverable_followup_message(
+            failure_class=failure_class,
+            error=error,
+            details=details,
+        )
         self._history.append_assistant(full_message)
         on_event(ContentDelta(text=content))
         on_event(Done(finish_reason="stop", full_message=full_message))

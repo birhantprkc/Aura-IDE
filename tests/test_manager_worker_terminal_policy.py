@@ -788,3 +788,77 @@ def test_normal_worker_low_level_edit_tools_stay_hidden(tmp_workspace: Path) -> 
     assert "edit_file" not in names
     assert "edit_symbol" not in names
     assert "edit_line_range" not in names
+
+
+# ── Worker finish helper tests ──────────────────────────────────────────────
+
+
+def test_build_worker_unrecoverable_message():
+    from aura.conversation.worker_finish import build_worker_unrecoverable_message
+
+    content, full_message = build_worker_unrecoverable_message(
+        failure_class="test_failure",
+        error="Something broke.",
+    )
+    payload = json.loads(content)
+    assert payload == {"ok": False, "failure_class": "test_failure", "error": "Something broke."}
+    assert full_message["role"] == "assistant"
+    assert full_message["content"] == content
+    assert full_message["reasoning_content"] is None
+
+
+def test_build_worker_unrecoverable_message_with_details():
+    from aura.conversation.worker_finish import build_worker_unrecoverable_message
+
+    content, full_message = build_worker_unrecoverable_message(
+        failure_class="test_failure",
+        error="Something broke.",
+        details={"reason": "unknown"},
+    )
+    payload = json.loads(content)
+    assert payload == {
+        "ok": False,
+        "failure_class": "test_failure",
+        "error": "Something broke.",
+        "details": {"reason": "unknown"},
+    }
+
+
+def test_build_worker_recoverable_followup_message():
+    from aura.conversation.worker_finish import build_worker_recoverable_followup_message
+
+    content, full_message = build_worker_recoverable_followup_message(
+        failure_class="test_failure",
+        error="Need another pass.",
+    )
+    payload = json.loads(content)
+    assert payload == {
+        "ok": False,
+        "recoverable": True,
+        "needs_follow_up": True,
+        "failure_class": "test_failure",
+        "error": "Need another pass.",
+    }
+    assert full_message["role"] == "assistant"
+    assert full_message["content"] == content
+    assert full_message["reasoning_content"] is None
+
+
+def test_build_worker_recoverable_followup_message_with_details():
+    from aura.conversation.worker_finish import build_worker_recoverable_followup_message
+
+    content, full_message = build_worker_recoverable_followup_message(
+        failure_class="test_failure",
+        error="Need another pass.",
+        details={"attempts": 3},
+    )
+    payload = json.loads(content)
+    assert payload == {
+        "ok": False,
+        "recoverable": True,
+        "needs_follow_up": True,
+        "failure_class": "test_failure",
+        "error": "Need another pass.",
+        "details": {"attempts": 3},
+    }
+
