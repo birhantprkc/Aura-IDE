@@ -42,7 +42,7 @@ VALIDATION_TOOLS: frozenset[str] = frozenset({"run_terminal_command", "run_and_w
 # ── Regex patterns (helper/classification only) ──────────────────────
 
 _PATH_RE = re.compile(
-    r"(?<![\w./\\-])(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+."
+    r"(?<![\w./\\-])(?:[A-Za-z0-9_.-]+[\\/])+[A-Za-z0-9_.-]+\."
     r"(?:py|js|ts|tsx|jsx|md|json|toml|yaml|yml|css|html|go|rs|java|cs|cpp|hpp|h|c|sh|ps1|txt)"
     r"\b|\b[A-Za-z_][\w.-]*\.(?:py|js|ts|tsx|jsx|md|json|toml|yaml|yml)\b"
 )
@@ -266,6 +266,15 @@ def _payload_is_large(
     return isinstance(content, str) and len(content) >= large_file_bytes
 
 
+def _tool_def_name(tool_def: dict[str, Any]) -> str:
+    function = tool_def.get("function")
+    return str(function.get("name") or "") if isinstance(function, dict) else ""
+
+
+def _tool_result_succeeded(ok: bool | None, payload: dict[str, Any]) -> bool:
+    return ok is True or payload.get("ok") is True
+
+
 def _write_was_applied(
     name: str, ok: bool | None, payload: dict[str, Any]
 ) -> bool:
@@ -273,7 +282,9 @@ def _write_was_applied(
         return False
     if payload.get("applied") is True:
         return True
-    if payload.get("ok") is True and name == "delete_file":
+    if payload.get("applied") is False:
+        return False
+    if payload.get("ok") is True and name in WRITE_TOOLS:
         return True
     return bool(ok and not payload)
 
@@ -312,6 +323,8 @@ __all__ = [
     "_read_payload_items",
     "_first_path",
     "_payload_is_large",
+    "_tool_def_name",
+    "_tool_result_succeeded",
     "_write_was_applied",
     "_int_or_none",
 ]
