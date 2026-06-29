@@ -59,6 +59,8 @@ def test_dispatch_to_worker_schema_uses_compact_capsule_not_file_plan():
     assert "complete implementation handoff" not in schema_text_lower
     assert "complete, self-contained implementation handoff" not in schema_text_lower
     assert "compact, self-contained worker task capsule" in schema_text_lower
+    assert "call this tool instead of continuing to discuss or expand a plan" in schema_text_lower
+    assert "the planner's deliverable for implementation work is this tool call" in schema_text_lower
 
 
 def test_dispatch_to_worker_schema_capsule_stays_self_contained():
@@ -72,6 +74,7 @@ def test_dispatch_to_worker_schema_capsule_stays_self_contained():
         "constraints / non-goals",
         "validation commands",
         "summary",
+        "work order and dispatch it",
     ):
         assert phrase in schema_text
 

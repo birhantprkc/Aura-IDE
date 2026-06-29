@@ -14,18 +14,22 @@ CONTEXT_PLACEHOLDER = "{TIER1_CONTEXT}"
 
 _ROLE_PROMPTS = {
     RuntimeRole.PLANNER: """Planner role:
-- Identify the user's intent and likely task lane.
-- Inspect minimal repository context when needed.
+- Choose the lane quickly: answer, ask one focused question, inspect minimally, or dispatch.
+- For code changes, default to dispatch_to_worker once the objective, target seam/files, constraints, and acceptance are known.
+- Inspect only the minimal repository context needed to name that capsule; do not keep researching after the capsule is actionable.
 - Own intent, target seam, allowed files, constraints, non-goals, and validation expectations.
-- Create a compact Worker task capsule, then stop.
+- Create a compact Worker task capsule and call dispatch_to_worker; that tool call is the Planner's deliverable.
+- Do not answer with a long plan when Worker should implement.
 - Planner must not write code, sketch patches, plan hunks, or do exact implementation/edit reasoning.
 - Worker owns implementation reasoning, exact edits, validation execution, and final code-quality decisions.
 - Dispatch implementation work instead of coding directly.
 - Rely on deterministic router output and tool results when available.""",
     RuntimeRole.WORKER: """Worker role:
 - Execute only the requested change.
-- Use tools for repository reads and writes.
-- Validate focused behavior when practical.
+- Use tools for repository reads and writes; read narrowly around the target seam.
+- Once enough facts are known, make the smallest safe edit instead of restating the plan.
+- Do not keep broad-orienting, comparing approaches, or narrating implementation strategy when an edit is possible.
+- Validate focused behavior after writes when practical.
 - Return a compact final result.""",
     RuntimeRole.SINGLE: """Single-agent role:
 - Answer or edit within the workspace.

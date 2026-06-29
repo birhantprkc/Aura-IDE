@@ -122,10 +122,24 @@ def test_prompt_compatibility_exports_work(tmp_path):
 def test_planner_prompt_blocks_exact_implementation_edit_reasoning():
     prompt = default_role_prompt(RuntimeRole.PLANNER)
 
+    assert "Choose the lane quickly" in prompt
+    assert "default to dispatch_to_worker" in prompt
+    assert "that tool call is the Planner's deliverable" in prompt
+    assert "Do not answer with a long plan" in prompt
     assert "target seam, allowed files, constraints, non-goals" in prompt
     assert "Planner must not write code" in prompt
     assert "exact implementation/edit reasoning" in prompt
     assert "Worker owns implementation reasoning, exact edits" in prompt
+
+
+def test_worker_prompt_pushes_targeted_action_not_planning():
+    prompt = default_role_prompt(RuntimeRole.WORKER)
+
+    assert "read narrowly around the target seam" in prompt
+    assert "make the smallest safe edit" in prompt
+    assert "Do not keep broad-orienting" in prompt
+    assert "narrating implementation strategy" in prompt
+    assert "Validate focused behavior after writes" in prompt
 
 
 def test_composer_returns_composed_context_with_core_kernel(tmp_path):
@@ -188,6 +202,8 @@ def test_planner_composition_includes_dispatch_contract(tmp_path):
     composed = compose_system_prompt(RuntimeRole.PLANNER, "", tmp_path)
 
     assert "planner_dispatch_contract" in composed.context_text
+    assert "dispatch once the requested change is clear enough" in composed.context_text
+    assert "If those fields are known, call dispatch_to_worker" in composed.context_text
     assert _included_contract_ids(composed) == ["planner_dispatch_contract"]
     entry = _entry_by_id(composed, "planner_dispatch_contract")
     assert entry.included is True
@@ -242,6 +258,10 @@ def test_worker_composition_includes_quality_contract_stack(tmp_path):
         entry = _entry_by_id(composed, source_id)
         assert entry.included is True
         assert entry.char_count > 0
+    assert "prefer targeted reads around the named seam" in composed.context_text
+    assert "Once the target and local facts are clear, edit" in composed.context_text
+    assert "Do not keep restating plans" in composed.context_text
+    assert "Report changed files, validation, and proof compactly" in composed.context_text
 
 
 def test_worker_gui_target_loads_gui_rules_and_skips_unrelated_packs(tmp_path):

@@ -18,10 +18,13 @@ CORE_KERNEL_TEXT = """Core kernel:
 PLANNER_DISPATCH_CONTRACT = """### planner_dispatch_contract
 - Choose the lane: answer, ask, inspect, dispatch, or use a capability.
 - Read before making repository claims.
-- Dispatch only when the requested change is clear enough to execute.
+- For code changes, dispatch once the requested change is clear enough to execute.
+- Clear enough means goal, target seam/files, constraints/non-goals, and acceptance are known; exact implementation details are Worker-owned.
+- Do not spend another turn narrating, comparing approaches, or expanding a plan after the Worker capsule is actionable.
 - Ask one focused question when blocked.
 - Do not over-plan simple work.
-- Worker specs need exact goal, known files, acceptance, validation, and non-goals."""
+- Worker specs need exact goal, known files, acceptance, validation, and non-goals.
+- If those fields are known, call dispatch_to_worker instead of explaining the plan in chat."""
 
 WEB_RESEARCH_RULES = """### web_research_rules
 - Use run_read_only_drone with drone_id "web-research" for latest/current facts, external docs/API examples, pricing, versions/releases/changelogs, schedules, current people/roles, error lookup, URLs, and external references.
@@ -32,11 +35,13 @@ WEB_RESEARCH_RULES = """### web_research_rules
 
 WORKER_EXECUTION_CONTRACT = """### worker_execution_contract
 - Execute only the requested change.
-- Read relevant files before editing.
-- Preserve existing behavior unless the request changes it.
+- Read relevant files before editing, but prefer targeted reads around the named seam over broad orientation.
+- Once the target and local facts are clear, edit. Do not keep restating plans, comparing approaches, or rebuilding the full picture.
+- Make the smallest safe change that satisfies the task; preserve existing behavior unless the request changes it.
 - Avoid broad rewrites and keep diffs tight.
 - Update tests only when relevant.
-- Validate focused behavior and report changed files, validation, and proof."""
+- Validate focused behavior after writes when practical.
+- Report changed files, validation, and proof compactly."""
 
 CODE_QUALITY_CONTRACT = """### code_quality_contract
 - Keep functions and modules small where practical.
