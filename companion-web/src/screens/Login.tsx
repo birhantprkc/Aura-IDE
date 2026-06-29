@@ -33,24 +33,6 @@ function LoginScreen() {
   const alreadyPaired = CompanionSocket.isPaired();
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const autoStartedRef = useRef(false);
-  const clearedOldPairing = useRef(false);
-  const autoCheckRef = useRef(false);
-
-  // Clear old pairing state when QR/ticket params are present, so the scanned
-  // QR flow wins over any stale stored token/context.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const hasQrParams = !!(params.get('ticket') || (params.get('code') && params.get('desktop') && params.get('relay')));
-    if (hasQrParams && alreadyPaired && !clearedOldPairing.current) {
-      clearedOldPairing.current = true;
-      socket.logout();
-      CompanionSocket.clearStoredState();
-      sessionStorage.removeItem('companion_desktop_id');
-      sessionStorage.removeItem('companion_desktop_name');
-      forceRender(n => n + 1);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Forget the URL params after we read them so a refresh doesn't re-trigger.
   useEffect(() => {
@@ -72,15 +54,6 @@ function LoginScreen() {
     const defaultRelay = resolveRelayUrl('', VITE_RELAY, originIsLocal);
     setRelayUrl(defaultRelay);
     handleConnect().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Auto-check reachability on mount for already-paired users
-  useEffect(() => {
-    if (!alreadyPaired || qrCode || qrTicket) return;
-    if (autoCheckRef.current) return;
-    autoCheckRef.current = true;
-    checkReachable();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -211,9 +184,6 @@ function LoginScreen() {
 
   const handlePairAgain = useCallback(() => {
     socket.logout();
-    CompanionSocket.clearStoredState();
-    sessionStorage.removeItem('companion_desktop_id');
-    sessionStorage.removeItem('companion_desktop_name');
     setPhase('idle');
     forceRender(n => n + 1);
   }, [forceRender]);
@@ -449,33 +419,37 @@ function LoginScreen() {
                 {error || 'Could not reach your Aura desktop.'}
               </div>
             </div>
-            <button onClick={handlePairAgain} style={primaryButton}>
-              Pair again
-            </button>
-            <button onClick={checkReachable} style={ghostButton}>
+            <button onClick={checkReachable} style={primaryButton}>
               Retry
+            </button>
+            <button onClick={handlePairAgain} style={ghostButton}>
+              Pair a different desktop
             </button>
           </div>
         </div>
       );
     }
 
-    // Fallback — should not normally happen
     return (
       <div style={pageWrap} className="fade-in">
         <Wordmark />
         <div style={card}>
-          <div style={{ textAlign: 'center', padding: '1.5rem 0', color: tokens.fgDim }}>
-            <div style={{
-              width: 36, height: 36, borderRadius: '50%',
-              border: `3px solid ${tokens.border}`,
-              borderTopColor: tokens.accent,
-              animation: 'spin 0.9s linear infinite',
-              margin: '0 auto 1rem',
-            }} />
-            <div style={{ fontSize: '0.9rem' }}>Checking connection to your Aura desktop…</div>
-            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '1.1rem', fontWeight: 600, color: tokens.fg, marginBottom: 4 }}>
+              Reconnect to Aura Desktop
+            </div>
+            <div style={{ color: tokens.fgDim, fontSize: '0.9rem' }}>
+              {storedDesktopName
+                ? `Use your saved pairing with ${storedDesktopName}.`
+                : 'Use your saved pairing with your last Aura desktop.'}
+            </div>
           </div>
+          <button onClick={checkReachable} style={primaryButton}>
+            Reconnect to Aura Desktop
+          </button>
+          <button onClick={handlePairAgain} style={ghostButton}>
+            Pair a different desktop
+          </button>
         </div>
       </div>
     );

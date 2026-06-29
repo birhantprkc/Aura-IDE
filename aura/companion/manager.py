@@ -4,11 +4,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from aura.companion.auth import (
     create_device_token,
@@ -49,6 +50,26 @@ from aura.version import __version__
 logger = logging.getLogger(__name__)
 
 
+class _RelayConnectWorker(QObject):
+    finished = Signal(int, str)
+    failed = Signal(int, str)
+
+    def __init__(self, generation: int, url: str) -> None:
+        super().__init__()
+        self._generation = generation
+        self._url = url
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.finished.emit(self._generation, ensure_local_relay(self._url))
+        except LocalRelayError as exc:
+            self.failed.emit(self._generation, str(exc))
+        except Exception as exc:
+            logger.exception("[Companion] local relay startup failed")
+            self.failed.emit(self._generation, str(exc))
+
+
 class CompanionManager(QObject):
     """Manages the Companion (mobile web control plane) connection lifecycle.
 
@@ -69,6 +90,9 @@ class CompanionManager(QObject):
         self._settings = settings or AppSettings()
         self._state = CompanionState()
         self._ws_client: CompanionWsClient | None = None
+        self._retiring_clients: set[CompanionWsClient] = set()
+        self._relay_workers: list[tuple[QThread, _RelayConnectWorker]] = []
+        self._connection_generation = 0
         self._bridge: Any = None
         self._drone_runner: Any = None
         self._project_store: Any = None
@@ -128,25 +152,42 @@ class CompanionManager(QObject):
         if not self._settings.companion_enabled:
             self.connection_status_changed.emit("disabled")
             return
+        self._connection_generation += 1
         self.connection_status_changed.emit("connecting")
         logger.info("[Companion] starting — relay: %s", self._settings.companion_relay_url)
-        self._connect()
+        self._connect(self._connection_generation)
 
     def stop(self) -> None:
-        if self._ws_client:
-            self._ws_client.close()
-            self._ws_client = None
-        stop_managed_relay()
+        self._connection_generation += 1
+        self._close_current_client()
+        self._stop_managed_relay_async()
         self.connection_status_changed.emit("disabled")
         logger.info("[Companion] stopped")
 
     def update_settings(self, settings: AppSettings) -> None:
-        was_enabled = self._settings.companion_enabled
+        previous = self._settings
+        was_enabled = previous.companion_enabled
+        enabled_changed = was_enabled != settings.companion_enabled
+        relay_changed = self._normalized_relay_url(previous.companion_relay_url) != self._normalized_relay_url(
+            settings.companion_relay_url
+        )
         self._settings = settings
-        if was_enabled:
+
+        if enabled_changed and not settings.companion_enabled:
             self.stop()
-        if settings.companion_enabled:
+            return
+
+        if enabled_changed and settings.companion_enabled:
             self.start()
+            return
+
+        if settings.companion_enabled and relay_changed:
+            self._connection_generation += 1
+            self._close_current_client()
+            if is_local_relay_url(previous.companion_relay_url) and not is_local_relay_url(settings.companion_relay_url):
+                self._stop_managed_relay_async()
+            self.connection_status_changed.emit("connecting")
+            self._connect(self._connection_generation)
 
     # ── Bridge / Runner / Store wiring ──────────────────────
 
@@ -356,7 +397,14 @@ class CompanionManager(QObject):
 
     # ── Internal ────────────────────────────────────────────
 
-    def _connect(self) -> None:
+    @staticmethod
+    def _normalized_relay_url(url: str) -> str:
+        return normalize_relay_url(url)
+
+    def _connect(self, generation: int | None = None) -> None:
+        if generation is None:
+            self._connection_generation += 1
+            generation = self._connection_generation
         url = self._settings.companion_relay_url
         if not url:
             logger.warning("[Companion] no relay URL configured")
@@ -367,15 +415,15 @@ class CompanionManager(QObject):
         self._state.active_relay_url = url
         if is_local_relay_url(url):
             self.connection_status_changed.emit("starting_local_relay")
-            try:
-                url = ensure_local_relay(url)
-            except LocalRelayError as exc:
-                logger.warning("[Companion] local relay unavailable: %s", exc)
-                self.connection_error.emit(str(exc))
-                self.connection_status_changed.emit("error")
-                return
-            self._state.active_relay_url = url
-            self.connection_status_changed.emit("connecting")
+            self._start_local_relay_worker(generation, url)
+            return
+
+        self._connect_client(generation, url)
+
+    def _connect_client(self, generation: int, url: str) -> None:
+        if generation != self._connection_generation or not self._settings.companion_enabled:
+            return
+        self._state.active_relay_url = url
 
         device_id = get_device_id()
         desktop_secret = os.environ.get("AURA_COMPANION_DESKTOP_SECRET", "")
@@ -385,8 +433,56 @@ class CompanionManager(QObject):
         client.connected.connect(lambda c=client: self._on_connected(c))
         client.disconnected.connect(lambda c=client: self._on_disconnected(c))
         client.error.connect(lambda err, c=client: self._on_client_error(c, err))
-        client.message_received.connect(self._on_raw_message)
+        client.message_received.connect(lambda raw, c=client: self._on_raw_message(c, raw))
         client.connect_to_relay()
+
+    def _start_local_relay_worker(self, generation: int, url: str) -> None:
+        thread = QThread()
+        worker = _RelayConnectWorker(generation, url)
+        worker.moveToThread(thread)
+        self._relay_workers.append((thread, worker))
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_local_relay_ready)
+        worker.failed.connect(self._on_local_relay_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread, w=worker: self._forget_relay_worker(t, w))
+        thread.start()
+
+    def _forget_relay_worker(self, thread: QThread, worker: _RelayConnectWorker) -> None:
+        self._relay_workers = [(t, w) for t, w in self._relay_workers if t is not thread and w is not worker]
+
+    def _on_local_relay_ready(self, generation: int, url: str) -> None:
+        if generation != self._connection_generation or not self._settings.companion_enabled:
+            return
+        self._state.active_relay_url = url
+        self.connection_status_changed.emit("connecting")
+        self._connect_client(generation, url)
+
+    def _on_local_relay_failed(self, generation: int, error: str) -> None:
+        if generation != self._connection_generation or not self._settings.companion_enabled:
+            return
+        logger.warning("[Companion] local relay unavailable: %s", error)
+        self.connection_error.emit(error)
+        self.connection_status_changed.emit("error")
+
+    def _close_current_client(self) -> None:
+        client = self._ws_client
+        self._ws_client = None
+        if client is None:
+            return
+        self._retiring_clients.add(client)
+        client.closed.connect(lambda c=client: self._on_retired_client_closed(c))
+        client.close()
+
+    def _on_retired_client_closed(self, client: CompanionWsClient) -> None:
+        self._retiring_clients.discard(client)
+        client.deleteLater()
+
+    def _stop_managed_relay_async(self) -> None:
+        threading.Thread(target=stop_managed_relay, name="AuraCompanionRelayStop", daemon=True).start()
 
     def _on_client_error(self, client: CompanionWsClient, error_str: str) -> None:
         if client is not self._ws_client:
@@ -423,8 +519,10 @@ class CompanionManager(QObject):
             return "Could not connect to the Companion relay. Check the relay URL in Advanced / Self-hosting."
         return error_str
 
-    def _on_raw_message(self, raw: str) -> None:
+    def _on_raw_message(self, client: CompanionWsClient, raw: str) -> None:
         """Handle an incoming message from Relay."""
+        if client is not self._ws_client:
+            return
         try:
             msg = json.loads(raw)
         except json.JSONDecodeError:

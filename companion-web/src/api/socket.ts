@@ -64,6 +64,10 @@ class CompanionSocket {
     CompanionSocket.setStoredToken('');
     CompanionSocket.setStoredSafeContext({});
     try { localStorage.removeItem(CompanionSocket.STORAGE_KEY_RELAY); } catch {}
+    try {
+      sessionStorage.removeItem('companion_desktop_id');
+      sessionStorage.removeItem('companion_desktop_name');
+    } catch {}
   }
 
   static getStoredRelayUrl(): string {
@@ -117,6 +121,9 @@ class CompanionSocket {
       try {
         const msg = JSON.parse(event.data);
         const msgType = msg.type || 'unknown';
+        if (msgType === 'auth.error') {
+          CompanionSocket.clearStoredState();
+        }
         const handlers = this.listeners.get(msgType);
         if (handlers) {
           handlers.forEach((h) => h(msg));
@@ -248,7 +255,7 @@ class CompanionSocket {
   }
 
   logout(): void {
-    CompanionSocket.setStoredToken('');
+    CompanionSocket.clearStoredState();
     this.disconnect();
   }
 

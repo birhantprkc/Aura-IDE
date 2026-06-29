@@ -71,6 +71,11 @@ function AppLayout() {
   const hasPairParams = search.includes('code=') || search.includes('ticket=') || isPairRoute;
   const showNav = location.pathname !== '/login' && location.pathname !== '/pair';
   const isPaired = CompanionSocket.isPaired();
+  const safeCtx = CompanionSocket.getStoredSafeContext();
+  const storedDesktopId = sessionStorage.getItem('companion_desktop_id') || safeCtx.desktop_id || '';
+  const pairedDefaultRoute = storedDesktopId ? '/chat' : '/desktops';
+  const pairTarget = { pathname: isPairRoute ? '/pair' : '/login', search: location.search };
+  const defaultRoute = hasPairParams ? pairTarget : (isPaired ? pairedDefaultRoute : '/login');
 
   // Connection guard
   useEffect(() => {
@@ -80,14 +85,11 @@ function AppLayout() {
       return;
     }
     if (!socket.connected && !socket.connecting) {
-      // Try to reconnect; if it fails the Chat screen surfaces it
-      const safeCtx = CompanionSocket.getStoredSafeContext();
-      const desktopId = sessionStorage.getItem('companion_desktop_id') || safeCtx.desktop_id;
-      if (!desktopId) {
-        navigate('/login', { replace: true });
+      if (!storedDesktopId && location.pathname !== '/desktops') {
+        navigate('/desktops', { replace: true });
       }
     }
-  }, [location.pathname, navigate, isPaired]);
+  }, [location.pathname, navigate, isPaired, storedDesktopId]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh' }}>
@@ -100,7 +102,8 @@ function AppLayout() {
           <Route path="/chat/:threadId?" element={<ChatScreen />} />
           <Route path="/runs" element={<RunsScreen />} />
           <Route path="/receipts" element={<ReceiptsScreen />} />
-          <Route path="*" element={<Navigate to={(hasPairParams || !isPaired) ? (isPairRoute ? '/pair' : '/login') : '/login'} replace />} />
+          <Route path="/" element={<Navigate to={defaultRoute} replace />} />
+          <Route path="*" element={<Navigate to={defaultRoute} replace />} />
         </Routes>
       </div>
       {showNav && <BottomNav />}

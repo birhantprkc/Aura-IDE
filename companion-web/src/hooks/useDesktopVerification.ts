@@ -74,10 +74,8 @@ export function useDesktopVerification() {
     } catch (e: any) {
       setPhase('unavailable');
       if (e.message === 'auth.error') {
-        CompanionSocket.setStoredToken('');
+        CompanionSocket.clearStoredState();
         setError('Stored pairing is no longer valid. Pair again.');
-        sessionStorage.removeItem('companion_desktop_id');
-        sessionStorage.removeItem('companion_desktop_name');
       } else {
         setError(e.message || 'Desktop not reachable.');
       }
@@ -95,11 +93,9 @@ export function useDesktopVerification() {
   useEffect(() => {
     if (phase !== 'connected') return;
     const unsubAuthErr = socket.on('auth.error', () => {
-      CompanionSocket.setStoredToken('');
+      CompanionSocket.clearStoredState();
       setPhase('unavailable');
       setError('Stored pairing is no longer valid. Pair again.');
-      sessionStorage.removeItem('companion_desktop_id');
-      sessionStorage.removeItem('companion_desktop_name');
     });
     const unsubError = socket.on('error', (data: any) => {
       setPhase('unavailable');
@@ -111,9 +107,6 @@ export function useDesktopVerification() {
   const retry = useCallback(() => { startedRef.current = false; verify(); }, [verify]);
   const goToLogin = useCallback(() => {
     socket.logout();
-    CompanionSocket.clearStoredState();
-    sessionStorage.removeItem('companion_desktop_id');
-    sessionStorage.removeItem('companion_desktop_name');
     navigate('/login', { replace: true });
   }, [navigate]);
 

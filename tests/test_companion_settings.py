@@ -1,5 +1,6 @@
 """Tests for Companion settings — defaults, migration, dev override, and pairing."""
 
+import copy
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +13,100 @@ from aura.companion.defaults import (
 )
 from aura.companion.local_relay import is_local_relay_url, normalize_relay_url
 from aura.settings import AppSettings
+
+
+def test_companion_manager_does_not_reconnect_for_display_name_or_web_url(monkeypatch):
+    from aura.companion.manager import CompanionManager
+
+    settings = AppSettings(
+        companion_enabled=True,
+        companion_relay_url="wss://relay.example/ws",
+        companion_web_url="https://companion.example",
+        companion_display_name="Old name",
+    )
+    manager = CompanionManager(settings)
+    calls: list[str] = []
+    monkeypatch.setattr(manager, "_close_current_client", lambda: calls.append("close"))
+    monkeypatch.setattr(manager, "_connect", lambda _generation=None: calls.append("connect"))
+
+    updated = copy.deepcopy(settings)
+    updated.companion_display_name = "New name"
+    updated.companion_web_url = "https://other.example"
+
+    manager.update_settings(updated)
+
+    assert calls == []
+    assert manager._settings is updated
+
+
+def test_companion_manager_reconnects_when_enabled_relay_url_changes(monkeypatch):
+    from aura.companion.manager import CompanionManager
+
+    settings = AppSettings(companion_enabled=True, companion_relay_url="wss://relay.example/ws")
+    manager = CompanionManager(settings)
+    calls: list[str] = []
+    statuses: list[str] = []
+    manager.connection_status_changed.connect(statuses.append)
+    monkeypatch.setattr(manager, "_close_current_client", lambda: calls.append("close"))
+    monkeypatch.setattr(manager, "_connect", lambda _generation=None: calls.append("connect"))
+
+    updated = copy.deepcopy(settings)
+    updated.companion_relay_url = "wss://new-relay.example/ws"
+
+    manager.update_settings(updated)
+
+    assert calls == ["close", "connect"]
+    assert statuses == ["connecting"]
+
+
+def test_companion_manager_ignores_stale_raw_messages(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from aura.companion.manager import CompanionManager
+
+    manager = CompanionManager(AppSettings(companion_enabled=True))
+    active_client = object()
+    old_client = object()
+    manager._ws_client = active_client  # type: ignore[assignment]
+    manager._router.dispatch = MagicMock()
+
+    manager._on_raw_message(old_client, '{"type":"project.list_recent"}')  # type: ignore[arg-type]
+
+    manager._router.dispatch.assert_not_called()
+
+
+def test_companion_ws_client_close_does_not_wait_for_thread():
+    from aura.companion.client import CompanionWsClient
+
+    class _Worker:
+        did_shutdown = False
+
+        def shutdown(self):
+            self.did_shutdown = True
+
+    class _Thread:
+        did_quit = False
+
+        def quit(self):
+            self.did_quit = True
+
+        def isRunning(self):
+            return True
+
+        def wait(self, _timeout):
+            raise AssertionError("close must not wait on the GUI thread")
+
+    worker = _Worker()
+    thread = _Thread()
+    client = CompanionWsClient()
+    client._worker = worker  # type: ignore[assignment]
+    client._thread = thread  # type: ignore[assignment]
+
+    client.close()
+
+    assert worker.did_shutdown is True
+    assert thread.did_quit is True
+    assert client._thread is thread
 
 
 class TestAppSettingsDefaults:

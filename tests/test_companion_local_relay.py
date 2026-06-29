@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 from io import BytesIO
 
 import pytest
+from PySide6.QtCore import QCoreApplication
 
 import aura.companion.local_relay as lr
 import aura.companion.manager as manager_mod
 from aura.settings import AppSettings
+
+
+def _process_events_until(predicate, timeout: float = 1.0) -> None:
+    app = QCoreApplication.instance() or QCoreApplication([])
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError("condition was not reached before timeout")
 
 
 class _Response:
@@ -221,6 +234,8 @@ def test_manager_connect_uses_returned_runtime_relay_url(monkeypatch: pytest.Mon
     monkeypatch.setattr(manager_mod, "CompanionWsClient", _Client)
 
     manager._connect()
+
+    _process_events_until(lambda: bool(connected_urls))
 
     assert manager._state.active_relay_url == "ws://localhost:8766/ws"
     assert created_urls == ["ws://localhost:8766/ws"]

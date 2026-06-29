@@ -22,6 +22,9 @@ function ChatScreen() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+  const streamingRef = useRef(false);
+  const refreshHistoryRef = useRef(false);
 
   const safeCtx = CompanionSocket.getStoredSafeContext();
   const projectId = safeCtx.project_id || '';
@@ -32,6 +35,18 @@ function ChatScreen() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const refreshHistory = useCallback(() => {
+    if (!desktopId || !projectId || !conversationId) return;
+    if (refreshHistoryRef.current) return;
+    refreshHistoryRef.current = true;
+    socket.send('conversation.history', { project_id: projectId, thread_id: conversationId }, desktopId, projectId, conversationId);
+    setTimeout(() => { refreshHistoryRef.current = false; }, 2000);
+  }, [desktopId, projectId, conversationId]);
 
   // Phase-gated message listeners — only active when verified
   useEffect(() => {
@@ -79,12 +94,14 @@ function ChatScreen() {
         }
         return updated;
       });
-      setStreaming(false);
+      streamingRef.current = false;
+      setTimeout(() => { if (mountedRef.current) refreshHistory(); }, 300);
     });
     const unsubChatErr = socket.on('chat.error', (msg: any) => {
       clearWatchdog();
       setChatError(msg.payload?.message || 'An error occurred');
-      setStreaming(false);
+      streamingRef.current = false;
+      setTimeout(() => { if (mountedRef.current) refreshHistory(); }, 300);
     });
     return () => {
       clearWatchdog();
@@ -107,6 +124,7 @@ function ChatScreen() {
         console.warn('conversation.history_result error:', msg.payload.error);
         return;
       }
+      if (streamingRef.current) return; // Don't replace messages while streaming
       const historyMsgs: Message[] = (msg.payload?.messages || []).map((m: any, i: number) => ({
         id: `hist_${i}_${m.role}`,
         role: m.role,
@@ -123,18 +141,43 @@ function ChatScreen() {
     };
   }, [phase, desktopId, projectId, conversationId]);
 
+  // Visibility change — refresh history when returning to the tab
+  useEffect(() => {
+    const handler = () => {
+      if (document.visibilityState === 'visible' && phase === 'connected' && projectId && conversationId) {
+        refreshHistory();
+      }
+    };
+    document.addEventListener('visibilitychange', handler);
+    return () => document.removeEventListener('visibilitychange', handler);
+  }, [phase, projectId, conversationId, refreshHistory]);
+
+  // Window focus — refresh history when window gets focus
+  useEffect(() => {
+    const handler = () => {
+      if (phase === 'connected' && projectId && conversationId) {
+        refreshHistory();
+      }
+    };
+    window.addEventListener('focus', handler);
+    return () => window.removeEventListener('focus', handler);
+  }, [phase, projectId, conversationId, refreshHistory]);
+
   const sendMessage = useCallback((explicitText?: string) => {
     const text = explicitText !== undefined ? explicitText.trim() : input.trim();
     if (!text || streaming || !desktopId || !projectId || !conversationId) return;
     setMessages(prev => [...prev, { id: `msg_${Date.now()}`, role: 'user', text, final: true }]);
     if (explicitText === undefined) setInput('');
+    streamingRef.current = true;
     setStreaming(true);
     setChatError('');
     socket.send('chat.send', { text }, desktopId, projectId, conversationId);
     clearWatchdog();
     watchdogRef.current = setTimeout(() => {
+      streamingRef.current = false;
       setStreaming(false);
       setChatError('No response from desktop. Check Aura Desktop.');
+      setTimeout(() => { if (mountedRef.current) refreshHistory(); }, 300);
     }, 60_000);
     if (taRef.current) taRef.current.style.height = 'auto';
   }, [input, streaming, desktopId, projectId, conversationId]);
@@ -142,6 +185,7 @@ function ChatScreen() {
   const cancel = useCallback(() => {
     clearWatchdog();
     socket.send('chat.cancel', {}, desktopId, projectId, conversationId);
+    streamingRef.current = false;
     setStreaming(false);
   }, [desktopId, projectId, conversationId]);
 
@@ -252,6 +296,22 @@ function ChatScreen() {
             </div>
           )}
         </div>
+        <button
+          onClick={() => refreshHistory()}
+          aria-label="Refresh"
+          title="Refresh messages"
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: tokens.fgMuted,
+            fontSize: '1rem',
+            padding: '0.1rem 0.3rem',
+            cursor: 'pointer',
+            opacity: 0.7,
+          }}
+        >
+          ⟳
+        </button>
         <span style={statusPillStyle('connected')}>
           ●{' '}
           {!projectId || !conversationId
@@ -312,6 +372,11 @@ function ChatScreen() {
           messages.map((m, idx) => (
             <MessageBubble key={m.id} message={m} previous={messages[idx - 1]} />
           ))
+        )}
+
+        {/* MiniAuraThinking — pulsing rainbow glow while waiting for assistant to start */}
+        {streaming && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
+          <MiniAuraThinking />
         )}
 
         {/* Quick prompt chips */}
@@ -440,6 +505,34 @@ function ChatScreen() {
           )}
         </div>
       </footer>
+    </div>
+  );
+}
+
+function MiniAuraThinking() {
+  return (
+    <div style={{
+      display: 'flex',
+      justifyContent: 'flex-start',
+      marginTop: 8,
+      padding: '0 0.15rem',
+    }}>
+      <div style={{
+        width: 44,
+        height: 44,
+        borderRadius: '50%',
+        background: 'conic-gradient(from 0deg, #7aa2f7, #9d7cd8, #7dc8c8, #7aa2f7)',
+        filter: 'blur(6px)',
+        opacity: 0.7,
+        animation: 'aura-breath 2s ease-in-out infinite',
+        boxShadow: '0 0 18px 6px rgba(122,162,247,0.25), 0 0 36px 12px rgba(157,124,216,0.12)',
+      }} />
+      <style>{`
+        @keyframes aura-breath {
+          0%, 100% { opacity: 0.4; transform: scale(0.85); filter: blur(8px); }
+          50% { opacity: 0.85; transform: scale(1.15); filter: blur(4px); }
+        }
+      `}</style>
     </div>
   );
 }

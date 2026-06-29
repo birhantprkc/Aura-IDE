@@ -10,6 +10,7 @@ on the worker's event loop — no Qt queued signals into the worker.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 
@@ -40,6 +41,7 @@ class _WsWorker(QObject):
         self._should_run = True
         self._reconnect_delay = 1.0
         self._sleep_task: asyncio.Task | None = None
+        self._main_task: asyncio.Task | None = None
 
     @Slot()
     def run(self) -> None:
@@ -47,8 +49,11 @@ class _WsWorker(QObject):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         try:
-            self._loop.run_until_complete(self._ws_loop())
+            self._main_task = self._loop.create_task(self._ws_loop())
+            with contextlib.suppress(asyncio.CancelledError):
+                self._loop.run_until_complete(self._main_task)
         finally:
+            self._main_task = None
             try:
                 self._loop.close()
             except Exception:
@@ -125,6 +130,9 @@ class _WsWorker(QObject):
             task = self._sleep_task
             if task is not None and not task.done():
                 task.cancel()
+            main_task = self._main_task
+            if main_task is not None and not main_task.done():
+                main_task.cancel()
 
         try:
             loop.call_soon_threadsafe(_do_shutdown)
@@ -142,6 +150,7 @@ class CompanionWsClient(QObject):
     disconnected = Signal()
     message_received = Signal(str)  # raw JSON string
     error = Signal(str)
+    closed = Signal()
 
     def __init__(self, url: str = "", device_id: str = "", desktop_secret: str = "", parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -151,6 +160,7 @@ class CompanionWsClient(QObject):
         self._thread: QThread | None = None
         self._worker: _WsWorker | None = None
         self._is_connected: bool = False
+        self._is_closing: bool = False
 
     @property
     def is_connected(self) -> bool:
@@ -163,18 +173,24 @@ class CompanionWsClient(QObject):
             logger.warning("[CompanionWsClient] already connecting")
             return
 
-        self._worker = _WsWorker(self._url, self._device_id, self._desktop_secret)
-        self._thread = QThread()
-        self._worker.moveToThread(self._thread)
+        worker = _WsWorker(self._url, self._device_id, self._desktop_secret)
+        thread = QThread()
+        self._worker = worker
+        self._thread = thread
+        self._is_closing = False
+        worker.moveToThread(thread)
 
         # Wire signals BEFORE starting the thread.
-        self._worker.connected.connect(self._on_worker_connected)
-        self._worker.disconnected.connect(self._on_worker_disconnected)
-        self._worker.message_received.connect(self.message_received)
-        self._worker.error.connect(self.error)
+        worker.connected.connect(self._on_worker_connected)
+        worker.disconnected.connect(self._on_worker_disconnected)
+        worker.message_received.connect(self.message_received)
+        worker.error.connect(self.error)
 
-        self._thread.started.connect(self._worker.run)
-        self._thread.start()
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread, w=worker: self._on_thread_finished(t, w))
+        thread.start()
 
     @Slot()
     def _on_worker_connected(self) -> None:
@@ -198,13 +214,26 @@ class CompanionWsClient(QObject):
     def close(self) -> None:
         worker = self._worker
         thread = self._thread
+        if self._is_closing:
+            return
+        self._is_closing = True
+        self._is_connected = False
         if worker is not None:
             worker.shutdown()
         if thread is not None:
             thread.quit()
-            if not thread.wait(5000):
-                logger.warning("[CompanionWsClient] worker thread did not stop within 5 s — not clearing references")
+            if thread.isRunning():
                 return
         self._thread = None
         self._worker = None
+        self._is_closing = False
+        self.closed.emit()
+
+    def _on_thread_finished(self, thread: QThread, worker: _WsWorker) -> None:
+        if self._thread is thread:
+            self._thread = None
+        if self._worker is worker:
+            self._worker = None
         self._is_connected = False
+        self._is_closing = False
+        self.closed.emit()

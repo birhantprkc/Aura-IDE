@@ -26,16 +26,26 @@ function DesktopsScreen() {
   }, [isPaired, navigate]);
 
   useEffect(() => {
+    if (!isPaired || socket.connected || socket.connecting) return;
+    const relayUrl = CompanionSocket.getStoredRelayUrl() || import.meta.env.VITE_AURA_RELAY_WS_URL || '';
+    if (!relayUrl) return;
+    setStatus('connecting');
+    socket.connect(relayUrl);
+  }, [isPaired]);
+
+  useEffect(() => {
     const unsubOnline = socket.on('system.online_list', (msg: any) => {
       const devices = msg.payload?.devices || [];
       setDesktops(devices.filter((d: any) => d.device_type === 'desktop'));
     });
     const unsubWelcome = socket.on('welcome', () => setStatus('connected'));
+    const unsubAuthError = socket.on('auth.error', () => navigate('/login', { replace: true }));
     return () => {
       unsubOnline();
       unsubWelcome();
+      unsubAuthError();
     };
-  }, []);
+  }, [navigate]);
 
   const selectDesktop = useCallback((d: Desktop) => {
     sessionStorage.setItem('companion_desktop_id', d.device_id);
