@@ -2,22 +2,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QLabel, QSizeGrip, QStatusBar
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizeGrip, QSizePolicy, QStatusBar, QWidget
 
-from aura.config import PROVIDERS, ThinkingMode, cost_usd
-
-_THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
-
-
-def _compact_number(n: int) -> str:
-    """Format large integers with k/M shorthand for compact display."""
-    if n >= 1_000_000:
-        val = n / 1_000_000
-        return f"{val:.1f}M".replace(".0M", "M")
-    elif n >= 1_000:
-        val = n / 1_000
-        return f"{val:.1f}k".replace(".0k", "k")
-    return str(n)
+from aura.config import ThinkingMode, cost_usd
 
 
 def _format_footer_cost(known_cost: float, unknown_count: int, total_models: int) -> str:
@@ -25,7 +12,7 @@ def _format_footer_cost(known_cost: float, unknown_count: int, total_models: int
     if total_models == 0:
         return "$—"
     if unknown_count == total_models:
-        return "$? —"
+        return "$—"
     cost_str = f"${known_cost:.2f}" if known_cost >= 0.01 else "< $0.01"
     if unknown_count > 0:
         cost_str += " *"
@@ -67,6 +54,34 @@ class _StatusResizeGrip(QSizeGrip):
         super().mousePressEvent(event)
 
 
+class _ElidingLabel(QLabel):
+    def __init__(
+        self,
+        text: str = "",
+        parent=None,
+        elide_mode: Qt.TextElideMode = Qt.TextElideMode.ElideRight,
+    ) -> None:
+        super().__init__("", parent)
+        self._full_text = ""
+        self._elide_mode = elide_mode
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # type: ignore[override]
+        self._full_text = text
+        self._update_elided_text()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._update_elided_text()
+
+    def _update_elided_text(self) -> None:
+        width = max(0, self.contentsRect().width())
+        if width <= 0:
+            super().setText(self._full_text)
+            return
+        super().setText(self.fontMetrics().elidedText(self._full_text, self._elide_mode, width))
+
+
 class _ClickableLabel(QLabel):
     clicked = Signal()
 
@@ -90,18 +105,59 @@ class AuraStatusBar(QStatusBar):
         self._resize_grip_allowed = show_resize_grip
 
         # Left side: workspace path only
-        self._status_left = QLabel("")
+        self._status_left = _ElidingLabel("", elide_mode=Qt.TextElideMode.ElideLeft)
+        self._status_left.setSizePolicy(
+            QSizePolicy.Policy.Maximum,
+            QSizePolicy.Policy.Preferred,
+        )
+        self._status_left.setMinimumWidth(0)
+        self._status_left.setMaximumWidth(360)
         self.addWidget(self._status_left, 0)
 
-        # Center: model, thinking, cache, session cost
-        self._status_center = QLabel("")
-        self._status_center.setToolTip(
+        # Center: cache and session telemetry only
+        center_widget = QWidget(self)
+        center_widget.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        center_widget.setMinimumWidth(0)
+        center_widget.setToolTip(
             "Session cache usage and estimated cost — does not reflect actual provider billing."
         )
-        font_center = QFont()
-        font_center.setPointSize(11)
-        self._status_center.setFont(font_center)
-        self.addWidget(self._status_center, 1)
+        center_layout = QHBoxLayout(center_widget)
+        center_layout.setContentsMargins(8, 0, 8, 0)
+        center_layout.setSpacing(8)
+
+        telemetry_font = QFont("Geist Mono, JetBrains Mono, Consolas, monospace")
+        telemetry_font.setStyleHint(QFont.StyleHint.Monospace)
+        telemetry_font.setPointSize(11)
+
+        self._status_cache = _ElidingLabel("")
+        self._status_cache.setFont(telemetry_font)
+        self._status_cache.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        self._status_cache.setMinimumWidth(0)
+        self._status_cache.setStyleSheet(
+            "color: #7dcfff; font-weight: 600; padding: 0 2px;"
+        )
+        center_layout.addWidget(self._status_cache, 1)
+
+        self._status_separator = QLabel("│")
+        self._status_separator.setStyleSheet("color: #4b5369; padding: 0 2px;")
+        center_layout.addWidget(self._status_separator)
+
+        self._status_session = QLabel("")
+        self._status_session.setFont(telemetry_font)
+        self._status_session.setStyleSheet("color: #a8aebb; padding: 0 2px;")
+        self._status_session.setSizePolicy(
+            QSizePolicy.Policy.Maximum,
+            QSizePolicy.Policy.Preferred,
+        )
+        center_layout.addWidget(self._status_session)
+
+        self.addWidget(center_widget, 1)
 
         # Right: Aura Credits pill
         self._status_balance = _ClickableLabel("")
@@ -155,15 +211,6 @@ class AuraStatusBar(QStatusBar):
             ws = "…" + ws[-63:]
         self._status_left.setText(ws)
 
-        # Model label lookup
-        model_label = model_id
-        for cfg in PROVIDERS.values():
-            if model_id in cfg.models:
-                model_label = cfg.models[model_id].label
-                break
-
-        thinking_label = _THINKING_LABEL.get(thinking, "Off")
-
         # Usage and Cost
         total_hit = sum(u["hit"] for u in session_usage.values())
         total_miss = sum(u["miss"] for u in session_usage.values())
@@ -180,16 +227,10 @@ class AuraStatusBar(QStatusBar):
 
         total_models = len(session_usage)
 
-        # Build center text
-        center_parts = [f"{model_label} · Thinking: {thinking_label}"]
-        if total_hit + total_miss + total_out > 0:
-            hit_str = _compact_number(total_hit)
-            miss_str = _compact_number(total_miss)
-            out_str = _compact_number(total_out)
-            center_parts.append(f"Cache {hit_str} hit · {miss_str} miss · {out_str} out")
+        usage_text = f"{total_hit:,} hit · {total_miss:,} miss · {total_out:,} out"
         cost_str = _format_footer_cost(known_cost, unknown_count, total_models)
-        center_parts.append(f"Session {cost_str}")
-        self._status_center.setText(" · ".join(center_parts))
+        self._status_cache.setText(usage_text)
+        self._status_session.setText(f"Session {cost_str}")
 
         # Balance display (right pill)
         if has_aura_key:
@@ -201,9 +242,11 @@ class AuraStatusBar(QStatusBar):
                 self._status_balance.setToolTip("Aura Credits balance unavailable. Click to open Aura Credits.")
         else:
             if has_provider:
-                self._status_balance.setText("Fuel Aura")
-                self._status_balance.setToolTip("Set up Aura Credits to fuel your workflow. Click to open.")
+                self._status_balance.setText("Add Credits")
+                self._status_balance.setToolTip(
+                    "Add Aura Credits. The easiest way to run Aura without provider setup."
+                )
             else:
-                self._status_balance.setText("Set up Aura")
-                self._status_balance.setToolTip("Set up Aura Credits and an API provider. Click to open.")
+                self._status_balance.setText("Set up AI")
+                self._status_balance.setToolTip("Set up Aura Credits or an API provider. Click to open.")
         self._status_balance.setVisible(True)

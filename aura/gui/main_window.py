@@ -27,6 +27,7 @@ from aura.config import (
     AppSettings,
     ThinkingMode,
     get_api_key,
+    has_usable_provider_configuration,
     icon_path,
     load_settings,
     load_workspace_root,
@@ -591,7 +592,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _refresh_status_bar(self) -> None:
         ws = str(self._workspace_root) if self._workspace_root else "(none)"
         has_aura_key = bool(get_api_key("aura"))
-        has_provider = bool(get_api_key(self._settings.provider))
+        has_provider = has_usable_provider_configuration(self._settings.provider)
         self._status_bar.refresh(
             workspace_root=ws,
             model_id=self.current_model(),
