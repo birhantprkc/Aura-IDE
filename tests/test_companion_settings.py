@@ -93,12 +93,10 @@ class TestStartPairingRelayParam:
         from unittest.mock import MagicMock
 
         from aura.companion.manager import CompanionManager
+        from aura.companion.state import CompanionState
 
         mgr = CompanionManager.__new__(CompanionManager)
-        mgr._active_relay_url = ""
-        mgr._current_project_id = ""
-        mgr._current_conversation_id = ""
-        mgr._current_pairing_code = ""
+        mgr._state = CompanionState()
 
         settings = AppSettings()
         # hosted web, but relay is localhost
@@ -137,12 +135,10 @@ class TestStartPairingRelayParam:
         from unittest.mock import MagicMock
 
         from aura.companion.manager import CompanionManager
+        from aura.companion.state import CompanionState
 
         mgr = CompanionManager.__new__(CompanionManager)
-        mgr._active_relay_url = ""
-        mgr._current_project_id = ""
-        mgr._current_conversation_id = ""
-        mgr._current_pairing_code = ""
+        mgr._state = CompanionState()
 
         settings = AppSettings()
         settings.companion_relay_url = DEFAULT_LOCAL_COMPANION_RELAY_URL

@@ -222,7 +222,7 @@ def test_manager_connect_uses_returned_runtime_relay_url(monkeypatch: pytest.Mon
 
     manager._connect()
 
-    assert manager._active_relay_url == "ws://localhost:8766/ws"
+    assert manager._state.active_relay_url == "ws://localhost:8766/ws"
     assert created_urls == ["ws://localhost:8766/ws"]
     assert connected_urls == ["ws://localhost:8766/ws"]
     assert settings.companion_relay_url == "ws://localhost:8765"

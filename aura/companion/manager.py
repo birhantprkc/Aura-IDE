@@ -21,6 +21,15 @@ from aura.companion.auth import (
     validate_pairing_code,
 )
 from aura.companion.client import CompanionWsClient
+from aura.companion.commands import CommandContext
+from aura.companion.commands.conversations import (
+    handle_conversation_history,
+    handle_conversation_list,
+    handle_conversation_select,
+)
+from aura.companion.commands.drones import handle_drone_list_recent, handle_drone_status
+from aura.companion.commands.projects import handle_project_list_recent
+from aura.companion.commands.receipts import handle_receipt_list_recent
 from aura.companion.defaults import DEFAULT_HOSTED_COMPANION_WEB_URL
 from aura.companion.local_relay import (
     LocalRelayError,
@@ -30,16 +39,10 @@ from aura.companion.local_relay import (
     relay_port,
     stop_managed_relay,
 )
-from aura.companion.protocol import (
-    ActiveRunSummary,
-    CompanionProject,
-    CompanionThread,
-    ReceiptSummary,
-    make_envelope,
-)
-from aura.conversation.persistence import load_conversation
-from aura.drones.store import RunHistoryStore
-from aura.projects.store import ProjectStore
+from aura.companion.protocol import make_envelope
+from aura.companion.replies import build_reply_envelope
+from aura.companion.router import CompanionCommandRouter
+from aura.companion.state import CompanionState
 from aura.settings import AppSettings, resolve_role_default_model
 from aura.version import __version__
 
@@ -64,21 +67,60 @@ class CompanionManager(QObject):
     def __init__(self, settings: AppSettings | None = None, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._settings = settings or AppSettings()
+        self._state = CompanionState()
         self._ws_client: CompanionWsClient | None = None
         self._bridge: Any = None
         self._drone_runner: Any = None
         self._project_store: Any = None
-        self._workspace_root: str = ""
-        self._current_project_id: str = ""
-        self._current_conversation_id: str = ""
-        self._conversation_loaded: bool = False
-        self._pending_select_msg: dict | None = None
-        self._pending_chat_id: str = ""
-        self._pending_chat_phone_id: str = ""
-        self._current_pairing_code: str = ""
-        self._paired_context: dict = {}
-        self._paired_project_name: str = ""
-        self._active_relay_url: str = ""
+        self._router = CompanionCommandRouter()
+        self._register_command_handlers()
+
+    def _register_command_handlers(self) -> None:
+        self._router.register(
+            "project.list_recent",
+            lambda msg: handle_project_list_recent(msg, self._make_command_context()),
+        )
+        self._router.register(
+            "conversation.list",
+            lambda msg: handle_conversation_list(msg, self._make_command_context()),
+        )
+        self._router.register(
+            "conversation.select",
+            lambda msg: handle_conversation_select(msg, self._make_command_context()),
+        )
+        self._router.register(
+            "conversation.history",
+            lambda msg: handle_conversation_history(msg, self._make_command_context()),
+        )
+        self._router.register(
+            "drone.list_recent",
+            lambda msg: handle_drone_list_recent(msg, self._make_command_context()),
+        )
+        self._router.register(
+            "drone.status",
+            lambda msg: handle_drone_status(msg, self._make_command_context()),
+        )
+        self._router.register(
+            "receipt.list_recent",
+            lambda msg: handle_receipt_list_recent(msg, self._make_command_context()),
+        )
+        # Manager-internal handlers (stay in CompanionManager for this pass)
+        self._router.register("chat.send", self._handle_chat_send)
+        self._router.register("chat.cancel", self._handle_chat_cancel)
+        self._router.register("pair.verify", self._handle_pair_verify)
+        self._router.register("pair.cancel", self._handle_pair_cancel)
+        self._router.register("companion.verify", self._handle_companion_verify)
+
+    def _make_command_context(self) -> CommandContext:
+        return CommandContext(
+            state=self._state,
+            settings=self._settings,
+            send_fn=self.send_event,
+            bridge=self._bridge,
+            drone_runner=self._drone_runner,
+            project_store=self._project_store,
+            on_conversation_selected=self.conversation_selected_by_companion.emit,
+        )
 
     # ── Lifecycle ────────────────────────────────────────────
 
@@ -134,15 +176,15 @@ class CompanionManager(QObject):
         self._project_store = store
 
     def set_workspace_root(self, path: str) -> None:
-        self._workspace_root = path
+        self._state.workspace_root = path
 
     def set_current_project(self, project_id: str, project_name: str = "") -> None:
-        self._current_project_id = project_id
-        self._paired_project_name = project_name
+        self._state.current_project_id = project_id
+        self._state.paired_project_name = project_name
 
     def set_current_conversation(self, conversation_id: str) -> None:
-        self._current_conversation_id = conversation_id
-        self._conversation_loaded = bool(conversation_id)
+        self._state.current_conversation_id = conversation_id
+        self._state.conversation_loaded = bool(conversation_id)
 
     # ── Send ────────────────────────────────────────────────
 
@@ -159,29 +201,20 @@ class CompanionManager(QObject):
         project_id: str = "",
         conversation_id: str = "",
     ) -> None:
-        sender_phone_id = msg.get("sender_device_id", "")
-        if not sender_phone_id:
-            logger.warning("[Companion] cannot reply to %s: missing sender_device_id", msg_type)
-            return
-        self.send_event(make_envelope(
-            msg_type,
-            payload,
-            desktop_id=sender_phone_id,
-            project_id=project_id,
-            conversation_id=conversation_id,
-            in_response_to=msg.get("id", ""),
-        ))
+        env = build_reply_envelope(msg, msg_type, payload, project_id=project_id, conversation_id=conversation_id)
+        if env:
+            self.send_event(env)
 
     # ── Pairing ─────────────────────────────────────────────
 
     def generate_new_pairing_code(self) -> str:
         """Generate a new pairing code and emit signal."""
         # Invalidate any existing code
-        if self._current_pairing_code:
-            invalidate_pairing_code(self._current_pairing_code)
+        if self._state.current_pairing_code:
+            invalidate_pairing_code(self._state.current_pairing_code)
 
         code = generate_pairing_code()
-        self._current_pairing_code = code
+        self._state.current_pairing_code = code
         self.pairing_code_available.emit(code)
         logger.info("[Companion] Pairing code generated: %s", code)
         return code
@@ -204,8 +237,8 @@ class CompanionManager(QObject):
             desktop_id=desktop_id,
             pairing_code=code,
             desktop_name=desktop_name,
-            project_id=self._current_project_id,
-            conversation_id=self._current_conversation_id,
+            project_id=self._state.current_project_id,
+            conversation_id=self._state.current_conversation_id,
         )
 
         # Register the ticket with the relay so it can resolve context
@@ -214,11 +247,11 @@ class CompanionManager(QObject):
             "desktop_id": desktop_id,
             "desktop_name": desktop_name,
             "code": code,
-            "project_id": self._current_project_id,
-            "conversation_id": self._current_conversation_id,
+            "project_id": self._state.current_project_id,
+            "conversation_id": self._state.current_conversation_id,
         }))
 
-        runtime_relay_url = self._active_relay_url or normalize_relay_url(self._settings.companion_relay_url)
+        runtime_relay_url = self._state.active_relay_url or normalize_relay_url(self._settings.companion_relay_url)
 
         # Hosted web + localhost relay → phones can't reach localhost, skip relay param
         is_hosted_web = web_url.rstrip("/") == DEFAULT_HOSTED_COMPANION_WEB_URL.rstrip("/")
@@ -238,9 +271,9 @@ class CompanionManager(QObject):
 
     def cancel_pairing(self) -> None:
         """Invalidate the active pairing code (user closed the pair dialog)."""
-        if self._current_pairing_code:
-            invalidate_pairing_code(self._current_pairing_code)
-            self._current_pairing_code = ""
+        if self._state.current_pairing_code:
+            invalidate_pairing_code(self._state.current_pairing_code)
+            self._state.current_pairing_code = ""
             self.pairing_code_invalidated.emit()
 
     def _handle_pair_verify(self, msg: dict) -> None:
@@ -264,7 +297,7 @@ class CompanionManager(QObject):
             return
 
         # Clear used code
-        self._current_pairing_code = ""
+        self._state.current_pairing_code = ""
 
         token = create_device_token(
             desktop_id=get_device_id(),
@@ -274,20 +307,20 @@ class CompanionManager(QObject):
 
         # Resolve safe context to deliver to the phone after pairing
         project_name = ""
-        if self._current_project_id and self._project_store:
+        if self._state.current_project_id and self._project_store:
             try:
-                project = self._project_store.load_project(self._current_project_id)
+                project = self._project_store.load_project(self._state.current_project_id)
                 if project:
                     project_name = project.name
             except Exception as exc:
                 logger.debug("[Companion] could not resolve project name for pairing context: %s", exc)
 
         safe_context = {
-            "project_id": self._current_project_id,
+            "project_id": self._state.current_project_id,
             "project_name": project_name,
-            "conversation_id": self._current_conversation_id,
+            "conversation_id": self._state.current_conversation_id,
         }
-        self._paired_context = safe_context
+        self._state.paired_context = safe_context
 
         # Send confirmation back through relay with safe context
         self.send_event(make_envelope("pair.confirmed", {
@@ -305,9 +338,9 @@ class CompanionManager(QObject):
 
     def _handle_pair_cancel(self, msg: dict) -> None:
         """Cancel active pairing."""
-        if self._current_pairing_code:
-            invalidate_pairing_code(self._current_pairing_code)
-            self._current_pairing_code = ""
+        if self._state.current_pairing_code:
+            invalidate_pairing_code(self._state.current_pairing_code)
+            self._state.current_pairing_code = ""
         self.pairing_code_invalidated.emit()
         logger.info("[Companion] Pairing cancelled")
 
@@ -317,8 +350,8 @@ class CompanionManager(QObject):
         self._reply_to_sender(msg, "companion.verify_ack", {
             "desktop_id": get_device_id(),
             "desktop_name": desktop_name,
-            "project_id": self._current_project_id,
-            "conversation_id": self._current_conversation_id,
+            "project_id": self._state.current_project_id,
+            "conversation_id": self._state.current_conversation_id,
         })
 
     # ── Internal ────────────────────────────────────────────
@@ -331,7 +364,7 @@ class CompanionManager(QObject):
             self.connection_status_changed.emit("error")
             return
         url = normalize_relay_url(url)
-        self._active_relay_url = url
+        self._state.active_relay_url = url
         if is_local_relay_url(url):
             self.connection_status_changed.emit("starting_local_relay")
             try:
@@ -341,7 +374,7 @@ class CompanionManager(QObject):
                 self.connection_error.emit(str(exc))
                 self.connection_status_changed.emit("error")
                 return
-            self._active_relay_url = url
+            self._state.active_relay_url = url
             self.connection_status_changed.emit("connecting")
 
         device_id = get_device_id()
@@ -380,8 +413,8 @@ class CompanionManager(QObject):
 
     def _friendly_connection_error(self, error_str: str) -> str:
         lowered = error_str.lower()
-        if is_local_relay_url(self._active_relay_url) and "invalidstatus" in lowered and "404" in lowered:
-            port = relay_port(self._active_relay_url)
+        if is_local_relay_url(self._state.active_relay_url) and "invalidstatus" in lowered and "404" in lowered:
+            port = relay_port(self._state.active_relay_url)
             return (
                 f"Port {port} is already in use by another service. Close that service or change the "
                 "Companion relay port in Advanced / Self-hosting."
@@ -398,32 +431,7 @@ class CompanionManager(QObject):
             logger.warning("[Companion] invalid JSON: %s", raw[:200])
             return
         self.message_received.emit(msg)
-        # Phase 2: route chat commands through bridge
-        msg_type = msg.get("type", "")
-        if msg_type == "chat.send":
-            self._handle_chat_send(msg)
-        elif msg_type == "chat.cancel":
-            self._handle_chat_cancel(msg)
-        elif msg_type == "project.list_recent":
-            self._handle_project_list_recent(msg)
-        elif msg_type == "conversation.list":
-            self._handle_conversation_list(msg)
-        elif msg_type == "conversation.select":
-            self._handle_conversation_select(msg)
-        elif msg_type == "drone.list_recent":
-            self._handle_drone_list_recent(msg)
-        elif msg_type == "drone.status":
-            self._handle_drone_status(msg)
-        elif msg_type == "receipt.list_recent":
-            self._handle_receipt_list_recent(msg)
-        elif msg_type == "pair.verify":
-            self._handle_pair_verify(msg)
-        elif msg_type == "pair.cancel":
-            self._handle_pair_cancel(msg)
-        elif msg_type == "companion.verify":
-            self._handle_companion_verify(msg)
-        elif msg_type == "conversation.history":
-            self._handle_conversation_history(msg)
+        self._router.dispatch(msg)
 
     # ── Bridge chat handlers ────────────────────────────────
 
@@ -447,27 +455,27 @@ class CompanionManager(QObject):
         project_id = (
             msg.get("project_id")
             or payload.get("project_id", "")
-            or self._current_project_id
+            or self._state.current_project_id
         )
         conversation_id = (
             msg.get("conversation_id")
             or payload.get("conversation_id", "")
-            or self._current_conversation_id
+            or self._state.current_conversation_id
         )
         if not project_id or not conversation_id:
             reply_error("Open or create a conversation in Aura Desktop, then try again.")
             return
 
-        self._current_project_id = project_id
-        self._current_conversation_id = conversation_id
-        self._conversation_loaded = True
+        self._state.current_project_id = project_id
+        self._state.current_conversation_id = conversation_id
+        self._state.conversation_loaded = True
 
         if self._bridge.is_running():
             reply_error("A conversation is already in progress on the desktop.")
             return
 
-        self._pending_chat_id = chat_id
-        self._pending_chat_phone_id = sender_phone_id
+        self._state.pending_chat_id = chat_id
+        self._state.pending_chat_phone_id = sender_phone_id
         self._bridge.history.append_user_text(text)
         model = resolve_role_default_model(self._settings.planner_provider, "planner")
         thinking = self._settings.default_planner_thinking
@@ -477,136 +485,22 @@ class CompanionManager(QObject):
         if self._bridge and self._bridge.is_running():
             self._bridge.request_cancel()
 
-    # ── Phase 3 command handlers ───────────────────────────────
-
-    def _handle_project_list_recent(self, msg: dict) -> None:
-        """List recent projects."""
-        if not self._workspace_root:
-            self._reply_to_sender(msg, "project.list_result", {
-                "projects": [],
-            })
-            return
-        try:
-            store = ProjectStore()
-            projects = store.list_projects()
-            projects.sort(key=lambda p: p.updated_at, reverse=True)
-            dtos = []
-            for p in projects[:20]:
-                thread_count = 0
-                try:
-                    threads = store.list_threads(p)
-                    thread_count = len(threads)
-                except Exception as exc:
-                    logger.debug("[Companion] thread count for %s: %s", p.id, exc)
-                dtos.append(CompanionProject(
-                    id=p.id,
-                    name=p.name,
-                    updated_at=p.updated_at,
-                    thread_count=thread_count,
-                ).to_dict())
-            self._reply_to_sender(msg, "project.list_result", {
-                "projects": dtos,
-            })
-        except Exception as exc:
-            logger.error("[Companion] project.list_recent error: %s", exc)
-            self._reply_to_sender(msg, "project.list_result", {
-                "projects": [],
-                "error": str(exc),
-            })
-
-    def _handle_conversation_list(self, msg: dict) -> None:
-        """List threads for the current project, or a specified project."""
-        payload = msg.get("payload", {})
-        project_id = payload.get("project_id", self._current_project_id)
-        if not project_id or not self._workspace_root:
-            self._reply_to_sender(msg, "conversation.list_result", {
-                "threads": [],
-            })
-            return
-        try:
-            store = ProjectStore()
-            project = store.load_project(project_id)
-            if not project:
-                self._reply_to_sender(msg, "conversation.list_result", {
-                    "threads": [],
-                    "error": "Project not found",
-                })
-                return
-            threads = store.list_threads(project)
-            threads.sort(key=lambda t: t.updated_at, reverse=True)
-            dtos = []
-            for t in threads[:50]:
-                dtos.append(CompanionThread(
-                    id=t.id,
-                    title=t.title or "Untitled",
-                    updated_at=t.updated_at,
-                    is_current=(t.id == self._current_conversation_id),
-                ).to_dict())
-            self._reply_to_sender(msg, "conversation.list_result", {
-                "threads": dtos,
-            })
-        except Exception as exc:
-            logger.error("[Companion] conversation.list error: %s", exc)
-            self._reply_to_sender(msg, "conversation.list_result", {
-                "threads": [],
-                "error": str(exc),
-            })
-
-    def _handle_conversation_select(self, msg: dict) -> None:
-        """Select a thread as the active conversation."""
-        payload = msg.get("payload", {})
-        thread_id = payload.get("thread_id", "")
-        project_id = payload.get("project_id", self._current_project_id)
-        if not thread_id or not project_id:
-            self._reply_to_sender(msg, "conversation.selected", {
-                "error": "Missing thread_id or project_id",
-            })
-            return
-        try:
-            store = ProjectStore()
-            project = store.load_project(project_id)
-            if not project:
-                self._reply_to_sender(msg, "conversation.selected", {
-                    "error": "Project not found",
-                })
-                return
-            thread = store.load_thread(project, thread_id)
-            if not thread:
-                self._reply_to_sender(msg, "conversation.selected", {
-                    "error": "Thread not found",
-                })
-                return
-            if thread.conversation_path is None:
-                self._reply_to_sender(msg, "conversation.selected", {
-                    "error": "Thread has no conversation file",
-                })
-                return
-            if self._bridge and self._bridge.is_running():
-                self._reply_to_sender(msg, "conversation.selected", {
-                    "error": "Desktop is busy",
-                })
-                return
-            self._pending_select_msg = msg
-            self.conversation_selected_by_companion.emit(project.root_path, thread.conversation_path)
-        except Exception as exc:
-            logger.error("[Companion] conversation.select error: %s", exc)
-            self._reply_to_sender(msg, "conversation.selected", {
-                "error": str(exc),
-            })
+    # │ Read-only command handlers are now in aura/companion/commands/
+    # │ and dispatched via self._router in _on_raw_message.
 
     def complete_conversation_select(self, success: bool, error_text: str = "") -> None:
         """Called by MainWindow after attempting to load a companion-requested thread."""
-        msg = self._pending_select_msg
-        self._pending_select_msg = None
+        msg = self._state.pending_select_msg
+        self._state.pending_select_msg = None
         if msg is None:
             return
         payload = msg.get("payload", {})
         thread_id = payload.get("thread_id", "")
-        project_id = payload.get("project_id", self._current_project_id)
+        project_id = payload.get("project_id", self._state.current_project_id)
         if success:
-            self._current_project_id = project_id
-            self._current_conversation_id = thread_id
-            self._conversation_loaded = True
+            self._state.current_project_id = project_id
+            self._state.current_conversation_id = thread_id
+            self._state.conversation_loaded = True
             self._reply_to_sender(msg, "conversation.selected", {
                 "project_id": project_id,
                 "thread_id": thread_id,
@@ -619,182 +513,21 @@ class CompanionManager(QObject):
                 "error": error_text,
             })
 
-    def _handle_conversation_history(self, msg: dict) -> None:
-        payload = msg.get("payload", {})
-        project_id = payload.get("project_id") or self._current_project_id
-        thread_id = payload.get("thread_id") or self._current_conversation_id
-        if not project_id or not thread_id:
-            self._reply_to_sender(msg, "conversation.history_result", {
-                "project_id": project_id,
-                "thread_id": thread_id,
-                "messages": [],
-                "error": "Missing project_id or thread_id",
-            })
-            return
-        try:
-            if self._conversation_loaded and thread_id == self._current_conversation_id and self._bridge is not None:
-                raw_messages = self._bridge.history.messages
-            else:
-                store = ProjectStore()
-                project = store.load_project(project_id)
-                if not project:
-                    self._reply_to_sender(msg, "conversation.history_result", {
-                        "project_id": project_id,
-                        "thread_id": thread_id,
-                        "messages": [],
-                        "error": "Project not found",
-                    })
-                    return
-                thread = store.load_thread(project, thread_id)
-                if not thread or thread.conversation_path is None:
-                    self._reply_to_sender(msg, "conversation.history_result", {
-                        "project_id": project_id,
-                        "thread_id": thread_id,
-                        "messages": [],
-                        "error": "Thread or conversation file not found",
-                    })
-                    return
-                loaded = load_conversation(thread.conversation_path)
-                raw_messages = loaded.history.messages
 
-            mobile_messages: list[dict] = []
-            for m in raw_messages:
-                role = m.get("role", "")
-                if role in ("tool", "system"):
-                    continue
-                content = m.get("content")
-                if role == "user":
-                    if isinstance(content, str):
-                        text = content
-                    elif isinstance(content, list):
-                        parts = [
-                            p.get("text", "")
-                            for p in content
-                            if isinstance(p, dict) and p.get("type") == "text"
-                        ]
-                        text = " ".join(parts)
-                    else:
-                        continue
-                    if not text:
-                        continue
-                    mobile_messages.append({"role": role, "content": text})
-                elif role == "assistant":
-                    if not isinstance(content, str) or not content:
-                        continue
-                    mobile_messages.append({"role": role, "content": content})
-
-            self._reply_to_sender(msg, "conversation.history_result", {
-                "project_id": project_id,
-                "thread_id": thread_id,
-                "messages": mobile_messages,
-            })
-        except Exception as exc:
-            logger.error("[Companion] conversation.history error: %s", exc)
-            self._reply_to_sender(msg, "conversation.history_result", {
-                "project_id": project_id,
-                "thread_id": thread_id,
-                "messages": [],
-                "error": str(exc),
-            })
-
-    def _handle_drone_list_recent(self, msg: dict) -> None:
-        """List recent drone runs."""
-        if not self._workspace_root:
-            self._reply_to_sender(msg, "drone.list_result", {
-                "runs": [],
-            })
-            return
-        try:
-            root = Path(self._workspace_root)
-            runs = RunHistoryStore.list_runs(root, limit=20)
-            summaries = []
-            for r in runs:
-                summaries.append(ActiveRunSummary(
-                    run_id=r.get("run_id", ""),
-                    kind="drone",
-                    label=r.get("drone_name", r.get("drone_id", "Drone")),
-                    status=r.get("status", "unknown"),
-                    started_at=r.get("started_at"),
-                ).to_dict())
-            self._reply_to_sender(msg, "drone.list_result", {
-                "runs": summaries,
-            })
-        except Exception as exc:
-            logger.error("[Companion] drone.list_recent error: %s", exc)
-            self._reply_to_sender(msg, "drone.list_result", {
-                "runs": [],
-                "error": str(exc),
-            })
-
-    def _handle_drone_status(self, msg: dict) -> None:
-        """Report current drone runner status."""
-        if self._drone_runner is not None:
-            try:
-                state = self._drone_runner.run_state()
-                from datetime import datetime
-                started_at_str = datetime.fromtimestamp(state.started_at).isoformat() if state.started_at else None
-                summary = ActiveRunSummary(
-                    run_id=state.run_id,
-                    kind="drone",
-                    label=state.drone.name if hasattr(state, 'drone') and state.drone else "Drone",
-                    status=state.status,
-                    started_at=started_at_str,
-                ).to_dict()
-                self._reply_to_sender(msg, "drone.status_result", {
-                    "running": True,
-                    "run": summary,
-                })
-                return
-            except Exception as exc:
-                logger.error("[Companion] drone.status error: %s", exc)
-        self._reply_to_sender(msg, "drone.status_result", {
-            "running": False,
-            "run": None,
-        })
-
-    def _handle_receipt_list_recent(self, msg: dict) -> None:
-        """List recent receipts (same data as drone runs, ReceiptSummary DTO)."""
-        if not self._workspace_root:
-            self._reply_to_sender(msg, "receipt.list_result", {
-                "receipts": [],
-            })
-            return
-        try:
-            root = Path(self._workspace_root)
-            runs = RunHistoryStore.list_runs(root, limit=20)
-            receipts = []
-            for r in runs:
-                receipts.append(ReceiptSummary(
-                    run_id=r.get("run_id", ""),
-                    kind="drone",
-                    label=r.get("drone_name", r.get("drone_id", "Drone")),
-                    status=r.get("status", "unknown"),
-                    completed_at=r.get("ended_at", r.get("started_at", "")),
-                    summary=r.get("summary", ""),
-                ).to_dict())
-            self._reply_to_sender(msg, "receipt.list_result", {
-                "receipts": receipts,
-            })
-        except Exception as exc:
-            logger.error("[Companion] receipt.list_recent error: %s", exc)
-            self._reply_to_sender(msg, "receipt.list_result", {
-                "receipts": [],
-                "error": str(exc),
-            })
 
     def _on_bridge_content_delta(self, text: str) -> None:
         self.send_event(make_envelope("chat.message.delta", {
             "role": "assistant",
             "type": "content",
             "text": text,
-        }, desktop_id=self._pending_chat_phone_id, in_response_to=self._pending_chat_id))
+        }, desktop_id=self._state.pending_chat_phone_id, in_response_to=self._state.pending_chat_id))
 
     def _on_bridge_reasoning_delta(self, text: str) -> None:
         self.send_event(make_envelope("chat.message.delta", {
             "role": "assistant",
             "type": "reasoning",
             "text": text,
-        }, desktop_id=self._pending_chat_phone_id, in_response_to=self._pending_chat_id))
+        }, desktop_id=self._state.pending_chat_phone_id, in_response_to=self._state.pending_chat_id))
 
     def _on_bridge_stream_done(self, finish_reason: str, full_message: dict) -> None:
         content = full_message.get("content", "") if isinstance(full_message, dict) else ""
@@ -805,23 +538,23 @@ class CompanionManager(QObject):
             "role": "assistant",
             "text": content or "…",
             "finish_reason": finish_reason,
-        }, desktop_id=self._pending_chat_phone_id, in_response_to=self._pending_chat_id))
-        self._pending_chat_id = ""
-        self._pending_chat_phone_id = ""
+        }, desktop_id=self._state.pending_chat_phone_id, in_response_to=self._state.pending_chat_id))
+        self._state.pending_chat_id = ""
+        self._state.pending_chat_phone_id = ""
 
     def _on_bridge_api_error(self, status_code: int, message: str) -> None:
         self.send_event(make_envelope("chat.error", {
             "message": f"API error ({status_code}): {message}",
-        }, desktop_id=self._pending_chat_phone_id, in_response_to=self._pending_chat_id))
-        self._pending_chat_id = ""
-        self._pending_chat_phone_id = ""
+        }, desktop_id=self._state.pending_chat_phone_id, in_response_to=self._state.pending_chat_id))
+        self._state.pending_chat_id = ""
+        self._state.pending_chat_phone_id = ""
 
     def _on_bridge_finished(self) -> None:
-        if self._pending_chat_id:
+        if self._state.pending_chat_id:
             self.send_event(make_envelope("chat.message.complete", {
                 "role": "assistant",
                 "text": "",
                 "finish_reason": "cancelled",
-            }, desktop_id=self._pending_chat_phone_id, in_response_to=self._pending_chat_id))
-            self._pending_chat_id = ""
-            self._pending_chat_phone_id = ""
+            }, desktop_id=self._state.pending_chat_phone_id, in_response_to=self._state.pending_chat_id))
+            self._state.pending_chat_id = ""
+            self._state.pending_chat_phone_id = ""
