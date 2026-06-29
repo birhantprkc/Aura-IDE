@@ -10,11 +10,12 @@ from aura.conversation.dispatch import WorkerDispatchResult
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.tool_runner import ToolRunner
+from aura.conversation.verification_progress import VerificationProgressTracker
 from aura.sandbox import SandboxResult
 
 
 def _make_runner(tmp_path: Path) -> ToolRunner:
-    return ToolRunner(History(), tmp_path, LoopDetector())
+    return ToolRunner(History(), tmp_path, LoopDetector(), VerificationProgressTracker())
 
 
 def test_terminal_command_default_timeout_is_300_seconds(tmp_path: Path):
@@ -139,6 +140,59 @@ def test_terminal_output_events_stream_chunks(tmp_path: Path):
     assert len(tool_results) == 1
     payload = json.loads(tool_results[0].result)
     assert payload["ok"] is True
+
+
+def test_worker_validation_stall_trips_on_repeated_failure_fingerprint(tmp_path: Path):
+    runner = _make_runner(tmp_path)
+    sandbox = MagicMock()
+    sandbox.run_terminal_command.side_effect = [
+        SandboxResult(
+            ok=False,
+            stdout="FAILED tests/test_example.py::test_widget - AssertionError\n1 failed in 0.11s\n",
+            stderr="",
+            exit_code=1,
+        ),
+        SandboxResult(
+            ok=False,
+            stdout="FAILED tests/test_example.py::test_widget - AssertionError\n1 failed in 0.22s\n",
+            stderr="",
+            exit_code=1,
+        ),
+        SandboxResult(
+            ok=False,
+            stdout="FAILED tests/test_example.py::test_widget - AssertionError\n1 failed in 0.33s\n",
+            stderr="",
+            exit_code=1,
+        ),
+    ]
+
+    loop_infos = []
+    with (
+        patch("aura.conversation.tool_runner.SandboxExecutor", return_value=sandbox),
+        patch("aura.conversation.tool_runner.load_settings") as load_settings,
+    ):
+        load_settings.return_value.sandbox_mode = "host"
+        for index in range(3):
+            loop_infos.append(
+                runner.handle_terminal_command(
+                    tool_call_id=f"term-{index}",
+                    args={"command": "pytest tests/test_example.py -q"},
+                    on_event=lambda ev: None,
+                    cancel_event=threading.Event(),
+                    mode="worker",
+                )
+            )
+
+    assert not loop_infos[0].get("phase_boundary")
+    assert not loop_infos[1].get("phase_boundary")
+    assert loop_infos[2]["phase_boundary"] is True
+    assert loop_infos[2]["recoverable"] is True
+    assert loop_infos[2]["reason"] == "verification_not_converging"
+    assert loop_infos[2]["verification_stall"] == {
+        "fingerprint": ["tests/test_example.py::test_widget"],
+        "repeated": 3,
+        "threshold": 3,
+    }
 
 
 def test_recoverable_dispatch_result_emits_nonfailed_tool_event(tmp_path: Path):

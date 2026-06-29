@@ -90,6 +90,7 @@ from aura.conversation.tools._types import (
     ApprovalRequest,
 )
 from aura.conversation.tools.registry import ToolRegistry
+from aura.conversation.verification_progress import VerificationProgressTracker
 from aura.conversation.worker_final_validation import (
     WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION,
     emit_explicit_validation_result,
@@ -253,10 +254,12 @@ class ConversationManager:
         self._history = history
         self._tools = tool_registry
         self._loop_detector = LoopDetector()
+        self._verification_tracker = VerificationProgressTracker()
         self._tool_runner = ToolRunner(
             history=self._history,
             workspace_root=self._tools.workspace_root,
             loop_detector=self._loop_detector,
+            verification_tracker=self._verification_tracker,
         )
         self._planner_refresh = PlannerRefreshState()
 

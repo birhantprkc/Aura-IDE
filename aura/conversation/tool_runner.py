@@ -22,35 +22,40 @@ from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.spec_quality import validate_worker_dispatch_spec
 from aura.conversation.terminal_policy import worker_terminal_command_allowed
+from aura.conversation.tool_runner_terminal_policy import (
+    _CD_WRAPPER_RE,
+    matches_explicit_validation,
+    resolve_terminal_timeout,
+)
 from aura.conversation.validation_orchestrator import (
     MALFORMED_VALIDATION_COMMAND,
     classify_validation_run,
     looks_like_validation_command,
     parse_validation_command,
 )
+from aura.conversation.verification_progress import VerificationProgressTracker
 from aura.project_env import (
     build_project_command,
     build_project_command_rewrite,
     project_environment_missing_payload,
 )
 from aura.sandbox import SandboxExecutor, SandboxResult, WatchResult
-from aura.conversation.tool_runner_terminal_policy import (
-    _CD_WRAPPER_RE,
-    is_py_compile_command,
-    matches_explicit_validation,
-    resolve_terminal_timeout,
-)
 
 
 class ToolRunner:
     """Owns execution of dispatch and terminal tools."""
 
     def __init__(
-        self, history: History, workspace_root: Path, loop_detector: LoopDetector
+        self,
+        history: History,
+        workspace_root: Path,
+        loop_detector: LoopDetector,
+        verification_tracker: VerificationProgressTracker,
     ) -> None:
         self._history = history
         self._workspace_root = workspace_root
         self._loop_detector = loop_detector
+        self._verification_tracker = verification_tracker
 
     def set_workspace_root(self, root: Path) -> None:
         self._workspace_root = root
@@ -347,6 +352,7 @@ class ToolRunner:
                 or looks_like_validation_command(validation_command.command)
             )
         )
+        stall: dict[str, Any] | None = None
         if should_classify_validation:
             run_result = classify_validation_run(
                 validation_command,
@@ -355,6 +361,11 @@ class ToolRunner:
                 ok=ok,
             )
             payload_dict.update(run_result.metadata())
+            stall = self._verification_tracker.observe(
+                command=validation_command.command,
+                classification=run_result.classification,
+                output=full_output,
+            )
         payload = json.dumps(payload_dict, ensure_ascii=False)
 
         observed = self._loop_detector.observe(
@@ -366,6 +377,8 @@ class ToolRunner:
         )
         payload = observed.content
         loop_info = observed.info
+        if loop_info is None and stall is not None:
+            loop_info = stall
 
         self._history.append_tool_result(tool_call_id, payload)
         on_event(
@@ -475,5 +488,4 @@ class ToolRunner:
         )
 
         return {"_terminal_payload": payload_dict}
-
 
