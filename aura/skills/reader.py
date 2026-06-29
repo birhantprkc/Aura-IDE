@@ -164,14 +164,41 @@ def _read_refined_skills(workspace_root: str | Path) -> list[Skill]:
 
 
 def _read_user_authored_skills(workspace_root: str | Path) -> list[Skill]:
-    """Read user-authored skill JSON files from .aura/skills/authored/."""
+    """Read user-authored skills from .aura/skills/authored/.
+
+    Primary format: .aura/skills/authored/<skill_id>/SKILL.md.
+    Compatibility format: flat .json files with one object or an object list.
+    """
     try:
         authored_dir = Path(workspace_root) / ".aura" / "skills" / "authored"
         if not authored_dir.is_dir():
             return []
 
         skills: list[Skill] = []
-        for entry in sorted(authored_dir.iterdir()):
+        for entry in sorted(authored_dir.iterdir(), key=lambda path: path.name):
+            if entry.is_dir():
+                skill_path = entry / "SKILL.md"
+                if not skill_path.is_file():
+                    continue
+                try:
+                    text = skill_path.read_text(encoding="utf-8").strip()
+                except Exception:
+                    logger.debug("Failed to read user-authored skill %s", skill_path, exc_info=True)
+                    continue
+                if not text:
+                    continue
+                skills.append(
+                    Skill(
+                        text=text,
+                        task_kinds=(),
+                        path_globs=(),
+                        model=None,
+                        provenance=SkillProvenance.USER_AUTHORED,
+                        origin=(("skill_id", entry.name),),
+                    )
+                )
+                continue
+
             if entry.suffix != ".json":
                 continue
             try:
@@ -189,7 +216,7 @@ def _read_user_authored_skills(workspace_root: str | Path) -> list[Skill]:
             for item in items:
                 if not isinstance(item, dict):
                     continue
-                text = item.get("text", "")
+                text = str(item.get("text", "")).strip()
                 if not text:
                     continue
                 task_kinds = tuple(item.get("task_kinds", []) or [])
@@ -221,7 +248,7 @@ def read_skills(
     *,
     window_days: int = 30,
 ) -> list[Skill]:
-    """Read all skills: bundled first, then graduated hazards adapted as skills.
+    """Read all skills: authored first, then bundled, graduated, and refined.
 
     Returns empty list on any failure — never propagates exceptions.
     """

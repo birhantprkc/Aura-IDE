@@ -385,15 +385,12 @@ def test_skill_pack_loads_bundled_skills_on_drone_terrain_skipped_on_unrelated_t
 
 def test_skill_pack_loads_user_authored_skill_by_content(tmp_path):
     authored_dir = tmp_path / ".aura" / "skills" / "authored"
-    authored_dir.mkdir(parents=True)
-    (authored_dir / "auth.json").write_text(
-        json.dumps(
-            {
-                "text": (
-                    "When editing authentication token refresh, "
-                    "validate session renewal behavior."
-                )
-            }
+    skill_dir = authored_dir / "auth_token_refresh"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        (
+            "When editing authentication token refresh, "
+            "validate session renewal behavior."
         ),
         encoding="utf-8",
     )

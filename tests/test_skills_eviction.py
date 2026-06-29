@@ -861,6 +861,45 @@ class _FakeSourceUtility:
 
 
 class TestIntegrationScenario:
+    def test_user_authored_skill_md_folder_is_sticky(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        text = "When editing authentication token refresh, validate session renewal behavior."
+        skill_dir = tmp_path / ".aura" / "skills" / "authored" / "auth_token_refresh"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(text, encoding="utf-8")
+        authored_skill = Skill(
+            text=text,
+            task_kinds=(),
+            path_globs=(),
+            model=None,
+            provenance=SkillProvenance.USER_AUTHORED,
+            origin=(("skill_id", "auth_token_refresh"),),
+        )
+        skill_id = compute_skill_id(authored_skill)
+        monkeypatch.setattr(
+            "aura.skills.eviction.derive_source_utility",
+            lambda _ws, min_arm=3: {
+                skill_id: _FakeSourceUtility(
+                    status="measured",
+                    lift=-0.75,
+                    loaded_n=10,
+                    not_loaded_n=10,
+                    task_kind="bugfix",
+                )
+            },
+        )
+
+        verdicts = compute_eviction_verdicts(tmp_path, task_kind="bugfix", min_arm=3)
+        verdict = next(v for v in verdicts if v.skill_id == skill_id)
+
+        assert verdict.provenance == SkillProvenance.USER_AUTHORED
+        assert verdict.would_evict is False
+        assert verdict.reason == "sticky provenance"
+        assert verdict.lift is None
+
     def test_mixed_scenario(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """2 bundled (always retained), 1 graduated with negative lift (evicted),
         1 graduated with positive lift (retained)."""
