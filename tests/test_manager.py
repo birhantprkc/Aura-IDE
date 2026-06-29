@@ -2153,7 +2153,7 @@ class TestWorkerFinishMemoization:
             iter([_make_done(tool_calls=[_tool_call("w1", "write_file", {"path": "aura/module.py", "content": "X = 1\n"})])]),
             iter([_make_done(content="done once")]),
             iter([_make_done(tool_calls=[_tool_call("w2", "write_file", {"path": "tests/test_module.py", "content": "def test_x(): pass\n"})])]),
-            iter([_make_done(content="done twice")]),
+            iter([_make_done(content="done twice. Validation: pytest passed.")]),
         ]
 
         validation_results = iter([
@@ -2213,7 +2213,7 @@ class TestWorkerFinishMemoization:
             iter([_make_done(tool_calls=[_tool_call("w1", "write_file", write_args)])]),
             iter([_make_done(content="done once")]),
             iter([_make_done(tool_calls=[_tool_call("w2", "write_file", write_args)])]),
-            iter([_make_done(content="done twice")]),
+            iter([_make_done(content="done twice. Validation: pytest passed.")]),
         ]
 
         validation_results = iter([

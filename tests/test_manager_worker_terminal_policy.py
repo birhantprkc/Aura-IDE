@@ -585,7 +585,16 @@ def test_worker_structured_read_and_patch_file_are_unaffected(
         iter([_done_with_tool("read1", "read_file", {"path": "docs/notes.md"})]),
         iter([_done_with_tool("edit1", "patch_file", {"path": "docs/notes.md", "edits": []})]),
         iter([_done_with_tool("term1", "run_terminal_command", {"command": "python -m py_compile aura/config.py"})]),
-        iter([Done(finish_reason="stop", full_message={"role": "assistant", "content": "Done.", "reasoning_content": None})]),
+        iter([
+            Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": "Done. Validation: python -m py_compile aura/config.py passed.",
+                    "reasoning_content": None,
+                },
+            ),
+        ]),
     ]
 
     with (
@@ -700,6 +709,62 @@ def test_worker_flow_broad_ratchet_filters_and_blocks_broad_tools(
     assert payload["recoverable"] is True
 
 
+def test_worker_flow_blocks_initial_full_read_of_known_large_source(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, tools = worker_manager
+    tools.tool_defs.return_value = _tool_defs(
+        "read_file",
+        "read_file_outline",
+        "read_file_range",
+        "patch_file",
+    )
+    events: list[Event] = []
+    worker_backend.side_effect = [
+        iter([
+            _done_with_tool(
+                "read1",
+                "read_file",
+                {"path": "aura/conversation/manager.py"},
+                content="Let me start by reading the full contents of aura/conversation/manager.py.",
+            ),
+        ]),
+        iter([
+            Done(
+                finish_reason="stop",
+                full_message={"role": "assistant", "content": "Done.", "reasoning_content": None},
+            ),
+        ]),
+    ]
+
+    manager.send(
+        on_event=events.append,
+        approval_cb=_approval_cb,
+        cancel_event=threading.Event(),
+        model="deepseek-chat",
+        thinking="off",
+        hook_name="generate_worker_code",
+    )
+
+    tools.execute.assert_not_called()
+    blocked_results = [
+        event for event in events
+        if isinstance(event, ToolResult) and event.name == "read_file"
+    ]
+    assert blocked_results
+    payload = json.loads(blocked_results[-1].result)
+    assert payload["failure_class"] == "worker_flow_large_source_full_read_restricted"
+    assert payload["blocked_paths"] == ["aura/conversation/manager.py"]
+    assert payload["suggested_next_tool"] == "read_file_outline"
+    assert any(
+        isinstance(message.get("content"), str)
+        and "do not full-read known large source files" in message["content"]
+        for message in manager.history.messages
+        if message.get("role") == "user"
+    )
+
+
 def test_worker_write_final_is_held_until_validation_runs(
     worker_manager: tuple[ConversationManager, MagicMock],
     worker_backend: MagicMock,
@@ -735,6 +800,23 @@ def test_worker_write_final_is_held_until_validation_runs(
                 },
             ),
         ]),
+        iter([
+            ContentDelta(
+                "Changed docs/notes.md. Validation: python -m py_compile aura/config.py passed. "
+                "Acceptance: updated note verified."
+            ),
+            Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": (
+                        "Changed docs/notes.md. Validation: python -m py_compile aura/config.py passed. "
+                        "Acceptance: updated note verified."
+                    ),
+                    "reasoning_content": None,
+                },
+            ),
+        ]),
     ]
 
     with (
@@ -761,7 +843,8 @@ def test_worker_write_final_is_held_until_validation_runs(
         )
 
     assert [event.text for event in events if isinstance(event, ContentDelta)] == [
-        "Done after validation."
+        "Changed docs/notes.md. Validation: python -m py_compile aura/config.py passed. "
+        "Acceptance: updated note verified."
     ]
     assistant_messages = [
         message.get("content")
@@ -769,7 +852,8 @@ def test_worker_write_final_is_held_until_validation_runs(
         if message.get("role") == "assistant"
     ]
     assert "Done before validation." not in assistant_messages
-    assert "Done after validation." in assistant_messages
+    assert "Done after validation." not in assistant_messages
+    assert any("Validation: python -m py_compile aura/config.py passed" in str(message) for message in assistant_messages)
     user_messages = [
         message.get("content")
         for message in manager.history.messages
@@ -777,6 +861,10 @@ def test_worker_write_final_is_held_until_validation_runs(
     ]
     assert any(
         "Worker Flow: files were changed and validation has not run yet" in str(message)
+        for message in user_messages
+    )
+    assert any(
+        "Worker final report is missing explicit validation or acceptance proof" in str(message)
         for message in user_messages
     )
 

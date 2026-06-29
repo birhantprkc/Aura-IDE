@@ -49,11 +49,23 @@ WORKER_FLOW_LARGE_FILE_SEAM_TEXT = (
     "needs_planner_resolution if the seam cannot be located quickly."
 )
 
+WORKER_FLOW_LARGE_SOURCE_READ_TEXT = (
+    "Worker Flow: do not full-read known large source files. Use read_file_outline "
+    "to anchor symbols, then read_file_range around the smallest relevant seam."
+)
+
 WORKER_FLOW_VALIDATION_REQUIRED_TEXT = (
     "Worker Flow: files were changed and validation has not run yet. Run the "
     "focused validation command now. Do not summarize or plan. Use "
     "run_terminal_command with the smallest relevant py_compile or pytest "
     "command, then finish only after it passes."
+)
+
+KNOWN_LARGE_SOURCE_PATHS: frozenset[str] = frozenset(
+    {
+        "aura/conversation/dispatch.py",
+        "aura/conversation/manager.py",
+    }
 )
 
 
@@ -162,10 +174,15 @@ class WorkerFlowHarness:
         *,
         large_file_bytes: int = 80_000,
         large_file_lines: int = 900,
+        large_source_paths: frozenset[str] | set[str] | tuple[str, ...] | None = None,
     ) -> None:
         self.state = state or WorkerFlowState()
         self.large_file_bytes = large_file_bytes
         self.large_file_lines = large_file_lines
+        self.large_source_paths = frozenset(
+            self._normalize_path(path)
+            for path in (large_source_paths or KNOWN_LARGE_SOURCE_PATHS)
+        )
 
     @property
     def pending_steering_message(self) -> str:
@@ -201,12 +218,42 @@ class WorkerFlowHarness:
         return bool(self.state.broad_orientation_restricted)
 
     def should_block_tool(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        args = args if isinstance(args, dict) else {}
+        large_source_paths = self._blocked_large_source_full_read_paths(name, args)
+        if large_source_paths:
+            self._queue_large_source_read_steering()
+            return {
+                "ok": False,
+                "tool": name,
+                "args": args,
+                "failure_class": "worker_flow_large_source_full_read_restricted",
+                "recoverable": True,
+                "internal_recovery_steer": True,
+                "worker_flow_block": True,
+                "blocked_paths": large_source_paths,
+                "error": (
+                    "Worker Flow blocked a full-file read of known large source "
+                    f"file(s): {', '.join(large_source_paths)}."
+                ),
+                "suggested_tool": "read_file_outline",
+                "suggested_next_tool": "read_file_outline",
+                "suggested_next_action": (
+                    "Use read_file_outline on the large source file first, then "
+                    "read_file_range around the smallest relevant symbol or seam. "
+                    "Split unrelated small-file reads into a separate read_file/read_files call."
+                ),
+                "allowed_tool_groups": {
+                    "targeted_reads": sorted(TARGETED_READ_TOOLS),
+                    "writes": sorted(WRITE_TOOLS),
+                    "validation": sorted(VALIDATION_TOOLS),
+                },
+            }
         if not self.should_restrict_broad_orientation() or name not in BROAD_ORIENTATION_TOOLS:
             return None
         return {
             "ok": False,
             "tool": name,
-            "args": args if isinstance(args, dict) else {},
+            "args": args,
             "failure_class": "worker_flow_broad_orientation_restricted",
             "recoverable": True,
             "internal_recovery_steer": True,
@@ -482,14 +529,36 @@ class WorkerFlowHarness:
             )
             self.state.pending_steering_reason = reason
 
+    def _queue_large_source_read_steering(self) -> None:
+        if not self.state.pending_steering_message:
+            self.state.pending_steering_message = WORKER_FLOW_LARGE_SOURCE_READ_TEXT
+            self.state.pending_steering_reason = "large_source_full_read"
+
     def _clear_broad_orientation_restriction(self) -> None:
         self.state.broad_orientation_restricted = False
+
+    def _blocked_large_source_full_read_paths(self, name: str, args: dict[str, Any]) -> list[str]:
+        if name not in {"read_file", "read_files"}:
+            return []
+        return [
+            path
+            for path in _tool_paths(name, args)
+            if self._normalize_path(path) in self.large_source_paths
+        ]
+
+    def _normalize_path(self, path: str) -> str:
+        normalized = str(path).strip().replace("\\", "/")
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        return normalized
 
 
 __all__ = [
     "BROAD_ORIENTATION_TOOLS",
+    "KNOWN_LARGE_SOURCE_PATHS",
     "TARGETED_READ_TOOLS",
     "VALIDATION_TOOLS",
+    "WORKER_FLOW_LARGE_SOURCE_READ_TEXT",
     "WORKER_FLOW_VALIDATION_REQUIRED_TEXT",
     "WORKER_FLOW_STEERING_TEXT",
     "WORKER_FLOW_LARGE_FILE_SEAM_TEXT",

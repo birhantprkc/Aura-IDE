@@ -5,6 +5,7 @@ import json
 from aura.conversation.worker_flow import (
     BROAD_ORIENTATION_TOOLS,
     WORKER_FLOW_LARGE_FILE_SEAM_TEXT,
+    WORKER_FLOW_LARGE_SOURCE_READ_TEXT,
     WORKER_FLOW_STEERING_TEXT,
     WorkerFlowHarness,
     WorkerFlowPhase,
@@ -81,7 +82,7 @@ def test_broad_tool_call_during_ratchet_gets_recoverable_block() -> None:
         "Let me read the helper again. Now I have the full picture. Let me plan the hunks."
     )
 
-    block = harness.should_block_tool("read_file", {"path": "aura/conversation/manager.py"})
+    block = harness.should_block_tool("read_file", {"path": "aura/conversation/worker_flow.py"})
 
     assert block is not None
     assert block["ok"] is False
@@ -89,6 +90,41 @@ def test_broad_tool_call_during_ratchet_gets_recoverable_block() -> None:
     assert block["failure_class"] == "worker_flow_broad_orientation_restricted"
     assert "targeted reads" in block["suggested_next_action"]
     assert "read_file_outline" in block["allowed_tool_groups"]["targeted_reads"]
+
+
+def test_known_large_source_full_read_is_blocked_before_inventory_lock() -> None:
+    harness = WorkerFlowHarness()
+
+    block = harness.should_block_tool("read_file", {"path": "aura/conversation/manager.py"})
+
+    assert block is not None
+    assert block["ok"] is False
+    assert block["recoverable"] is True
+    assert block["failure_class"] == "worker_flow_large_source_full_read_restricted"
+    assert block["blocked_paths"] == ["aura/conversation/manager.py"]
+    assert block["suggested_next_tool"] == "read_file_outline"
+    assert "read_file_range" in block["suggested_next_action"]
+    assert harness.pending_steering_message == WORKER_FLOW_LARGE_SOURCE_READ_TEXT
+
+
+def test_read_files_batch_with_known_large_source_is_blocked() -> None:
+    harness = WorkerFlowHarness()
+
+    block = harness.should_block_tool(
+        "read_files",
+        {"paths": ["docs/notes.md", ".\\aura\\conversation\\manager.py"]},
+    )
+
+    assert block is not None
+    assert block["failure_class"] == "worker_flow_large_source_full_read_restricted"
+    assert block["blocked_paths"] == ["aura/conversation/manager.py"]
+    assert block["suggested_next_tool"] == "read_file_outline"
+
+
+def test_small_source_full_read_is_not_blocked_before_inventory_lock() -> None:
+    harness = WorkerFlowHarness()
+
+    assert harness.should_block_tool("read_file", {"path": "aura/config.py"}) is None
 
 
 def test_repeated_broad_reads_of_same_large_file_after_inventory_lock_produce_steering() -> None:

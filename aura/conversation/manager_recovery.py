@@ -27,13 +27,11 @@ from aura.conversation.path_utils import (
 )
 from aura.conversation.syntax_repair_state import (
     discard_syntax_validation_path,
-    has_terminal_syntax_failure,
     pop_syntax_repair_state,
     set_syntax_repair_state,
     syntax_repair_paths,
     syntax_repair_state_for_path,
 )
-from aura.conversation.syntax_terminal_state import update_syntax_state_from_terminal
 from aura.conversation.terminal_syntax import is_python_path
 from aura.conversation.tool_limits import WRITE_TOOLS
 from aura.conversation.worker_patch_state_policy import patch_file_state_block
@@ -42,7 +40,6 @@ from aura.conversation.worker_recovery_messages import (
 )
 from aura.conversation.worker_recovery_payload import (
     blocked_tool_result,
-    is_recoverable_phase_boundary,
     parse_tool_payload,
     record_recovery_block,
     recovery_payload,
