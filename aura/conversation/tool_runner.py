@@ -29,7 +29,6 @@ from aura.conversation.tool_runner_terminal_policy import (
 )
 from aura.conversation.validation_orchestrator import (
     MALFORMED_VALIDATION_COMMAND,
-    VALIDATION_COMMAND_UNRUNNABLE,
     classify_validation_run,
     looks_like_validation_command,
     parse_validation_command,
@@ -354,7 +353,6 @@ class ToolRunner:
             )
         )
         stall: dict[str, Any] | None = None
-        unrunnable: dict[str, Any] | None = None
         if should_classify_validation:
             run_result = classify_validation_run(
                 validation_command,
@@ -363,25 +361,6 @@ class ToolRunner:
                 ok=ok,
             )
             payload_dict.update(run_result.metadata())
-            if run_result.classification == VALIDATION_COMMAND_UNRUNNABLE:
-                unrunnable = {
-                    "ok": False,
-                    "recoverable": True,
-                    "phase_boundary": True,
-                    "reason": VALIDATION_COMMAND_UNRUNNABLE,
-                    "tool": "run_terminal_command",
-                    "message": (
-                        "Declared validation command "
-                        f"`{validation_command.command}` could not run from the "
-                        "workspace root because package.json was not found here. "
-                        "Planner should re-declare it scoped to the subproject "
-                        "that owns the manifest, for example by running it inside "
-                        "that directory or using the package manager's prefix flag."
-                    ),
-                    "validation_command_unrunnable": {
-                        "command": validation_command.command,
-                    },
-                }
             stall = self._verification_tracker.observe(
                 command=validation_command.command,
                 classification=run_result.classification,
@@ -398,8 +377,8 @@ class ToolRunner:
         )
         payload = observed.content
         loop_info = observed.info
-        if loop_info is None:
-            loop_info = unrunnable or stall
+        if loop_info is None and stall is not None:
+            loop_info = stall
 
         self._history.append_tool_result(tool_call_id, payload)
         on_event(
@@ -509,3 +488,4 @@ class ToolRunner:
         )
 
         return {"_terminal_payload": payload_dict}
+
