@@ -12,14 +12,22 @@ from aura.context_gearbox.sources import collect_source_text, iter_registered_so
 
 CONTEXT_PLACEHOLDER = "{TIER1_CONTEXT}"
 
+_RESPONSE_DISCIPLINE = """Response discipline:
+- Lead with the answer, decision, or next action.
+- Default to concise, useful replies.
+- Avoid essays, tutorials, and multi-section breakdowns unless the user asks for depth.
+- Normal chat should usually be 1-4 short paragraphs or up to 5 bullets.
+- Coding/workflow replies should emphasize target, decision, next step, and validation.
+- Give full detail when the user asks or when missing detail would make the answer unsafe or unusable."""
+
 _ROLE_PROMPTS = {
     RuntimeRole.PLANNER: """Planner role:
 - Choose the lane quickly: answer, ask one focused question, inspect minimally, or dispatch.
 - For code changes, default to dispatch_to_worker once the objective, target seam/files, constraints, and acceptance are known.
 - Inspect only the minimal repository context needed to name that capsule; do not keep researching after the capsule is actionable.
 - Own intent, target seam, allowed files, constraints, non-goals, and validation expectations.
-- Create a compact Worker task capsule and call dispatch_to_worker; that tool call is the Planner's deliverable.
-- Do not answer with a long plan when Worker should implement.
+- Create a Worker task capsule and call dispatch_to_worker; that tool call is the Planner's deliverable.
+- When implementation is needed, dispatch instead of presenting a plan for the user to execute.
 - Planner must not write code, sketch patches, plan hunks, or do exact implementation/edit reasoning.
 - Worker owns implementation reasoning, exact edits, validation execution, and final code-quality decisions.
 - Dispatch implementation work instead of coding directly.
@@ -28,9 +36,8 @@ _ROLE_PROMPTS = {
 - Execute only the requested change.
 - Use tools for repository reads and writes; read narrowly around the target seam.
 - Once enough facts are known, make the smallest safe edit instead of restating the plan.
-- Do not keep broad-orienting, comparing approaches, or narrating implementation strategy when an edit is possible.
-- Validate focused behavior after writes when practical.
-- Return a compact final result.""",
+- Do not keep broad-orienting or comparing approaches when an edit is possible.
+- Validate focused behavior after writes when practical.""",
     RuntimeRole.SINGLE: """Single-agent role:
 - Answer or edit within the workspace.
 - Read files before claiming repository facts.
@@ -40,7 +47,9 @@ _ROLE_PROMPTS = {
 
 def default_role_prompt(role: RuntimeRole | str) -> str:
     runtime_role = RuntimeRole.from_value(role)
-    return "\n\n".join([CONTEXT_PLACEHOLDER, _ROLE_PROMPTS[runtime_role]])
+    return "\n\n".join(
+        [CONTEXT_PLACEHOLDER, _RESPONSE_DISCIPLINE, _ROLE_PROMPTS[runtime_role]]
+    )
 
 
 PLANNER_SYSTEM_PROMPT = default_role_prompt(RuntimeRole.PLANNER)

@@ -125,7 +125,7 @@ def test_planner_prompt_blocks_exact_implementation_edit_reasoning():
     assert "Choose the lane quickly" in prompt
     assert "default to dispatch_to_worker" in prompt
     assert "that tool call is the Planner's deliverable" in prompt
-    assert "Do not answer with a long plan" in prompt
+    assert "dispatch instead of presenting a plan" in prompt
     assert "target seam, allowed files, constraints, non-goals" in prompt
     assert "Planner must not write code" in prompt
     assert "exact implementation/edit reasoning" in prompt
@@ -138,8 +138,25 @@ def test_worker_prompt_pushes_targeted_action_not_planning():
     assert "read narrowly around the target seam" in prompt
     assert "make the smallest safe edit" in prompt
     assert "Do not keep broad-orienting" in prompt
-    assert "narrating implementation strategy" in prompt
     assert "Validate focused behavior after writes" in prompt
+
+
+def test_shared_response_discipline_appears_in_default_role_prompts():
+    expected = [
+        "Response discipline:",
+        "Lead with the answer, decision, or next action.",
+        "Default to concise, useful replies.",
+        "Avoid essays, tutorials, and multi-section breakdowns",
+        "Normal chat should usually be 1-4 short paragraphs or up to 5 bullets.",
+        "Coding/workflow replies should emphasize target, decision, next step, and validation.",
+        "Give full detail when the user asks",
+    ]
+
+    for role in (RuntimeRole.PLANNER, RuntimeRole.WORKER, RuntimeRole.SINGLE):
+        prompt = default_role_prompt(role)
+        for text in expected:
+            assert text in prompt
+        assert prompt.count("Response discipline:") == 1
 
 
 def test_composer_returns_composed_context_with_core_kernel(tmp_path):

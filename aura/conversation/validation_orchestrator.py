@@ -30,6 +30,7 @@ NO_TESTS_COLLECTED = "no_tests_collected"
 TEST_SELECTION_EMPTY = "test_selection_empty"
 MISSING_DEPENDENCY = "missing_dependency"
 MISSING_EXECUTABLE = "missing_executable"
+VALIDATION_COMMAND_UNRUNNABLE = "validation_command_unrunnable"
 POLICY_BLOCKED = "policy_blocked"
 TIMEOUT = "timeout"
 ENVIRONMENT_ERROR = "environment_error"
@@ -190,6 +191,16 @@ def classify_validation_run(
         )
 
     lowered = output_text.lower()
+    if _is_node_package_manager_manifest_absent(validation_command, lowered):
+        return _result(
+            validation_command,
+            exit_code,
+            output_text,
+            VALIDATION_COMMAND_UNRUNNABLE,
+            counts_as_validation=False,
+            counts_as_product_failure=False,
+            user_action=ACTION_FIX_VALIDATION_COMMAND,
+        )
     if _is_missing_executable(lowered):
         return _result(validation_command, exit_code, output_text, MISSING_EXECUTABLE, user_action=ACTION_INSTALL_DEPENDENCY)
     if _is_missing_dependency(lowered):
@@ -314,6 +325,26 @@ def validation_issue_message(record: dict[str, Any]) -> str:
     return f"Validation command issue: `{raw or command}`."
 
 
+def _is_node_package_manager_manifest_absent(
+    validation_command: ValidationCommand,
+    lowered_output: str,
+) -> bool:
+    tokens = _split_tokens(validation_command.command)
+    if not tokens:
+        return False
+    first = _clean_token(tokens[0]).lower()
+    if first not in {"npm", "pnpm", "yarn"}:
+        return False
+    return "package.json" in lowered_output and any(
+        marker in lowered_output
+        for marker in (
+            "enoent",
+            "could not read package.json",
+            "no such file",
+        )
+    )
+
+
 def _result(
     command: ValidationCommand,
     exit_code: int | None,
@@ -357,6 +388,7 @@ __all__ = [
     "TEST_SELECTION_EMPTY",
     "TIMEOUT",
     "UNKNOWN_FAILURE",
+    "VALIDATION_COMMAND_UNRUNNABLE",
     "ValidationCommand",
     "ValidationRunResult",
     "classify_validation_payload",
