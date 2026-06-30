@@ -619,7 +619,8 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
             "implementation details here; the worker owns those decisions. Include a "
             "self-terminating run_command smoke check for any change that affects whether "
             "the app boots or a runnable entry point behaves. The worker will return a "
-            "summary of what it did."
+            "summary of what it did. Fill structured contract fields when knowable from "
+            "the request or repo context; they power Aura's pre-release quality gate."
         ),
         "parameters": {
             "type": "object",
@@ -692,7 +693,8 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                 "acceptance": {
                     "type": "string",
                     "description": (
-                        "Concrete pass/fail checks proving the task is done. Include "
+                        "Definition-of-done with concrete pass/fail clauses, not a vague "
+                        "summary. Include "
                         "validation commands when possible, concrete output/content checks "
                         "for generated or transformed output, and failure behavior checks "
                         "when parsing, config, user input, or batch processing is involved."
@@ -765,7 +767,7 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": (
-                        "Things explicitly not to build "
+                        "Explicit scope fences the critic should enforce "
                         "(e.g. ['No new CLI flags', 'No database migration']). "
                         "When provided, these override Non-Goals parsed from spec."
                     ),
@@ -775,7 +777,8 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                     "items": {"type": "string"},
                     "description": (
                         "Names of public symbols (classes, functions, constants) the Worker must define. "
-                        "The ContractGate will verify these exist in the output."
+                        "Populate when the task adds, exposes, renames, or requires a public API. "
+                        "The pre-release quality gate verifies these exist in the output."
                     ),
                 },
                 "expected_dataclass_fields": {
@@ -787,7 +790,8 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                     "description": (
                         "A mapping from class names to lists of required dataclass field names, "
                         "e.g. {'WorkerDispatchRequest': ['goal', 'files', 'spec']}. "
-                        "The ContractGate will verify these fields exist on the corresponding dataclass."
+                        "Populate when the task adds or changes dataclass fields. "
+                        "The pre-release quality gate verifies these fields exist on the corresponding dataclass."
                     ),
                 },
                 "forbidden_public_methods": {
@@ -795,7 +799,8 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                     "items": {"type": "string"},
                     "description": (
                         "Method names the Worker must NOT introduce on public classes, "
-                        "e.g. ['to_dict', 'from_dict'] on domain models that shouldn't have serialization."
+                        "e.g. ['to_dict', 'from_dict'] on domain models that shouldn't have serialization. "
+                        "Populate when the task explicitly forbids a public method."
                     ),
                 },
                 "forbidden_calls": {
@@ -803,7 +808,8 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                     "items": {"type": "string"},
                     "description": (
                         "Function call names the Worker must NOT use, "
-                        "e.g. ['print', 'input'] for backend code or ['eval', 'exec'] for security."
+                        "e.g. ['print', 'input'] for backend code or ['eval', 'exec'] for security. "
+                        "Populate when the task explicitly forbids a call or dependency entry point."
                     ),
                 },
             },

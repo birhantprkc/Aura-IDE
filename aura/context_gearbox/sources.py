@@ -24,6 +24,7 @@ PLANNER_DISPATCH_CONTRACT = """### planner_dispatch_contract
 - Ask one focused question when blocked.
 - Do not over-plan simple work.
 - Worker specs need exact goal, known files, acceptance, validation, and non-goals.
+- Fill structured contract fields when knowable: expected_public_symbols, expected_dataclass_fields, forbidden_calls, forbidden_public_methods, and non_goals.
 - If those fields are known, call dispatch_to_worker instead of explaining the plan in chat."""
 
 WEB_RESEARCH_RULES = """### web_research_rules

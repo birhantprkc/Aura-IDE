@@ -19,6 +19,7 @@ from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
 )
+from aura.conversation.dispatch_contract import enrich_worker_dispatch_contract
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.spec_quality import validate_worker_dispatch_spec
@@ -71,6 +72,7 @@ class ToolRunner:
         dispatch_cb: DispatchCallback | None,
     ) -> WorkerDispatchResult | None:
         req = WorkerDispatchRequest.from_dict(args)
+        req = enrich_worker_dispatch_contract(req)
         quality = validate_worker_dispatch_spec(req.spec, req.acceptance, goal=req.goal)
         if not quality.ok:
             missing = [
