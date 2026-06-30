@@ -46,6 +46,7 @@ from aura.conversation.completion_guard import (
     tool_result_completes_action,
     worker_dispatch_is_terminal,
 )
+from aura.conversation.critic_dispatch import CriticCallback
 from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
@@ -104,6 +105,7 @@ from aura.conversation.worker_finish import (
 from aura.conversation.worker_flow import (
     WORKER_FLOW_VALIDATION_REQUIRED_TEXT,
 )
+from aura.conversation.worker_quality_gate import handle_worker_quality_gate
 from aura.conversation.worker_recovery_messages import (
     PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
     WORKER_AUTO_PY_COMPILE_INSTRUCTION,
@@ -117,7 +119,6 @@ from aura.conversation.worker_recovery_payload import (
     is_recoverable_phase_boundary,
     parse_tool_payload,
 )
-from aura.conversation.worker_quality_gate import handle_worker_quality_gate
 from aura.conversation.worker_validation import (
     emit_auto_dependent_import_info,
     emit_auto_import_result,
@@ -248,6 +249,9 @@ class ConversationManager:
         model: ModelId,
         thinking: ThinkingMode,
         dispatch_cb: DispatchCallback | None = None,
+        critic_cb: CriticCallback | None = None,
+        worker_dispatch_request: WorkerDispatchRequest | None = None,
+        dispatch_tool_call_id: str = "",
         temperature: float = 0.7,
         max_tool_rounds: int | None = None,
         hook_name: str = 'generate_planner_code',
@@ -826,6 +830,9 @@ class ConversationManager:
                         workspace_root=self._tools.workspace_root,
                         history=self._history,
                         on_event=on_event,
+                        critic_cb=critic_cb,
+                        worker_request=worker_dispatch_request,
+                        dispatch_tool_call_id=dispatch_tool_call_id,
                     )
                     if quality_action != "none":
                         state.discard_worker_candidate_final()

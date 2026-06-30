@@ -21,6 +21,7 @@ from aura.client.events import (
     ToolResult,
     WorkerDispatchRequested,
 )
+from aura.conversation.critic_verdict import CriticFinding, CriticVerdict
 from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
@@ -360,6 +361,187 @@ def test_worker_quality_gate_clean_changeset_sets_fingerprint(manager, on_event,
     assert state.last_quality_ok_fingerprint is not None
     assert state.last_quality_findings == []
     assert evaluate_mock.call_count == 1
+
+
+def test_worker_quality_gate_low_risk_does_not_invoke_critic(
+    manager, on_event, tmp_path, mock_tools
+):
+    type(mock_tools).workspace_root = PropertyMock(return_value=tmp_path)
+    (tmp_path / ".git").mkdir()
+    target = tmp_path / "aura" / "module.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("VALUE = 1\n", encoding="utf-8")
+    state = _SendState(mode="worker", research_policy=None)
+    state.worker_app_writes.add("aura/module.py")
+    decision = WorkerQualityDecision(
+        ok=True,
+        hard_block=False,
+        needs_cleanup=False,
+        findings=[],
+    )
+    critic_cb = MagicMock(
+        return_value=CriticVerdict(
+            conforms=False,
+            route="worker",
+            findings=[
+                CriticFinding(
+                    clause="acceptance: example",
+                    file="aura/module.py",
+                    message="Example miss.",
+                    suggested_action="Fix it.",
+                )
+            ],
+        )
+    )
+
+    with (
+        patch("aura.conversation.worker_quality_gate._diff_changed_files", return_value="diff"),
+        patch("aura.conversation.worker_quality_gate.evaluate_worker_quality", return_value=decision),
+    ):
+        assert handle_worker_quality_gate(
+            state=state,
+            workspace_root=tmp_path,
+            history=manager._history,
+            on_event=on_event,
+            critic_cb=critic_cb,
+            worker_request=WorkerDispatchRequest(
+                goal="Fix",
+                files=["aura/module.py"],
+                spec="spec",
+                acceptance="acceptance",
+            ),
+            dispatch_tool_call_id="dispatch-1",
+        ) == "none"
+
+    critic_cb.assert_not_called()
+    assert state.critic_pass_attempted is False
+    assert state.last_quality_ok_fingerprint is not None
+
+
+def test_worker_quality_gate_risky_worker_critic_routes_cleanup_once(
+    manager, on_event, tmp_path, mock_tools
+):
+    type(mock_tools).workspace_root = PropertyMock(return_value=tmp_path)
+    (tmp_path / ".git").mkdir()
+    changed = ["a.py", "b.py", "c.py"]
+    for rel in changed:
+        (tmp_path / rel).write_text("VALUE = 1\n", encoding="utf-8")
+    state = _SendState(mode="worker", research_policy=None)
+    state.worker_app_writes.update(changed)
+    decision = WorkerQualityDecision(
+        ok=True,
+        hard_block=False,
+        needs_cleanup=False,
+        findings=[],
+    )
+    verdict = CriticVerdict(
+        conforms=False,
+        route="worker",
+        findings=[
+            CriticFinding(
+                clause="acceptance: expose run",
+                file="a.py",
+                message="run is missing.",
+                suggested_action="Add run.",
+            )
+        ],
+        instruction="Patch the missing run symbol.",
+    )
+    critic_cb = MagicMock(return_value=verdict)
+    worker_request = WorkerDispatchRequest(
+        goal="Fix",
+        files=changed,
+        spec="spec",
+        acceptance="acceptance",
+    )
+
+    with (
+        patch("aura.conversation.worker_quality_gate._diff_changed_files", return_value="diff"),
+        patch("aura.conversation.worker_quality_gate.evaluate_worker_quality", return_value=decision),
+    ):
+        assert handle_worker_quality_gate(
+            state=state,
+            workspace_root=tmp_path,
+            history=manager._history,
+            on_event=on_event,
+            critic_cb=critic_cb,
+            worker_request=worker_request,
+            dispatch_tool_call_id="dispatch-1",
+        ) == "cleanup"
+        assert handle_worker_quality_gate(
+            state=state,
+            workspace_root=tmp_path,
+            history=manager._history,
+            on_event=on_event,
+            critic_cb=critic_cb,
+            worker_request=worker_request,
+            dispatch_tool_call_id="dispatch-1",
+        ) == "none"
+
+    critic_cb.assert_called_once()
+    assert state.critic_pass_attempted is True
+    assert state.worker_quality_cleanup_attempted is True
+    assert state.last_quality_ok_fingerprint is not None
+    assert manager._history.messages[-1]["content"] == "Patch the missing run symbol."
+
+
+def test_worker_quality_gate_risky_planner_critic_routes_mismatch(
+    manager, on_event, captured_events, tmp_path, mock_tools
+):
+    type(mock_tools).workspace_root = PropertyMock(return_value=tmp_path)
+    (tmp_path / ".git").mkdir()
+    changed = ["a.py", "b.py", "c.py"]
+    for rel in changed:
+        (tmp_path / rel).write_text("VALUE = 1\n", encoding="utf-8")
+    state = _SendState(mode="worker", research_policy=None)
+    state.worker_app_writes.update(changed)
+    decision = WorkerQualityDecision(
+        ok=True,
+        hard_block=False,
+        needs_cleanup=False,
+        findings=[],
+    )
+    critic_cb = MagicMock(
+        return_value=CriticVerdict(
+            conforms=False,
+            route="planner",
+            findings=[
+                CriticFinding(
+                    clause="acceptance: remove X and keep X",
+                    file="a.py",
+                    message="Acceptance is contradictory.",
+                    suggested_action="Clarify whether X should remain.",
+                )
+            ],
+            planner_question="Should X be removed or preserved?",
+        )
+    )
+
+    with (
+        patch("aura.conversation.worker_quality_gate._diff_changed_files", return_value="diff"),
+        patch("aura.conversation.worker_quality_gate.evaluate_worker_quality", return_value=decision),
+    ):
+        assert handle_worker_quality_gate(
+            state=state,
+            workspace_root=tmp_path,
+            history=manager._history,
+            on_event=on_event,
+            critic_cb=critic_cb,
+            worker_request=WorkerDispatchRequest(
+                goal="Fix",
+                files=changed,
+                spec="spec",
+                acceptance="acceptance",
+            ),
+            dispatch_tool_call_id="dispatch-1",
+        ) == "finished"
+
+    done = next(event for event in captured_events if isinstance(event, Done))
+    payload = json.loads(done.full_message["content"])
+    assert payload["status"] == "needs_planner_resolution"
+    assert payload["mismatch"]["kind"] == "conflicting_spec"
+    assert payload["mismatch"]["question_for_planner"] == "Should X be removed or preserved?"
+    assert not any(isinstance(event, ContentDelta) for event in captured_events)
 
 
 def test_worker_quality_gate_hard_block_finishes_with_phase_boundary(

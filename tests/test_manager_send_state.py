@@ -16,6 +16,7 @@ def test_send_state_initializes_worker_only_fields_for_all_modes():
     assert isinstance(worker.worker_flow, WorkerFlowHarness)
     assert worker.worker_quality_nudge_sent is False
     assert worker.worker_quality_cleanup_attempted is False
+    assert worker.critic_pass_attempted is False
     assert worker.last_quality_ok_fingerprint is None
     assert worker.last_quality_findings == []
     assert worker.worker_quality_enabled is True

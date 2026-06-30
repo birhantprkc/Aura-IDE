@@ -21,9 +21,6 @@ from PySide6.QtCore import (
     Signal,
 )
 
-from aura.bridge.approval_proxy import _ApprovalProxy
-from aura.bridge.event_relay import WorkerEventRelay
-from aura.bridge.worker_recording import _record_worker_completion
 from aura.bridge._summary_formatters import (
     _final_report_claims_failure,
     _final_report_claims_validation,
@@ -32,6 +29,9 @@ from aura.bridge._summary_formatters import (
     _format_worker_write_failure,
     _parse_structured_worker_failure,
 )
+from aura.bridge.approval_proxy import _ApprovalProxy
+from aura.bridge.event_relay import WorkerEventRelay
+from aura.bridge.worker_recording import _record_worker_completion
 from aura.bridge.worker_report import (
     _build_worker_summary,
     _dedupe_summary_writes,
@@ -55,6 +55,7 @@ from aura.conversation import (
     WorkerTaskSpec,
     normalize_worker_task,
 )
+from aura.conversation.critic_dispatch import CriticCallback, CriticRequest, run_critic_dispatch
 from aura.conversation.path_utils import normalize_worker_path as _shared_normalize_worker_path
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.project_profile import detect_project_profile
@@ -684,6 +685,7 @@ class _DispatchProxy(QObject):
 
         internal_error: str | None = None
         scratch_before = _validation_scratch_files(self._workspace_root) if self._workspace_root is not None else set()
+        critic_cb = self._build_critic_callback(cancel_event=cancel_event)
         try:
             worker_manager.send(
                 on_event=relay_worker_event,
@@ -692,6 +694,9 @@ class _DispatchProxy(QObject):
                 model=self._worker_model,
                 thinking=self._worker_thinking,
                 dispatch_cb=None,
+                critic_cb=critic_cb,
+                worker_dispatch_request=req,
+                dispatch_tool_call_id=tool_call_id,
                 temperature=self._worker_temperature,
                 hook_name='generate_worker_code',
                 max_tool_rounds=self._max_tool_rounds,
@@ -715,6 +720,21 @@ class _DispatchProxy(QObject):
             internal_error,
             cleaned_scratch_files,
         )
+
+    def _build_critic_callback(self, *, cancel_event: threading.Event) -> CriticCallback:
+        def critic(tool_call_id: str, request: CriticRequest):
+            return run_critic_dispatch(
+                tool_call_id,
+                request,
+                model=self._worker_model,
+                thinking=self._worker_thinking,
+                temperature=0.0,
+                hook_name="generate_worker_code",
+                cancel_event=cancel_event,
+                tools=[],
+            )
+
+        return critic
 
     def _cleanup_worker_scratch_outputs(
         self,
