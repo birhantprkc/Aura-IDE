@@ -14,6 +14,7 @@ from scripts.build_nuitka import (
     OUTPUT_DIR,
     PACKAGE_NAME,
     REQUIRED_MEDIA_FILES,
+    REQUIRED_ROLE_CAPSULE_FILES,
     TESSERACT_DIST_DIR,
     UPDATER_HELPER_DIST_NAME,
     UPDATER_HELPER_SOURCE,
@@ -222,6 +223,10 @@ def test_validate_project_paths_accepts_complete_media_set(tmp_path: Path) -> No
     media_dir.mkdir()
     for filename in REQUIRED_MEDIA_FILES:
         (media_dir / filename).write_text("media", encoding="utf-8")
+    capsule_dir = tmp_path / "aura" / "roles" / "bundled"
+    capsule_dir.mkdir(parents=True)
+    for name in REQUIRED_ROLE_CAPSULE_FILES:
+        (capsule_dir / name).write_text("# role", encoding="utf-8")
 
     validate_project_paths(tmp_path)
 

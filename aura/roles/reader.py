@@ -29,10 +29,8 @@ class NamedRoleCapsule:
     checksum: str
 
 
-def _read_bundled_markdown(name: str) -> tuple[Path, str] | None:
-    if not _SAFE_BUNDLED_NAME_RE.fullmatch(name):
-        return None
-    path = Path(__file__).with_name("bundled") / f"{name}.md"
+def _try_read_markdown(path: Path) -> tuple[Path, str] | None:
+    """Read and strip a markdown file, returning None on failure or empty."""
     try:
         content = path.read_text(encoding="utf-8").strip()
     except OSError:
@@ -40,6 +38,23 @@ def _read_bundled_markdown(name: str) -> tuple[Path, str] | None:
     if not content:
         return None
     return path, content
+
+
+def _read_bundled_markdown(name: str) -> tuple[Path, str] | None:
+    if not _SAFE_BUNDLED_NAME_RE.fullmatch(name):
+        return None
+
+    # 1. Dev path next to reader.py
+    local_path = Path(__file__).with_name("bundled") / f"{name}.md"
+    result = _try_read_markdown(local_path)
+    if result is not None:
+        return result
+
+    # 2. Packaged-resource fallback (wheel / Nuitka)
+    from aura.resources import get_resource_path
+
+    resource_path = get_resource_path(Path("aura") / "roles" / "bundled" / f"{name}.md")
+    return _try_read_markdown(resource_path)
 
 
 def load_bundled_role_capsule(role: RuntimeRole | str) -> RoleCapsule | None:

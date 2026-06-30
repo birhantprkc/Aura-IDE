@@ -38,6 +38,16 @@ DRONES_DEST_REL = Path(".aura") / "drones"
 BUILTIN_DRONES_SOURCE_REL = Path("aura") / "drones" / "bundled"
 BUILTIN_DRONES_DEST_REL = Path("aura") / "drones" / "bundled"
 
+ROLE_CAPSULES_SOURCE_REL = Path("aura") / "roles" / "bundled"
+ROLE_CAPSULES_DEST_REL = Path("aura") / "roles" / "bundled"
+
+REQUIRED_ROLE_CAPSULE_FILES = [
+    "planner.md",
+    "worker.md",
+    "single.md",
+    "critic.md",
+]
+
 SUPPORTED_GRAMMARS = [
     "javascript", "typescript", "tsx", "go", "rust",
     "java", "c", "cpp", "csharp", "php", "ruby", "swift",
@@ -203,6 +213,12 @@ def validate_project_paths(root: Path) -> None:
     missing = [path for path in required_paths if not path.exists()]
     media_dir = root / MEDIA_DIR
     missing.extend(media_dir / filename for filename in REQUIRED_MEDIA_FILES if not (media_dir / filename).is_file())
+    capsule_dir = root / ROLE_CAPSULES_SOURCE_REL
+    missing.extend(
+        capsule_dir / filename
+        for filename in REQUIRED_ROLE_CAPSULE_FILES
+        if not (capsule_dir / filename).is_file()
+    )
     if missing:
         details = "\n".join(f"  - {path}" for path in missing)
         raise SystemExit(f"Missing required build files:\n{details}")
@@ -708,6 +724,7 @@ def create_nuitka_command(
         "--windows-console-mode=disable",
         f"--windows-icon-from-ico={ICON_PATH}",
         f"--include-data-dir={MEDIA_DIR}={MEDIA_DIR}",
+        f"--include-data-dir={ROLE_CAPSULES_SOURCE_REL}={ROLE_CAPSULES_DEST_REL}",
         "--include-package=aura",
         "--include-package-data=aura",
         "--include-package=relay",

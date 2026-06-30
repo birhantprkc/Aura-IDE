@@ -18,7 +18,7 @@ def test_named_critic_capsule_loads_with_checksum():
     assert capsule.name == "critic"
     assert capsule.content
     assert capsule.content == capsule.content.strip()
-    assert "You are Auras invisible Critic." in capsule.content
+    assert "You are Aura's invisible Critic." in capsule.content
     assert len(capsule.checksum) == 64
     assert all(char in "0123456789abcdef" for char in capsule.checksum)
 

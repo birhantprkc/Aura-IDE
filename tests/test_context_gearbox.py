@@ -150,7 +150,7 @@ def test_default_planner_prompt_uses_bundled_capsule_with_shared_shell():
     assert CONTEXT_PLACEHOLDER in prompt
     assert "Response discipline:" in prompt
     assert capsule.content in prompt
-    assert "You are Auras Planner." in prompt
+    assert "You are Aura's Planner." in prompt
     assert "Inspect and understand the request before dispatch." in prompt
     assert "Use dispatch_to_worker for implementation." in prompt
     assert "Do not edit files directly." in prompt
@@ -161,7 +161,7 @@ def test_default_planner_prompt_uses_bundled_capsule_with_shared_shell():
 def test_worker_prompt_uses_bundled_execution_posture():
     prompt = default_role_prompt(RuntimeRole.WORKER)
 
-    assert "You are Auras Worker." in prompt
+    assert "You are Aura's Worker." in prompt
     assert "Execute exactly the assigned bounded step." in prompt
     assert "Make the smallest correct edit." in prompt
     assert "Match local style." in prompt

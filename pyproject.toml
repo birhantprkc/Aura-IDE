@@ -55,6 +55,9 @@ aura = "aura.__main__:main"
 include = ["aura*", "relay*"]
 exclude = ["scripts*", "tests*"]
 
+[tool.setuptools.package-data]
+"aura.roles" = ["bundled/*.md"]
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
