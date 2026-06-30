@@ -616,10 +616,6 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
             "with phrases like 'do phase 1', 'start phase 1', 'yes do that', 'go', "
             "'run it', or 'let's do it', bind that to the most recent actionable phase "
             "and dispatch it. "
-            "For large-file helper extraction or refactors, dispatch only the first "
-            "concrete slice: one helper family, one new module, one source-file "
-            "wireback, and one validation command. Later slices are follow-up work "
-            "after the first slice lands. "
             "Provide a compact, self-contained worker task capsule — the worker does not "
             "see this conversation. Include: goal, target seam, files allowed, behavior to "
             "preserve, constraints / non-goals, validation commands or checks, and a "
@@ -693,9 +689,7 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         "file paths, symbols, regions, and any line numbers on CURRENT "
                         "read_file results from this dispatch turn for each target, not "
                         "earlier reads; stale paths and line numbers cause worker thrash. "
-                        "For large helper extraction/refactor work, scope this to the first "
-                        "concrete slice only: one helper family, one new module, one "
-                        "source-file wireback, and one validation command. Preserve "
+                        "Preserve "
                         "structured contract fields such as expected_public_symbols, "
                         "expected_dataclass_fields, forbidden_calls, "
                         "forbidden_public_methods, and non_goals when they are knowable. "
@@ -703,6 +697,86 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         "work order and dispatch it. The worker has not seen the "
                         "conversation, so include necessary context."
                     ),
+                },
+                "steps": {
+                    "type": "array",
+                    "description": (
+                        "Optional ordered campaign for multi-step work. Each item is one "
+                        "bounded edit path with its own goal, files, spec, acceptance, "
+                        "validation commands, required outputs, non-goals, and contract "
+                        "constraints. Use this when the implementation should proceed "
+                        "through multiple explicit Worker steps. When omitted or empty, "
+                        "the top-level flat fields are the single-step dispatch path."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "Stable step id, e.g. 'step-1'.",
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Short user-readable title for this bounded edit.",
+                            },
+                            "goal": {
+                                "type": "string",
+                                "description": "What this specific step should accomplish.",
+                            },
+                            "spec": {
+                                "type": "string",
+                                "description": "Self-contained work order for this step.",
+                            },
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Workspace-relative files for this step.",
+                            },
+                            "acceptance": {
+                                "type": "string",
+                                "description": "Concrete pass/fail acceptance for this step.",
+                            },
+                            "validation_commands": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Focused validation commands for this step.",
+                            },
+                            "required_outputs": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Concrete artifacts or behaviors this step must produce.",
+                            },
+                            "non_goals": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Scope fences specific to this step.",
+                            },
+                            "expected_public_symbols": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Public symbols this step must define or preserve.",
+                            },
+                            "expected_dataclass_fields": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "description": "Required dataclass fields by class name for this step.",
+                            },
+                            "forbidden_calls": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Function calls this step must not introduce.",
+                            },
+                            "forbidden_public_methods": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Public class methods this step must not introduce.",
+                            },
+                        },
+                        "additionalProperties": False,
+                    },
                 },
                 "acceptance": {
                     "type": "string",

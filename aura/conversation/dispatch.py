@@ -12,11 +12,7 @@ import enum
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable
-
-from aura.craft.types import ExplicitSpecContract
-from aura.conversation.project_profile import ProjectProfile
-from aura.conversation.task_shape import TaskShape, infer_task_shape, unknown_task_shape
+from typing import TYPE_CHECKING, Any, Callable
 
 from aura.conversation._dispatch_helpers import (
     _extract_validation_commands,
@@ -26,9 +22,13 @@ from aura.conversation._dispatch_helpers import (
     _string_dict_list,
     _string_list,
     _target_region_list,
-    _target_region_line,
-    _target_region_text,
 )
+from aura.conversation.project_profile import ProjectProfile
+from aura.conversation.task_shape import TaskShape, infer_task_shape, unknown_task_shape
+from aura.craft.types import ExplicitSpecContract
+
+if TYPE_CHECKING:
+    from aura.conversation.dispatch_plan import WorkerStepSpec
 
 
 class WorkerOutcomeStatus(str, enum.Enum):
@@ -104,6 +104,7 @@ class WorkerDispatchRequest:
     forbidden_calls: list[str] = field(default_factory=list)
     contract: ExplicitSpecContract | None = None
     task_shape: TaskShape | None = None
+    steps: list[WorkerStepSpec] = field(default_factory=list)
     
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -127,6 +128,8 @@ class WorkerDispatchRequest:
         }
         if self.task_shape is not None:
             payload["task_shape"] = self.task_shape.to_dict()
+        if self.steps:
+            payload["steps"] = [step.to_dict() for step in self.steps]
         return payload
 
     @classmethod
@@ -139,6 +142,13 @@ class WorkerDispatchRequest:
         task_shape = None
         if "task_shape" in data:
             task_shape = TaskShape.from_dict(data.get("task_shape"))
+        raw_steps = data.get("steps") if isinstance(data.get("steps"), list) else []
+        if raw_steps:
+            from aura.conversation.dispatch_plan import WorkerStepSpec
+
+            steps = [WorkerStepSpec.from_dict(step) for step in raw_steps]
+        else:
+            steps = []
         return cls(
             goal=str(data.get("goal", "")),
             files=[str(f) for f in files],
@@ -158,6 +168,7 @@ class WorkerDispatchRequest:
             forbidden_calls=_string_list(data.get("forbidden_calls")),
             contract=ExplicitSpecContract.from_dict(data["contract"]) if data.get("contract") else None,
             task_shape=task_shape,
+            steps=steps,
         )
 
 

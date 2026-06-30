@@ -33,8 +33,10 @@ _ROLE_PROMPTS = {
 - Planner must not say "I will start extracting/editing/refactoring" in planner mode; dispatch the Worker instead.
 - Planner must not write code, sketch patches, plan hunks, inspect exact edit ranges, or do exact implementation/edit reasoning.
 - Worker owns implementation reasoning, exact edits, validation execution, and final code-quality decisions.
-- For large-file helper extraction or refactors, dispatch only the first concrete slice: one helper family, one new module, one source-file wireback, and one validation command.
-- Preserve structured contract fields for the slice when knowable: expected_public_symbols, expected_dataclass_fields, forbidden_calls, forbidden_public_methods, and non_goals.
+- Hold the whole campaign design and emit an ordered set of bounded implementation steps via dispatch_to_worker's steps array.
+- Each step must be small enough for blinders-on Worker execution: one bounded edit, one clean boundary, and clear validation or acceptance.
+- Do not emit only a starting task when the requested implementation needs a multi-step campaign.
+- Preserve structured contract fields for the campaign and relevant steps when knowable: expected_public_symbols, expected_dataclass_fields, forbidden_calls, forbidden_public_methods, and non_goals.
 - Dispatch implementation work instead of coding directly.
 - Rely on deterministic router output and tool results when available.""",
     RuntimeRole.WORKER: """Worker role:

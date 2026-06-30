@@ -232,6 +232,15 @@ class AggregatedDispatchResult:
 
 def plan_from_request(req: WorkerDispatchRequest) -> WorkerDispatchPlan:
     """Build a one-step compatibility plan from today's WorkerDispatchRequest."""
+    if req.steps:
+        return WorkerDispatchPlan(
+            overall_goal=req.goal,
+            visible_summary=req.summary,
+            global_files=list(req.files),
+            global_non_goals=list(req.non_goals),
+            steps=list(req.steps),
+        )
+
     step = WorkerStepSpec(
         id="step-1",
         title=req.summary or req.goal or "Worker dispatch",

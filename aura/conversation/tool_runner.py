@@ -72,6 +72,11 @@ class ToolRunner:
         dispatch_cb: DispatchCallback | None,
     ) -> WorkerDispatchResult | None:
         req = WorkerDispatchRequest.from_dict(args)
+        raw_steps = args.get("steps") if isinstance(args.get("steps"), list) else []
+        if raw_steps:
+            from aura.conversation.dispatch_plan import WorkerStepSpec
+
+            req.steps = [WorkerStepSpec.from_dict(step) for step in raw_steps]
         req = enrich_worker_dispatch_contract(req)
         quality = validate_worker_dispatch_spec(req.spec, req.acceptance, goal=req.goal)
         if not quality.ok:

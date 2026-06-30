@@ -308,6 +308,75 @@ def test_recoverable_dispatch_result_emits_nonfailed_tool_event(tmp_path: Path):
     assert payload["recoverable"] is True
 
 
+def test_handle_dispatch_parses_steps_from_tool_args(tmp_path: Path):
+    runner = _make_runner(tmp_path)
+    captured = {}
+
+    def dispatch_cb(tool_call_id, req):
+        captured["tool_call_id"] = tool_call_id
+        captured["request"] = req
+        return WorkerDispatchResult(ok=True, summary="done")
+
+    result = runner.handle_dispatch(
+        tool_call_id="dispatch-steps",
+        args={
+            "goal": "Complete campaign",
+            "files": ["shared.py"],
+            "spec": "Use the listed steps to complete the campaign.",
+            "acceptance": "Run python -m py_compile shared.py.",
+            "summary": "Campaign",
+            "steps": [
+                {"id": "one", "title": "One", "goal": "First step", "files": ["one.py"]},
+                {"id": "two", "title": "Two", "goal": "Second step", "files": ["two.py"]},
+                {"id": "three", "title": "Three", "goal": "Third step", "files": ["three.py"]},
+            ],
+        },
+        on_event=lambda ev: None,
+        dispatch_cb=dispatch_cb,
+    )
+
+    assert result is not None
+    assert result.ok is True
+    assert captured["tool_call_id"] == "dispatch-steps"
+    req = captured["request"]
+    assert [step.id for step in req.steps] == ["one", "two", "three"]
+    assert [step.goal for step in req.steps] == ["First step", "Second step", "Third step"]
+    assert req.files == ["shared.py"]
+    assert req.spec == "Use the listed steps to complete the campaign."
+
+
+def test_handle_dispatch_without_steps_keeps_flat_request_empty_steps(tmp_path: Path):
+    runner = _make_runner(tmp_path)
+    captured = {}
+
+    def dispatch_cb(_tool_call_id, req):
+        captured["request"] = req
+        return WorkerDispatchResult(ok=True, summary="done")
+
+    result = runner.handle_dispatch(
+        tool_call_id="dispatch-flat",
+        args={
+            "goal": "Fix bug",
+            "files": ["a.py"],
+            "spec": "Change the implementation in a.py.",
+            "acceptance": "Run python -m py_compile a.py.",
+            "summary": "Flat fix",
+        },
+        on_event=lambda ev: None,
+        dispatch_cb=dispatch_cb,
+    )
+
+    assert result is not None
+    assert result.ok is True
+    req = captured["request"]
+    assert req.steps == []
+    assert req.goal == "Fix bug"
+    assert req.files == ["a.py"]
+    assert req.spec == "Change the implementation in a.py."
+    assert req.acceptance == "Run python -m py_compile a.py."
+    assert req.summary == "Flat fix"
+
+
 def test_recoverable_dispatch_spec_rejection_emits_nonfailed_tool_event(tmp_path: Path):
     runner = _make_runner(tmp_path)
     events = []

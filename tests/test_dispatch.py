@@ -40,6 +40,7 @@ from aura.conversation.dispatch import (
     normalize_outcome_status,
     normalize_worker_task,
 )
+from aura.conversation.dispatch_plan import WorkerStepSpec, plan_from_request
 from aura.conversation.history import History
 from aura.conversation.task_shape import TaskShape, infer_task_shape
 from aura.conversation.tools._schemas import DISPATCH_TOOL_DEF
@@ -49,6 +50,144 @@ from aura.conversation.tools._schemas import DISPATCH_TOOL_DEF
 
 def _dispatch_schema_text() -> str:
     return json.dumps(DISPATCH_TOOL_DEF, sort_keys=True)
+
+
+def test_dispatch_to_worker_schema_includes_optional_steps_campaign():
+    properties = DISPATCH_TOOL_DEF["function"]["parameters"]["properties"]
+
+    steps = properties["steps"]
+    step_properties = steps["items"]["properties"]
+
+    assert steps["type"] == "array"
+    assert "ordered campaign" in steps["description"]
+    assert "single-step dispatch path" in steps["description"]
+    assert set(step_properties) == {
+        "id",
+        "title",
+        "goal",
+        "spec",
+        "files",
+        "acceptance",
+        "validation_commands",
+        "required_outputs",
+        "non_goals",
+        "expected_public_symbols",
+        "expected_dataclass_fields",
+        "forbidden_calls",
+        "forbidden_public_methods",
+    }
+    assert "steps" not in DISPATCH_TOOL_DEF["function"]["parameters"]["required"]
+
+
+def test_dispatch_to_worker_schema_does_not_force_first_slice_language():
+    schema_text = _dispatch_schema_text().lower()
+
+    assert "dispatch only the first" not in schema_text
+    assert "first concrete slice" not in schema_text
+    assert "one helper family, one new module" not in schema_text
+
+
+def test_plan_from_request_flat_request_keeps_single_step_shape():
+    req = WorkerDispatchRequest(
+        goal="Fix widget",
+        files=["a.py", "b.py"],
+        target_regions=[{"path": "a.py", "symbol": "Widget", "start_line": 12}],
+        spec="Make the widget deterministic.",
+        acceptance="Run focused validation.",
+        summary="Widget determinism",
+        validation_commands=["python -m py_compile a.py b.py"],
+        required_outputs=["updated widget"],
+        non_goals=["no UI redesign"],
+        expected_public_symbols=["Widget"],
+        expected_dataclass_fields={"WidgetState": ["value"]},
+        forbidden_public_methods=["Widget.reset_all"],
+        forbidden_calls=["random.random"],
+        risk_notes=["shared state"],
+    )
+
+    plan = plan_from_request(req)
+
+    assert plan.to_dict() == {
+        "overall_goal": "Fix widget",
+        "visible_summary": "Widget determinism",
+        "global_files": ["a.py", "b.py"],
+        "global_non_goals": ["no UI redesign"],
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Widget determinism",
+                "goal": "Fix widget",
+                "spec": "Make the widget deterministic.",
+                "files": ["a.py", "b.py"],
+                "target_regions": [{"path": "a.py", "symbol": "Widget", "start_line": 12}],
+                "acceptance": "Run focused validation.",
+                "validation_commands": ["python -m py_compile a.py b.py"],
+                "required_outputs": ["updated widget"],
+                "non_goals": ["no UI redesign"],
+                "expected_public_symbols": ["Widget"],
+                "expected_dataclass_fields": {"WidgetState": ["value"]},
+                "forbidden_calls": ["random.random"],
+                "forbidden_public_methods": ["Widget.reset_all"],
+                "risk_notes": ["shared state"],
+                "validation_policy": {
+                    "tier": "focused",
+                    "commands": ["python -m py_compile a.py b.py"],
+                    "required_proofs": ["Run focused validation."],
+                    "run_full_campaign_validation": False,
+                    "reason": "compatibility conversion from WorkerDispatchRequest",
+                },
+            }
+        ],
+    }
+
+
+def test_plan_from_request_uses_explicit_steps_in_order():
+    steps = [
+        WorkerStepSpec(id="prep", title="Prepare", goal="Prepare data", files=["prep.py"]),
+        WorkerStepSpec(id="wire", title="Wire", goal="Wire behavior", files=["wire.py"]),
+        WorkerStepSpec(id="check", title="Check", goal="Validate behavior", files=["test_wire.py"]),
+    ]
+    req = WorkerDispatchRequest(
+        goal="Complete campaign",
+        files=["shared.py"],
+        spec="Top-level fallback spec",
+        acceptance="Top-level acceptance",
+        summary="Visible campaign",
+        non_goals=["no schema migration"],
+        steps=steps,
+    )
+
+    plan = plan_from_request(req)
+
+    assert plan.overall_goal == "Complete campaign"
+    assert plan.visible_summary == "Visible campaign"
+    assert plan.global_files == ["shared.py"]
+    assert plan.global_non_goals == ["no schema migration"]
+    assert [step.id for step in plan.steps] == ["prep", "wire", "check"]
+    assert plan.steps == steps
+    assert plan.steps[0] is steps[0]
+
+
+def test_worker_dispatch_request_from_dict_accepts_explicit_steps():
+    req = WorkerDispatchRequest.from_dict(
+        {
+            "goal": "Complete campaign",
+            "files": ["shared.py"],
+            "spec": "",
+            "acceptance": "",
+            "summary": "Visible campaign",
+            "steps": [
+                {"id": "one", "title": "One", "goal": "First step", "files": ["one.py"]},
+                {"id": "two", "title": "Two", "goal": "Second step", "files": ["two.py"]},
+                {"id": "three", "title": "Three", "goal": "Third step", "files": ["three.py"]},
+            ],
+        }
+    )
+
+    plan = plan_from_request(req)
+
+    assert [step.id for step in req.steps] == ["one", "two", "three"]
+    assert [step.goal for step in plan.steps] == ["First step", "Second step", "Third step"]
 
 
 def test_dispatch_to_worker_schema_uses_compact_capsule_not_file_plan():
