@@ -1025,7 +1025,15 @@ class _DispatchProxy(QObject):
             )
 
         if acceptance_unverified:
-            result_caveats.append("Worker final report did not clearly mention validation or acceptance verification.")
+            # Suppress this caveat when deterministic validation records already
+            # prove success — no need for the Worker's final report to repeat it.
+            has_deterministic_proof = (
+                completion.get("has_writes")
+                and bool(completion.get("validation_results"))
+                and not completion.get("failed_validation")
+            )
+            if not has_deterministic_proof:
+                result_caveats.append("Worker final report did not clearly mention validation or acceptance verification.")
 
         if not structured_failure and _final_report_claims_failure(final_report):
             phrase_caveat = (
@@ -1177,9 +1185,22 @@ class _DispatchProxy(QObject):
             needs_followup = True
             recoverable = True
         elif has_unverified_acceptance:
-            ok = False
-            needs_followup = True
-            recoverable = True
+            # Success override: deterministic validation results beat weak
+            # final-report wording. If edits applied, validation ran and passed,
+            # and there are no real errors, classify as success.
+            if (bool(relay.write_results)
+                and bool(validation_results)
+                and not failed_validation
+                and not result_errors
+                and not unrecovered_not_applied_writes
+                and not internal_error):
+                ok = True
+                needs_followup = False
+                recoverable = False
+            else:
+                ok = False
+                needs_followup = True
+                recoverable = True
         else:
             ok = True
             needs_followup = False
@@ -1448,7 +1469,15 @@ def _compute_outcome_status(
     if has_no_work and is_implementation:
         return S.needs_followup.value
     if has_unverified_acceptance:
-        return S.needs_followup.value
+        # Success override: deterministic success beats weak final-report wording.
+        if (has_applied_writes
+            and not has_validation_failure
+            and not result_errors
+            and not has_recoverable_edit_blocker
+            and not has_internal_failure):
+            pass  # fall through to completed/completed_with_caveats
+        else:
+            return S.needs_followup.value
     if ok and result_caveats:
         return S.completed_with_caveats.value
     return S.completed.value
