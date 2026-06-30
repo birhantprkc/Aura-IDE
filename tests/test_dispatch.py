@@ -41,7 +41,12 @@ from aura.conversation.dispatch import (
     normalize_outcome_status,
     normalize_worker_task,
 )
-from aura.conversation.dispatch_plan import WorkerStepSpec, plan_from_request
+from aura.conversation.dispatch_plan import (
+    WorkerStepSpec,
+    plan_from_request,
+    todo_tasks_from_plan,
+    validate_dispatch_campaign,
+)
 from aura.conversation.history import History
 from aura.conversation.task_shape import TaskShape, infer_task_shape
 from aura.conversation.tools._schemas import DISPATCH_TOOL_DEF
@@ -78,6 +83,7 @@ def test_dispatch_to_worker_schema_includes_optional_steps_campaign():
         "forbidden_public_methods",
     }
     assert "steps" not in DISPATCH_TOOL_DEF["function"]["parameters"]["required"]
+    assert "required for non-trivial implementation work" in steps["description"]
 
 
 def test_dispatch_to_worker_schema_does_not_force_first_slice_language():
@@ -167,6 +173,114 @@ def test_plan_from_request_uses_explicit_steps_in_order():
     assert [step.id for step in plan.steps] == ["prep", "wire", "check"]
     assert plan.steps == steps
     assert plan.steps[0] is steps[0]
+
+
+def test_todo_tasks_from_plan_projects_campaign_steps_not_summary():
+    steps = [
+        WorkerStepSpec(id="schema", title="Tighten schema", goal="Update tool schema", files=["a.py"]),
+        WorkerStepSpec(id="runner", title="Reject bad dispatches", goal="Add runtime guard", files=["b.py"]),
+        WorkerStepSpec(id="todo", title="Project campaign TODOs", goal="Keep TODOs step-based", files=["c.py"]),
+    ]
+    plan = plan_from_request(
+        WorkerDispatchRequest(
+            goal="Fix campaign planning",
+            files=["a.py", "b.py", "c.py"],
+            spec="Top-level campaign spec",
+            acceptance="Focused tests pass.",
+            summary="One broad summary that must not become the only TODO",
+            steps=steps,
+        )
+    )
+
+    tasks = todo_tasks_from_plan(plan, active_step_id="runner", completed_step_ids={"schema"})
+
+    assert [task["description"] for task in tasks] == [
+        "Tighten schema",
+        "Reject bad dispatches",
+        "Project campaign TODOs",
+    ]
+    assert "One broad summary" not in {task["description"] for task in tasks}
+    assert [task["status"] for task in tasks] == ["done", "active", "pending"]
+
+
+def test_campaign_validation_rejects_broad_flat_dispatch():
+    req = WorkerDispatchRequest(
+        goal="Build behavioral verification rung",
+        files=["a.py", "b.py", "c.py"],
+        spec="Add a validation rung across the dispatch subsystem.",
+        acceptance="Run compileall and focused dispatch tests.",
+        summary="Build the behavioral verification rung",
+    )
+
+    result = validate_dispatch_campaign(req)
+
+    assert result.ok is False
+    assert result.requires_steps is True
+    assert any("decomposed steps campaign" in error for error in result.errors)
+
+
+def test_campaign_validation_rejects_one_giant_broad_step():
+    req = WorkerDispatchRequest(
+        goal="Build behavioral verification rung",
+        files=["a.py", "b.py", "c.py"],
+        spec="Add a validation rung across the dispatch subsystem.",
+        acceptance="Run compileall and focused dispatch tests.",
+        summary="Build behavioral verification rung",
+        steps=[
+            WorkerStepSpec(
+                id="step-1",
+                title="Build behavioral verification rung",
+                goal="Build behavioral verification rung",
+                spec="Add a validation rung across the dispatch subsystem.",
+                files=["a.py", "b.py", "c.py"],
+            )
+        ],
+    )
+
+    result = validate_dispatch_campaign(req)
+
+    assert result.ok is False
+    assert any("single campaign step" in error for error in result.errors)
+    assert any("specific title" in error for error in result.errors)
+
+
+def test_campaign_validation_allows_tiny_flat_cleanup():
+    req = WorkerDispatchRequest(
+        goal="Fix README typo",
+        files=["README.md"],
+        spec="Correct the typo in the usage note.",
+        acceptance="Verify the typo is corrected.",
+        summary="README typo cleanup",
+    )
+
+    result = validate_dispatch_campaign(req)
+
+    assert result.ok is True
+    assert result.requires_steps is False
+
+
+def test_campaign_validation_allows_tiny_one_step_cleanup():
+    req = WorkerDispatchRequest(
+        goal="Fix README typo",
+        files=["README.md"],
+        spec="Correct the typo in the usage note.",
+        acceptance="Verify the typo is corrected.",
+        summary="README typo cleanup",
+        steps=[
+            WorkerStepSpec(
+                id="step-1",
+                title="README typo cleanup",
+                goal="Fix README typo",
+                spec="Correct the typo in the usage note.",
+                files=["README.md"],
+            )
+        ],
+    )
+
+    result = validate_dispatch_campaign(req)
+
+    assert result.ok is True
+    assert result.requires_steps is False
 
 
 def test_worker_dispatch_request_from_dict_accepts_explicit_steps():
@@ -262,6 +376,96 @@ def test_dispatch_session_user_only_blocker_stays_visible():
     assert result.extras["internal_campaign_continuation"] is False
     assert result.extras["suppress_user_followup_card"] is False
     assert result.extras["user_visible_blocker"] is True
+
+
+def test_dispatch_session_internal_worker_exception_routes_to_campaign_recovery():
+    req = WorkerDispatchRequest(
+        goal="Complete campaign",
+        files=["shared.py"],
+        spec="",
+        acceptance="",
+        steps=[
+            WorkerStepSpec(id="one", title="One", goal="First step", files=["one.py"]),
+            WorkerStepSpec(id="two", title="Two", goal="Second step", files=["two.py"]),
+        ],
+    )
+    plan = plan_from_request(req)
+
+    def run_worker_step(_tool_call_id, _step_request, _pending):
+        return WorkerDispatchResult(
+            ok=False,
+            summary="Harness error due to an internal Worker dispatch exception.",
+            status=WorkerOutcomeStatus.harness_error.value,
+            extras={
+                "worker_internal_error": True,
+                "internal_error": "RuntimeError: hidden",
+            },
+        )
+
+    result = DispatchSession(
+        tool_call_id="tc1",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_worker_step,
+        pending=SimpleNamespace(),
+    ).run()
+
+    assert result.ok is False
+    assert result.needs_followup is True
+    assert result.recoverable is True
+    assert result.status == WorkerOutcomeStatus.needs_followup.value
+    assert not result.summary.startswith("Harness error")
+    assert result.extras["worker_internal_error"] is True
+    assert result.extras["internal_error"] == "RuntimeError: hidden"
+    assert result.extras["campaign_recovery_classification"] == "internal_recoverable_error"
+    assert result.extras["internal_campaign_continuation"] is True
+    assert result.extras["suppress_user_followup_card"] is True
+    assert result.extras["user_visible_blocker"] is False
+    assert result.extras["campaign_recovery_attempts"] == {"one": 1}
+    assert result.extras["campaign_recovery_budget"] == 1
+    assert result.extras["campaign_recovery_budget_exhausted"] is True
+
+
+def test_dispatch_session_environment_blocker_stays_user_visible():
+    req = WorkerDispatchRequest(
+        goal="Complete campaign",
+        files=["shared.py"],
+        spec="",
+        acceptance="",
+        steps=[
+            WorkerStepSpec(id="one", title="One", goal="First step", files=["one.py"]),
+            WorkerStepSpec(id="two", title="Two", goal="Second step", files=["two.py"]),
+        ],
+    )
+    plan = plan_from_request(req)
+
+    def run_worker_step(_tool_call_id, _step_request, _pending):
+        return WorkerDispatchResult(
+            ok=False,
+            summary="Project environment missing dependency 'pytest'.",
+            needs_followup=True,
+            recoverable=True,
+            status=WorkerOutcomeStatus.needs_followup.value,
+            extras={
+                "environment_setup_blockers": [
+                    {"failure_class": "project_environment_missing_dependency"}
+                ],
+            },
+        )
+
+    result = DispatchSession(
+        tool_call_id="tc1",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_worker_step,
+        pending=SimpleNamespace(),
+    ).run()
+
+    assert result.extras["campaign_recovery_classification"] == "terminal_environment_blocker"
+    assert result.extras["internal_campaign_continuation"] is False
+    assert result.extras["suppress_user_followup_card"] is False
+    assert result.extras["user_visible_blocker"] is True
+    assert result.extras["terminal_environment_blocker"] is True
 
 
 def test_dispatch_to_worker_schema_uses_compact_capsule_not_file_plan():

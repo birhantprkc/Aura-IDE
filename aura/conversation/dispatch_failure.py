@@ -57,6 +57,8 @@ def _failed_dispatch_allows_planner_continuation(
 
 
 def _is_worker_internal_error(result: WorkerDispatchResult) -> bool:
+    if result.extras.get("internal_campaign_continuation"):
+        return False
     return bool(
         result.extras.get("worker_internal_error")
         or result.extras.get("dispatch_internal_error")

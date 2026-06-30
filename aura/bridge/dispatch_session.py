@@ -17,7 +17,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+from aura.conversation.dispatch import (
+    WorkerDispatchRequest,
+    WorkerDispatchResult,
+    WorkerOutcomeStatus,
+)
 from aura.conversation.dispatch_plan import (
     StepResult,
     WorkerDispatchPlan,
@@ -27,6 +31,14 @@ from aura.conversation.dispatch_plan import (
 )
 
 RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult]
+CAMPAIGN_RECOVERY_BUDGET_PER_STEP = 1
+
+INTERNAL_RECOVERABLE_ERROR = "internal_recoverable_error"
+PLANNER_RESOLUTION_NEEDED = "planner_resolution_needed"
+USER_VISIBLE_BLOCKER = "user_visible_blocker"
+USER_ONLY_BLOCKER = "user_only_blocker"
+TERMINAL_ENVIRONMENT_BLOCKER = "terminal_environment_blocker"
+NO_RECOVERY_NEEDED = "none"
 
 # Callback types for the outer campaign lifecycle signals.
 # Signatures match the Qt signals on _DispatchProxy:
@@ -130,12 +142,21 @@ class DispatchSession:
         if not self.plan.steps:
             result = WorkerDispatchResult(
                 ok=False,
-                summary="Worker dispatch plan contained no executable steps.",
-                status="harness_error",
+                summary=(
+                    "Aura paused the campaign because it had no executable steps. "
+                    "Planner is rebuilding the dispatch plan."
+                ),
+                status=WorkerOutcomeStatus.needs_followup.value,
+                needs_followup=True,
                 recoverable=True,
                 extras={
+                    "dispatch_session": True,
                     "dispatch_session_error": "empty_plan",
                     "planner_resolution_needed": True,
+                    "campaign_recovery_classification": PLANNER_RESOLUTION_NEEDED,
+                    "internal_campaign_continuation": True,
+                    "suppress_user_followup_card": True,
+                    "user_visible_blocker": False,
                 },
             )
             self._emit_lifecycle_pair(result)
@@ -177,10 +198,22 @@ class DispatchSession:
             # Guard — can't happen: plan.steps was verified non-empty above.
             result = WorkerDispatchResult(
                 ok=False,
-                summary="Internal session error: no steps were executed.",
-                status="harness_error",
-                recoverable=False,
-                extras={"dispatch_session_error": "no_steps_executed"},
+                summary=(
+                    "Aura paused the campaign before executing a step. "
+                    "Planner is rebuilding the dispatch plan."
+                ),
+                status=WorkerOutcomeStatus.needs_followup.value,
+                needs_followup=True,
+                recoverable=True,
+                extras={
+                    "dispatch_session": True,
+                    "dispatch_session_error": "no_steps_executed",
+                    "planner_resolution_needed": True,
+                    "campaign_recovery_classification": PLANNER_RESOLUTION_NEEDED,
+                    "internal_campaign_continuation": True,
+                    "suppress_user_followup_card": True,
+                    "user_visible_blocker": False,
+                },
             )
             self._emit_lifecycle_finished(result)
             return result
@@ -238,22 +271,28 @@ class DispatchSession:
         """
         worker_extras = worker_result.extras if isinstance(worker_result.extras, dict) else {}
         modified_files = _collect_modified_files(self.step_results) or _dedupe(worker_result.modified_files)
+        is_explicit_campaign = bool(self.original_request.steps)
         session_metadata = _session_metadata(
             self.plan,
             self.cursor,
             self.step_results,
-            is_explicit_campaign=bool(self.original_request.steps),
+            is_explicit_campaign=is_explicit_campaign,
             worker_result=worker_result,
         )
+        visible_result = _visible_campaign_result(
+            worker_result,
+            session_metadata,
+            is_explicit_campaign=is_explicit_campaign,
+        )
         return WorkerDispatchResult(
-            ok=worker_result.ok,
-            summary=worker_result.summary,
+            ok=visible_result["ok"],
+            summary=visible_result["summary"],
             cancelled=worker_result.cancelled,
-            needs_followup=worker_result.needs_followup,
+            needs_followup=visible_result["needs_followup"],
             phase_boundary=worker_result.phase_boundary,
             followup_reason=worker_result.followup_reason,
-            recoverable=worker_result.recoverable,
-            status=worker_result.status,
+            recoverable=visible_result["recoverable"],
+            status=visible_result["status"],
             completed=list(worker_result.completed),
             remaining=list(worker_result.remaining),
             modified_files=modified_files,
@@ -337,17 +376,22 @@ def _session_metadata(
     worker_result: WorkerDispatchResult,
 ) -> dict[str, Any]:
     """Build session-level extras for the aggregate result."""
-    user_visible_blocker = _user_visible_blocker(worker_result, step_results)
+    recovery_classification = _campaign_recovery_classification(worker_result, step_results)
+    user_visible_blocker = recovery_classification in {
+        USER_VISIBLE_BLOCKER,
+        USER_ONLY_BLOCKER,
+        TERMINAL_ENVIRONMENT_BLOCKER,
+    }
     internal_campaign_continuation = bool(
         is_explicit_campaign
         and not user_visible_blocker
-        and (
-            worker_result.needs_followup
-            or worker_result.phase_boundary
-            or worker_result.recoverable
-            or worker_result.mismatch is not None
-            or any(step.needs_planner_resolution for step in step_results)
-        )
+        and recovery_classification
+        in {INTERNAL_RECOVERABLE_ERROR, PLANNER_RESOLUTION_NEEDED}
+    )
+    recovery_attempts = _campaign_recovery_attempts(cursor, recovery_classification)
+    recovery_budget_exhausted = bool(
+        recovery_attempts
+        and max(recovery_attempts.values()) >= CAMPAIGN_RECOVERY_BUDGET_PER_STEP
     )
     return {
         "dispatch_session": True,
@@ -358,8 +402,14 @@ def _session_metadata(
             "blocked_step_id": cursor.blocked_step_id,
         },
         "dispatch_step_results": [sr.to_dict() for sr in step_results],
+        "campaign_recovery_classification": recovery_classification,
+        "campaign_recovery_budget": CAMPAIGN_RECOVERY_BUDGET_PER_STEP,
+        "campaign_recovery_attempts": recovery_attempts,
+        "campaign_recovery_budget_exhausted": recovery_budget_exhausted,
         "internal_campaign_continuation": internal_campaign_continuation,
         "user_visible_blocker": user_visible_blocker,
+        "user_only_blocker": recovery_classification == USER_ONLY_BLOCKER,
+        "terminal_environment_blocker": recovery_classification == TERMINAL_ENVIRONMENT_BLOCKER,
         "suppress_user_followup_card": internal_campaign_continuation,
     }
 
@@ -376,29 +426,123 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
-def _user_visible_blocker(
+def _campaign_recovery_classification(
     worker_result: WorkerDispatchResult,
     step_results: list[StepResult],
-) -> bool:
+) -> str:
     extras = worker_result.extras if isinstance(worker_result.extras, dict) else {}
     status = worker_result.status or ""
     failure_class = str(extras.get("failure_class") or "")
     if worker_result.cancelled:
-        return True
+        return USER_VISIBLE_BLOCKER
     if status == "approval_rejected" or failure_class == "approval_rejected":
-        return True
-    if extras.get("user_only_blocker") or extras.get("user_visible_blocker"):
-        return True
+        return USER_VISIBLE_BLOCKER
+    if extras.get("user_only_blocker"):
+        return USER_ONLY_BLOCKER
+    if _is_terminal_environment_blocker(extras, failure_class):
+        return TERMINAL_ENVIRONMENT_BLOCKER
+    if extras.get("user_visible_blocker"):
+        return USER_VISIBLE_BLOCKER
     if any(step.user_only_blocker for step in step_results):
-        return True
+        return USER_ONLY_BLOCKER
+    if _is_internal_recoverable_error(worker_result):
+        return INTERNAL_RECOVERABLE_ERROR
+    if (
+        worker_result.needs_followup
+        or worker_result.phase_boundary
+        or worker_result.recoverable
+        or worker_result.mismatch is not None
+        or extras.get("planner_resolution_needed")
+        or any(step.needs_planner_resolution for step in step_results)
+    ):
+        return PLANNER_RESOLUTION_NEEDED
     if not worker_result.ok and not (
         worker_result.recoverable
         or worker_result.needs_followup
         or worker_result.phase_boundary
         or worker_result.mismatch is not None
     ):
+        return USER_VISIBLE_BLOCKER
+    return NO_RECOVERY_NEEDED
+
+
+def _is_internal_recoverable_error(worker_result: WorkerDispatchResult) -> bool:
+    extras = worker_result.extras if isinstance(worker_result.extras, dict) else {}
+    status = worker_result.status or ""
+    failure_class = str(extras.get("failure_class") or "")
+    if status == WorkerOutcomeStatus.harness_error.value:
+        return True
+    if extras.get("worker_internal_error") or extras.get("internal_error"):
+        return True
+    if failure_class in {
+        "harness_error",
+        "harness_no_progress",
+        "internal_error",
+        "worker_flow_thrash",
+        "worker_flow_zero_work_no_progress",
+        "worker_internal_error",
+    }:
         return True
     return False
+
+
+def _is_terminal_environment_blocker(extras: dict[str, Any], failure_class: str) -> bool:
+    if extras.get("terminal_environment_blocker"):
+        return True
+    if failure_class.startswith("project_environment_missing_"):
+        return True
+    blockers = extras.get("environment_setup_blockers")
+    return isinstance(blockers, list) and bool(blockers)
+
+
+def _campaign_recovery_attempts(
+    cursor: DispatchStepCursor,
+    recovery_classification: str,
+) -> dict[str, int]:
+    if recovery_classification in {NO_RECOVERY_NEEDED, USER_VISIBLE_BLOCKER, USER_ONLY_BLOCKER, TERMINAL_ENVIRONMENT_BLOCKER}:
+        return {}
+    step_id = cursor.blocked_step_id
+    return {step_id: 1} if step_id else {}
+
+
+def _visible_campaign_result(
+    worker_result: WorkerDispatchResult,
+    session_metadata: dict[str, Any],
+    *,
+    is_explicit_campaign: bool,
+) -> dict[str, Any]:
+    if not is_explicit_campaign or not session_metadata.get("internal_campaign_continuation"):
+        return {
+            "ok": worker_result.ok,
+            "summary": worker_result.summary,
+            "needs_followup": worker_result.needs_followup,
+            "recoverable": worker_result.recoverable,
+            "status": worker_result.status,
+        }
+
+    blocked_step = session_metadata.get("dispatch_cursor", {}).get("blocked_step_id")
+    classification = str(session_metadata.get("campaign_recovery_classification") or "")
+    summary = _calm_campaign_recovery_summary(blocked_step, classification)
+    return {
+        "ok": False,
+        "summary": summary,
+        "needs_followup": True,
+        "recoverable": True,
+        "status": WorkerOutcomeStatus.needs_followup.value,
+    }
+
+
+def _calm_campaign_recovery_summary(blocked_step: Any, classification: str) -> str:
+    step_text = f" at {blocked_step}" if blocked_step else ""
+    if classification == INTERNAL_RECOVERABLE_ERROR:
+        return (
+            f"Aura paused the campaign{step_text} for internal recovery. "
+            "Planner is selecting the next bounded action."
+        )
+    return (
+        f"Aura paused the campaign{step_text} to continue planning. "
+        "Planner is selecting the next bounded action."
+    )
 
 
 __all__ = [

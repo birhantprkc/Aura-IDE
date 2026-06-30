@@ -72,6 +72,7 @@ from aura.conversation.path_utils import (
 from aura.conversation.path_utils import (
     normalize_worker_path as _normalize_worker_path,
 )
+from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.syntax_repair_state import (
     has_terminal_syntax_failure,
@@ -395,6 +396,11 @@ class ConversationManager:
                 label, model, thinking, hook_name,
             )
             _first_event = True
+            planner_hygiene = (
+                PlannerStreamHygiene()
+                if state.mode == "planner" and "planner" in hook_name
+                else None
+            )
 
             for ev in hooks.trigger(
                 hook_name,
@@ -408,6 +414,19 @@ class ConversationManager:
                 if _first_event:
                     _log.info("%s_first_event model=%s", label, model)
                     _first_event = False
+                if planner_hygiene is not None and isinstance(ev, ContentDelta):
+                    filtered_text = planner_hygiene.filter_delta(ev.text)
+                    if not filtered_text:
+                        continue
+                    ev = ContentDelta(text=filtered_text)
+                elif planner_hygiene is not None and isinstance(ev, Done):
+                    flush_text = planner_hygiene.flush()
+                    if flush_text:
+                        on_event(ContentDelta(text=flush_text))
+                    if isinstance(ev.full_message, dict):
+                        content = ev.full_message.get("content")
+                        if isinstance(content, str):
+                            ev.full_message["content"] = planner_hygiene.sanitize_message_text(content)
                 if state.mode == "worker" and state.stream_buffer is not None:
                     state.stream_buffer.capture_or_forward(ev, on_event)
                 else:

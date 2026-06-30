@@ -623,7 +623,10 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
             "implementation details here; the worker owns those decisions. Include a "
             "self-terminating run_command smoke check for any change that affects whether "
             "the app boots or a runnable entry point behaves. The worker will return a "
-            "summary of what it did. Fill structured contract fields when knowable from "
+            "summary of what it did. For implementation work that is multi-file, high-risk, "
+            "subsystem/architecture/feature oriented, refactor-like, validation-heavy, or "
+            "otherwise non-trivial, provide a decomposed steps campaign. Flat fields without "
+            "steps are only a compatibility path for tiny one-file work. Fill structured contract fields when knowable from "
             "the request or repo context; they power Aura's pre-release quality gate."
         ),
         "parameters": {
@@ -701,12 +704,15 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                 "steps": {
                     "type": "array",
                     "description": (
-                        "Optional ordered campaign for multi-step work. Each item is one "
-                        "bounded edit path with its own goal, files, spec, acceptance, "
-                        "validation commands, required outputs, non-goals, and contract "
-                        "constraints. Use this when the implementation should proceed "
-                        "through multiple explicit Worker steps. When omitted or empty, "
-                        "the top-level flat fields are the single-step dispatch path."
+                        "Optional ordered campaign for multi-step work, but required for "
+                        "non-trivial implementation work: multi-file, high-risk, subsystem, "
+                        "architecture, refactor, feature, validation-heavy, or multi-stage "
+                        "tasks. Each item is one bounded Worker run with its own id, title, "
+                        "goal, spec, files when known, acceptance when knowable, validation "
+                        "commands when knowable, required outputs, non-goals, and contract "
+                        "constraints. Do not use one giant step that restates the top-level "
+                        "summary. When omitted or empty, the top-level flat fields are the "
+                        "single-step dispatch path for tiny one-file compatibility work only."
                     ),
                     "items": {
                         "type": "object",
@@ -717,15 +723,15 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                             },
                             "title": {
                                 "type": "string",
-                                "description": "Short user-readable title for this bounded edit.",
+                                "description": "Short user-readable title for this bounded edit; do not reuse the top-level summary.",
                             },
                             "goal": {
                                 "type": "string",
-                                "description": "What this specific step should accomplish.",
+                                "description": "What this specific step should accomplish, narrower than the campaign goal.",
                             },
                             "spec": {
                                 "type": "string",
-                                "description": "Self-contained work order for this step.",
+                                "description": "Self-contained bounded work order for this step, not the full campaign pasted into one paragraph.",
                             },
                             "files": {
                                 "type": "array",

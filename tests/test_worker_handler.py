@@ -732,6 +732,30 @@ class TestMismatchResolutionWiring:
         chat.add_worker_summary.assert_not_called()
         assert handler._active_mismatch_card_id is None
 
+    def test_internal_campaign_harness_error_metadata_suppresses_summary(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {
+            "extras": {
+                "dispatch_session": True,
+                "worker_internal_error": True,
+                "internal_error": "RuntimeError: hidden",
+                "campaign_recovery_classification": "internal_recoverable_error",
+                "internal_campaign_continuation": True,
+                "suppress_user_followup_card": True,
+                "user_visible_blocker": False,
+            }
+        }
+
+        handler._on_worker_finished(
+            "tc1", False, "Aura paused the campaign for internal recovery.",
+            needs_followup=True, status="needs_followup",
+        )
+
+        chat.add_mismatch_resolution_card.assert_not_called()
+        chat.add_worker_summary.assert_not_called()
+        assert handler._active_mismatch_card_id is None
+
     def test_user_visible_campaign_blocker_still_surfaces_mismatch(
         self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
     ) -> None:

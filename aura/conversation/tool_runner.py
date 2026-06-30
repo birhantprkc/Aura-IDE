@@ -18,8 +18,10 @@ from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
     WorkerDispatchResult,
+    WorkerOutcomeStatus,
 )
 from aura.conversation.dispatch_contract import enrich_worker_dispatch_contract
+from aura.conversation.dispatch_plan import validate_dispatch_campaign
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.spec_quality import validate_worker_dispatch_spec
@@ -78,6 +80,47 @@ class ToolRunner:
 
             req.steps = [WorkerStepSpec.from_dict(step) for step in raw_steps]
         req = enrich_worker_dispatch_contract(req)
+        campaign = validate_dispatch_campaign(req)
+        if not campaign.ok:
+            error_message = (
+                "Plan incomplete - dispatch_to_worker requires a decomposed steps campaign "
+                "for this implementation. The Worker was not started. Call dispatch_to_worker "
+                "again with real ordered steps; each step needs id, title, goal, spec, files "
+                "when known, acceptance when knowable, and validation_commands when knowable. "
+                "Campaign errors:\n"
+                + "\n".join(f"- {item}" for item in campaign.errors)
+            )
+            result = WorkerDispatchResult(
+                ok=False,
+                summary=error_message,
+                recoverable=True,
+                extras={
+                    "dispatch_not_started": True,
+                    "dispatch_campaign_rejected": True,
+                    "requires_campaign_steps": campaign.requires_steps,
+                    "campaign_errors": list(campaign.errors),
+                },
+            )
+            payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(
+                ToolResult(
+                    tool_call_id=tool_call_id,
+                    name="dispatch_to_worker",
+                    ok=True,
+                    result=payload,
+                    extras={
+                        "dispatch_not_started": True,
+                        "dispatch_campaign_rejected": True,
+                        "recoverable": True,
+                        "summary": error_message,
+                        "requires_campaign_steps": campaign.requires_steps,
+                        "campaign_errors": list(campaign.errors),
+                    },
+                )
+            )
+            return result
+
         quality = validate_worker_dispatch_spec(req.spec, req.acceptance, goal=req.goal)
         if not quality.ok:
             missing = [
@@ -149,17 +192,42 @@ class ToolRunner:
         try:
             result = dispatch_cb(tool_call_id, req)
         except Exception as exc:
-            result = WorkerDispatchResult(
-                ok=False,
-                summary="Harness error due to an internal Worker dispatch exception.",
-                cancelled=False,
-                recoverable=False,
-                extras={
-                    "worker_internal_error": True,
-                    "error_type": type(exc).__name__,
-                    "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
-                },
-            )
+            if req.steps:
+                result = WorkerDispatchResult(
+                    ok=False,
+                    summary=(
+                        "Aura paused the campaign for internal recovery. "
+                        "Planner is selecting the next bounded action."
+                    ),
+                    needs_followup=True,
+                    recoverable=True,
+                    status=WorkerOutcomeStatus.needs_followup.value,
+                    extras={
+                        "worker_internal_error": True,
+                        "error_type": type(exc).__name__,
+                        "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
+                        "dispatch_session": True,
+                        "campaign_recovery_classification": "internal_recoverable_error",
+                        "campaign_recovery_budget": 1,
+                        "campaign_recovery_attempts": {},
+                        "campaign_recovery_budget_exhausted": False,
+                        "internal_campaign_continuation": True,
+                        "suppress_user_followup_card": True,
+                        "user_visible_blocker": False,
+                    },
+                )
+            else:
+                result = WorkerDispatchResult(
+                    ok=False,
+                    summary="Harness error due to an internal Worker dispatch exception.",
+                    cancelled=False,
+                    recoverable=False,
+                    extras={
+                        "worker_internal_error": True,
+                        "error_type": type(exc).__name__,
+                        "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
+                    },
+                )
 
         payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
         self._history.append_tool_result(tool_call_id, payload)

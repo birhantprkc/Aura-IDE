@@ -1095,6 +1095,71 @@ def test_dispatch_allows_specs_without_quality_sections(manager, mock_client, mo
         # No extra Planner round after completed dispatch
         mock_client.assert_called_once()
 
+
+def test_planner_pre_dispatch_chatter_is_suppressed(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+        type(mock_tools).mode = PropertyMock(return_value="planner")
+        tc = _tool_call("dispatch1", "dispatch_to_worker", {
+            "goal": "Fix bug",
+            "files": ["test.py"],
+            "spec": "Change X to Y",
+            "acceptance": "Verify X changes to Y.",
+        })
+        dispatch_cb = MagicMock(return_value=WorkerDispatchResult(ok=True, summary="done"))
+        mock_client.return_value = [
+            ContentDelta(text="Now I have a thorough understanding. "),
+            ContentDelta(text="I can't write files directly, so let me prepare the capsule. "),
+            _make_done(
+                content=(
+                    "Now I have a thorough understanding. "
+                    "I can't write files directly, so let me prepare the capsule."
+                ),
+                tool_calls=[tc],
+            ),
+        ]
+
+        manager.send(
+            on_event=on_event,
+            approval_cb=_make_approval_cb(),
+            cancel_event=cancel_event,
+            model="deepseek-chat",
+            thinking="off",
+            dispatch_cb=dispatch_cb,
+        )
+
+        visible_text = "".join(e.text for e in captured_events if isinstance(e, ContentDelta))
+        assert "Now I have" not in visible_text
+        assert "can't write files directly" not in visible_text
+        assert "prepare the capsule" not in visible_text
+        assert any(isinstance(e, WorkerDispatchRequested) for e in captured_events)
+        dispatch_cb.assert_called_once()
+        assert history.messages[0]["content"] == ""
+
+
+def test_planner_real_question_is_not_suppressed(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+        type(mock_tools).mode = PropertyMock(return_value="planner")
+        question = "Which file should I update?"
+        mock_client.return_value = [
+            ContentDelta(text=question),
+            _make_done(content=question),
+        ]
+
+        manager.send(
+            on_event=on_event,
+            approval_cb=_make_approval_cb(),
+            cancel_event=cancel_event,
+            model="deepseek-chat",
+            thinking="off",
+        )
+
+        visible_text = "".join(e.text for e in captured_events if isinstance(e, ContentDelta))
+        assert visible_text == question
+        assert history.messages[0]["content"] == question
+
+
 def test_dispatch_cb_raises(manager, mock_client, mock_tools, on_event,
                                 captured_events, cancel_event, history):
         type(mock_tools).mode = PropertyMock(return_value="planner")
@@ -1129,6 +1194,74 @@ def test_dispatch_cb_raises(manager, mock_client, mock_tools, on_event,
         assert parsed["summary"] == "Harness error due to an internal Worker dispatch exception."
         assert parsed["extras"]["worker_internal_error"] is True
         assert "RuntimeError" not in parsed["summary"]
+
+
+def test_campaign_dispatch_cb_exception_routes_to_internal_continuation(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    args = _valid_dispatch_args(
+        goal="Build behavioral verification rung",
+        files=["a.py", "b.py", "c.py"],
+        core="Add a validation rung across the dispatch subsystem.",
+    )
+    args["summary"] = "Build behavioral verification rung"
+    args["steps"] = [
+        {
+            "id": "schema",
+            "title": "Tighten dispatch schema",
+            "goal": "Update dispatch schema guidance.",
+            "spec": "Bound the tool schema around required campaign decomposition.",
+            "files": ["a.py"],
+            "acceptance": "Schema text names campaign-step requirements.",
+        },
+        {
+            "id": "runner",
+            "title": "Reject invalid campaign shapes",
+            "goal": "Reject broad flat dispatches before user-facing events.",
+            "spec": "Add runtime validation before WorkerDispatchRequested is emitted.",
+            "files": ["b.py"],
+            "acceptance": "Bad broad dispatches return a recoverable tool result.",
+        },
+    ]
+    tc = _tool_call("dispatch1", "dispatch_to_worker", args)
+
+    def _raising_cb(tool_call_id, req):
+        raise RuntimeError("boom")
+
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc])]),
+        iter([ContentDelta(text="Continuing internally"), _make_done(content="Continuing internally")]),
+    ]
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=_raising_cb,
+    )
+
+    assert any(isinstance(e, WorkerDispatchRequested) for e in captured_events)
+    dispatch_result = next(
+        e for e in captured_events
+        if isinstance(e, ToolResult) and e.name == "dispatch_to_worker"
+    )
+    assert dispatch_result.ok is True
+    parsed = json.loads(dispatch_result.result)
+    assert parsed["ok"] is False
+    assert parsed["needs_followup"] is True
+    assert parsed["recoverable"] is True
+    assert parsed["status"] == "needs_followup"
+    assert not parsed["summary"].startswith("Harness error")
+    assert parsed["extras"]["worker_internal_error"] is True
+    assert parsed["extras"]["campaign_recovery_classification"] == "internal_recoverable_error"
+    assert parsed["extras"]["internal_campaign_continuation"] is True
+    assert parsed["extras"]["suppress_user_followup_card"] is True
+    assert parsed["extras"]["user_visible_blocker"] is False
+    assert history.messages[-1]["content"] == "Continuing internally"
+
 
 def test_dispatch_spec_rejection_is_plan_incomplete_not_worker_started(
     manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
@@ -1165,6 +1298,113 @@ def test_dispatch_spec_rejection_is_plan_incomplete_not_worker_started(
     assert parsed["extras"]["dispatch_not_started"] is True
     assert parsed["extras"]["dispatch_spec_rejected"] is True
     assert history.messages[-1]["content"] == "Plan fixed"
+
+
+def test_broad_flat_dispatch_rejected_before_spec_card(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    args = _valid_dispatch_args(
+        goal="Build behavioral verification rung",
+        files=["a.py", "b.py", "c.py"],
+        core="Add a validation rung across the dispatch subsystem.",
+    )
+    args["summary"] = "Build behavioral verification rung"
+    tc = _tool_call("dispatch1", "dispatch_to_worker", args)
+    dispatch_cb = MagicMock()
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc])]),
+        iter([ContentDelta(text="Replanning"), _make_done(content="Replanning")]),
+    ]
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    dispatch_cb.assert_not_called()
+    assert not any(isinstance(e, WorkerDispatchRequested) for e in captured_events)
+    dispatch_result = next(
+        e for e in captured_events
+        if isinstance(e, ToolResult) and e.name == "dispatch_to_worker"
+    )
+    assert dispatch_result.ok is True
+    parsed = json.loads(dispatch_result.result)
+    assert parsed["ok"] is False
+    assert parsed["recoverable"] is True
+    assert parsed["extras"]["dispatch_not_started"] is True
+    assert parsed["extras"]["dispatch_campaign_rejected"] is True
+    assert parsed["extras"]["requires_campaign_steps"] is True
+    assert "decomposed steps campaign" in parsed["summary"]
+    assert history.messages[-1]["content"] == "Replanning"
+
+
+def test_broad_campaign_dispatch_reaches_spec_card_with_steps(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    args = _valid_dispatch_args(
+        goal="Build behavioral verification rung",
+        files=["a.py", "b.py", "c.py"],
+        core="Add a validation rung across the dispatch subsystem.",
+    )
+    args["summary"] = "Build behavioral verification rung"
+    args["steps"] = [
+        {
+            "id": "schema",
+            "title": "Tighten dispatch schema",
+            "goal": "Update dispatch schema guidance for campaign steps.",
+            "spec": "Bound the tool schema and prompt guidance around required campaign decomposition.",
+            "files": ["a.py"],
+            "acceptance": "Schema text names campaign-step requirements.",
+            "validation_commands": ["python -m compileall a.py"],
+        },
+        {
+            "id": "runner",
+            "title": "Reject invalid campaign shapes",
+            "goal": "Reject broad flat dispatches before user-facing events.",
+            "spec": "Add runtime validation before WorkerDispatchRequested is emitted.",
+            "files": ["b.py"],
+            "acceptance": "Bad broad dispatches return a recoverable tool result.",
+            "validation_commands": ["python -m compileall b.py"],
+        },
+        {
+            "id": "todo",
+            "title": "Project TODOs from steps",
+            "goal": "Keep visible TODOs aligned with campaign steps.",
+            "spec": "Ensure the TODO projection emits one task per WorkerDispatchPlan step.",
+            "files": ["c.py"],
+            "acceptance": "TODO task descriptions match step titles.",
+            "validation_commands": ["python -m compileall c.py"],
+        },
+    ]
+    tc = _tool_call("dispatch1", "dispatch_to_worker", args)
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(ok=True, summary="done"))
+    mock_client.return_value = [
+        _make_done(content="", tool_calls=[tc]),
+    ]
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    dispatch_cb.assert_called_once()
+    event = next(e for e in captured_events if isinstance(e, WorkerDispatchRequested))
+    assert [step["title"] for step in event.steps] == [
+        "Tighten dispatch schema",
+        "Reject invalid campaign shapes",
+        "Project TODOs from steps",
+    ]
+
 
 def test_recoverable_worker_phase_boundary_allows_planner_to_continue(
     manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history

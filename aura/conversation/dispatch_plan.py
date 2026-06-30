@@ -7,10 +7,66 @@ user still sees one dispatch card, one Worker run, and one aggregate receipt.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+
+
+_BROAD_CAMPAIGN_PATTERNS = (
+    r"\bmulti[- ]?(?:part|file|stage|step|phase)\b",
+    r"\bsubsystem\b",
+    r"\barchitect(?:ure|ural)?\b",
+    r"\brefactor(?:ing)?\b",
+    r"\bfeature\b",
+    r"\bcampaign\b",
+    r"\bvalidation\b.*\b(?:rung|pipeline|orchestrat|stage|system|flow)\b",
+    r"\b(?:build|create|implement|add)\b.*\b(?:system|subsystem|architecture|feature|workflow|pipeline|rung)\b",
+)
+_HIGH_RISK_PATTERNS = (
+    r"\bauth(?:entication|orization)?\b",
+    r"\bsecurity\b",
+    r"\bcredential",
+    r"\btoken\b",
+    r"\bmigration\b",
+    r"\bdatabase\b",
+    r"\bconcurren",
+    r"\bthread",
+    r"\bprocess\b",
+    r"\bdelete\b",
+    r"\bdestructive\b",
+)
+_TINY_CLEANUP_PATTERNS = (
+    r"\bcleanup\b",
+    r"\bclean up\b",
+    r"\btypo\b",
+    r"\bcomment\b",
+    r"\bdocstring\b",
+    r"\bformat(?:ting)?\b",
+    r"\blint\b",
+    r"\brename\b",
+)
+_GENERIC_STEP_TITLES = {
+    "worker step",
+    "implementation",
+    "implement",
+    "make changes",
+    "update files",
+    "do the work",
+    "complete task",
+    "fix",
+    "change",
+}
+
+
+@dataclass(frozen=True)
+class CampaignValidationResult:
+    """Planner-visible validation for WorkerDispatchPlan campaign shape."""
+
+    ok: bool
+    requires_steps: bool = False
+    errors: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -364,6 +420,197 @@ def todo_tasks_from_plan(
     return tasks
 
 
+def validate_dispatch_campaign(req: WorkerDispatchRequest) -> CampaignValidationResult:
+    """Validate that broad implementation work is decomposed into Worker steps.
+
+    Flat dispatch fields remain a compatibility path for tiny work. Anything
+    that looks multi-file, high-risk, subsystem/architecture/feature oriented,
+    refactor-like, or multi-stage validation must arrive as a real campaign.
+    """
+    requires_steps = _request_requires_campaign(req)
+    errors: list[str] = []
+
+    if requires_steps and not req.steps:
+        errors.append(
+            "Broad implementation dispatches must include a decomposed steps campaign."
+        )
+
+    if req.steps:
+        errors.extend(_step_boundary_errors(req, requires_steps=requires_steps))
+
+    return CampaignValidationResult(
+        ok=not errors,
+        requires_steps=requires_steps,
+        errors=errors,
+    )
+
+
+def _request_requires_campaign(req: WorkerDispatchRequest) -> bool:
+    if len(req.files) > 1:
+        return True
+    text = _request_text(req)
+    if _matches_any(text, _BROAD_CAMPAIGN_PATTERNS):
+        return True
+    if req.risk_notes or _matches_any(text, _HIGH_RISK_PATTERNS):
+        return True
+    if len(req.validation_commands) > 1:
+        return True
+    if _looks_multi_stage_validation(req.acceptance):
+        return True
+    task_shape = req.task_shape
+    if (
+        task_shape is not None
+        and task_shape.task_kind in {"new_tool_or_app", "refactor"}
+        and not _looks_tiny_cleanup(req)
+    ):
+        return True
+    return False
+
+
+def _step_boundary_errors(
+    req: WorkerDispatchRequest,
+    *,
+    requires_steps: bool,
+) -> list[str]:
+    errors: list[str] = []
+    steps = list(req.steps)
+    if not steps:
+        return errors
+
+    if requires_steps and len(steps) == 1:
+        step = steps[0]
+        step_files = step.files or req.files
+        if len(step_files) >= 3:
+            errors.append("A single campaign step cannot cover 3 or more files.")
+        elif _matches_any(_request_text(req), _BROAD_CAMPAIGN_PATTERNS):
+            errors.append(
+                "Subsystem, architecture, feature, refactor, and validation campaign work needs multiple bounded steps."
+            )
+        else:
+            errors.append("This dispatch is not tiny enough for a one-step campaign.")
+
+    for index, step in enumerate(steps, start=1):
+        prefix = f"step {index}"
+        needs_distinct_boundary = requires_steps or len(steps) > 1
+        if not step.id.strip():
+            errors.append(f"{prefix} is missing id.")
+        if not _useful_step_title(
+            step.title,
+            req,
+            needs_distinct_boundary=needs_distinct_boundary,
+        ):
+            errors.append(f"{prefix} needs a short, specific title.")
+        if not step.goal.strip():
+            errors.append(f"{prefix} is missing goal.")
+        if not step.spec.strip():
+            errors.append(f"{prefix} is missing a bounded spec.")
+        elif needs_distinct_boundary and _boundary_text_is_top_level(step.spec, req):
+            errors.append(f"{prefix} spec repeats the top-level dispatch instead of a bounded work order.")
+        if needs_distinct_boundary and _boundary_text_is_top_level(step.goal, req):
+            errors.append(f"{prefix} goal repeats the top-level dispatch instead of naming a step boundary.")
+
+    normalized_titles = [_normalize_boundary_text(step.title) for step in steps]
+    useful_titles = [title for title in normalized_titles if title]
+    if len(steps) > 1 and len(set(useful_titles)) < len(useful_titles):
+        errors.append("Campaign steps need distinct titles.")
+
+    return _dedupe(errors)
+
+
+def _request_text(req: WorkerDispatchRequest) -> str:
+    parts = [
+        req.goal,
+        req.summary,
+        req.spec,
+        req.acceptance,
+        " ".join(req.files),
+        " ".join(req.required_outputs),
+        " ".join(req.risk_notes),
+    ]
+    return " ".join(str(part or "") for part in parts)
+
+
+def _matches_any(text: str, patterns: tuple[str, ...]) -> bool:
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def _looks_multi_stage_validation(text: str) -> bool:
+    lowered = str(text or "").lower()
+    if not lowered:
+        return False
+    markers = (
+        "multi-stage validation",
+        "multi stage validation",
+        "validation pipeline",
+        "validation rung",
+        "compileall",
+    )
+    if sum(1 for marker in markers if marker in lowered) >= 1 and (
+        " and " in lowered or ";" in lowered or "\n" in lowered
+    ):
+        return True
+    command_markers = ("pytest", "compileall", "py_compile", "npm test", "ruff", "mypy")
+    return sum(1 for marker in command_markers if marker in lowered) > 1
+
+
+def _useful_step_title(
+    title: str,
+    req: WorkerDispatchRequest,
+    *,
+    needs_distinct_boundary: bool,
+) -> bool:
+    normalized = _normalize_boundary_text(title)
+    if not normalized:
+        return False
+    if normalized in _GENERIC_STEP_TITLES:
+        return False
+    if needs_distinct_boundary and _boundary_text_is_top_level(title, req):
+        return False
+    return True
+
+
+def _boundary_text_is_top_level(value: str, req: WorkerDispatchRequest) -> bool:
+    normalized = _normalize_boundary_text(value)
+    if not normalized:
+        return False
+    candidates = [
+        req.goal,
+        req.summary,
+        _first_sentence(req.spec),
+    ]
+    return normalized in {
+        _normalize_boundary_text(candidate)
+        for candidate in candidates
+        if _normalize_boundary_text(candidate)
+    }
+
+
+def _first_sentence(text: str) -> str:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return ""
+    first_line = next((line.strip() for line in stripped.splitlines() if line.strip()), "")
+    match = re.split(r"(?<=[.!?])\s+", first_line, maxsplit=1)
+    return match[0] if match else first_line
+
+
+def _normalize_boundary_text(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    return text.strip(" .:-")
+
+
+def _looks_tiny_cleanup(req: WorkerDispatchRequest) -> bool:
+    if len(req.files) != 1:
+        return False
+    if req.risk_notes or len(req.validation_commands) > 1:
+        return False
+    text = _request_text(req)
+    return _matches_any(text, _TINY_CLEANUP_PATTERNS) and not (
+        _matches_any(text, _BROAD_CAMPAIGN_PATTERNS)
+        or _matches_any(text, _HIGH_RISK_PATTERNS)
+    )
+
+
 def _dedupe(values: list[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -400,6 +647,7 @@ def _str_dict_list(raw: Any) -> dict[str, list[str]]:
 
 __all__ = [
     "AggregatedDispatchResult",
+    "CampaignValidationResult",
     "StepResult",
     "StepValidationPolicy",
     "WorkerDispatchPlan",
@@ -407,4 +655,5 @@ __all__ = [
     "plan_from_request",
     "request_for_step",
     "todo_tasks_from_plan",
+    "validate_dispatch_campaign",
 ]

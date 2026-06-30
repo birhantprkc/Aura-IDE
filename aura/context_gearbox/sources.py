@@ -21,6 +21,7 @@ PLANNER_DISPATCH_CONTRACT = """### planner_dispatch_contract
 - For code changes, dispatch once the requested change is clear enough to execute.
 - Clear enough means goal, target seam/files, constraints/non-goals, and acceptance are known; exact implementation details are Worker-owned.
 - Do not spend another turn narrating, comparing approaches, or expanding a plan after the Worker capsule is actionable.
+- Keep pre-dispatch visible output quiet. Do not say "now I have context", "let me implement", "I can't write files directly", or "let me prepare the capsule"; inspect, decide, dispatch.
 - If the user accepts a previously proposed actionable phase, bind the acceptance to the most recent actionable phase and call dispatch_to_worker.
 - Treat "do phase 1", "start phase 1", "yes do that", "go", "run it", and "let's do it" as acceptance when a recent actionable phase exists.
 - Do not say you will start extracting, editing, or refactoring in Planner mode; the Planner dispatches and the Worker implements.
