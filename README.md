@@ -16,10 +16,22 @@ Aura works on real repos from a desktop cockpit. It plans changes, edits files t
 
 [Start Here](https://aura-ide.hashnode.dev/start-here) · [Download](https://github.com/CarpseDeam/Aura-IDE/releases/latest) · [Discord](https://discord.gg/aGSthBX2Bg) · [Build Log](https://aura-ide.hashnode.dev/) · [Support](https://buymeacoffee.com/snowballkori)
 
-<!-- TODO: Add docs/images/aura-face.png — the new main GUI screenshot still needs to be placed in the repo -->
-<p align="center">
-  <img src="docs/images/aura-face.png" alt="Aura IDE desktop cockpit" width="900">
-</p>
+---
+
+## The core idea
+
+**AI coding agents need receipts, not vibes.**
+
+Most AI coding tools are black boxes — they edit files directly with no intermediate reasoning, no diff review, and no validation. You cross your fingers and hope the output is correct.
+
+Aura works differently. Every change is visible, reviewable, and verifiable.
+
+- **Planner** reads your workspace and writes a structured spec before any code is touched. You see the plan, you approve it.
+- **Worker** executes from that spec through controlled file tools. Every proposed edit shows as a unified diff. Approve or reject before anything touches disk.
+- **Validation** runs after every change. If something breaks, the Worker inspects the error and retries. If recovery fails, the change is aborted cleanly — no broken state.
+- **Receipts** show every tool call, token cost, and file changed. You know exactly what happened and what it cost.
+
+This is not a chat wrapper. This is a two-agent harness with guardrails, visibility, and accountability.
 
 ---
 
@@ -44,19 +56,6 @@ aura
 4. Review the Planner's spec, then click dispatch.
 5. Approve or reject each diff the Worker proposes.
 6. Watch validation run. Review the receipt.
-
----
-
-## Why Aura
-
-Most AI coding tools are chat interfaces that edit files directly with no intermediate reasoning layer. Aura separates concerns and keeps you in control.
-
-- **Real repo work, not just chat** — Aura reads your full workspace (AST maps, dependency graphs, BM25 code search) before it acts. It understands your project structure, not just your latest message.
-- **Planner/Worker workflow** — The Planner researches and writes a structured technical spec. You review and approve it. The Worker executes from that clean spec. Two agents, two roles, no confusion.
-- **Diff approval before writes** — Every proposed file change shows as a unified diff. Approve, reject, approve all, or reject all before anything touches disk.
-- **Validation and receipts** — The Worker validates every change. If validation fails it retries; if recovery fails the change is aborted cleanly. Every run produces a receipt showing tool calls, token costs, and files changed.
-- **Phone Companion** — Pair your phone through the Companion relay. Browse projects, start chats, send messages, and dispatch specs — your desktop streams execution live. No separate app to install.
-- **Aura Credits or BYOK** — Start instantly with Aura Credits (no API keys, no provider setup) or bring your own keys for DeepSeek, OpenAI, Anthropic, Gemini, or OpenRouter. Mix and match per role.
 
 ---
 
@@ -87,8 +86,6 @@ Aura Companion turns your phone into a remote command center for your desktop ag
 - Check drone status and review run receipts
 
 The Companion is a remote control, not a separate IDE. Your desktop does the work. Your phone gives you access when you're away from the keyboard.
-
-> 📱 Setup GIFs coming soon — we're capturing fresh Companion walkthroughs for the next release.
 
 ---
 
@@ -131,6 +128,18 @@ Aura uses a two-agent architecture: **Planner** researches and plans, **Worker**
 6. **Commit** — Approved changes are committed with an AI-generated message. You get a receipt showing every tool call, token cost, and file changed.
 
 The Planner and Worker are separate agent runs with separate system prompts and model selections. This means you can use a cheap fast model for planning and a more capable model for execution, or use different providers per role. The architecture — not any single model — produces the consistency.
+
+---
+
+## Why Aura is different
+
+- **Planner/Worker separation** — two agents, two roles, no confusion. One researches and specs, the other builds and validates.
+- **Repo-aware context** — AST repo maps, dependency graphs, BM25 code search, all baked into every Planner prompt. Aura understands your project structure, not just your last message.
+- **Diff approval** — every proposed write shows a unified diff before touching disk. Approve, reject, approve all, or reject all.
+- **Validation and recovery** — every change is validated. The Worker retries on failure and aborts cleanly if recovery fails. No broken state.
+- **Receipts** — tool calls, token costs, files changed. Every run produces a record you can inspect.
+- **Provider flexibility** — swap models per role. Cheap planner, capable worker. DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter, or Aura Credits.
+- **Local-first control surface** — your desktop runs everything. Your keys, your workspace, your data.
 
 ---
 

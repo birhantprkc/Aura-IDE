@@ -52,6 +52,11 @@ class _SendState:
     worker_validation_nudge_sent: bool = False
     worker_final_report_proof_nudge_sent: bool = False
     worker_flow_nudge_sent: bool = False
+    worker_quality_nudge_sent: bool = False
+    worker_quality_cleanup_attempted: bool = False
+    last_quality_ok_fingerprint: str | None = None
+    last_quality_findings: list[dict[str, Any]] = field(default_factory=list)
+    worker_quality_enabled: bool = True
     stale_validation_notes: list[str] = field(default_factory=list)
 
     # --- dispatch ---

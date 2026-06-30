@@ -27,13 +27,21 @@ from aura.conversation.dispatch import (
 )
 from aura.conversation.edit_orchestrator import EditMode, EditRetryLedger
 from aura.conversation.history import History
-from aura.conversation.manager import ConversationManager, _fingerprint_paths
+from aura.conversation.manager import ConversationManager
+from aura.conversation.manager_send_state import _SendState
 from aura.conversation.tool_limits import MAX_TOOL_CALLS_BY_MODE
 from aura.conversation.tools._types import (
     ApprovalDecision,
     ToolExecResult,
 )
 from aura.conversation.tools.registry import ToolRegistry
+from aura.conversation.worker_fingerprints import fingerprint_paths
+from aura.conversation.worker_quality import (
+    QualityFinding,
+    WorkerQualityDecision,
+    evaluate_worker_quality,
+)
+from aura.conversation.worker_quality_gate import handle_worker_quality_gate
 from aura.hooks import hooks
 from aura.sandbox import SandboxResult
 
@@ -165,6 +173,281 @@ def manager(history, mock_tools) -> ConversationManager:
         history=history,
         tool_registry=mock_tools,
     )
+
+
+def _quality_warning_decision() -> WorkerQualityDecision:
+    finding = QualityFinding(
+        kind="duplicate_changed_string",
+        severity="warning",
+        file="aura/a.py, aura/b.py",
+        line=3,
+        message="Same newly added string literal appears in multiple changed files: aura/a.py, aura/b.py",
+        suggested_action="Replace the duplicated literal with an existing shared constant.",
+        evidence={"files": ["aura/a.py", "aura/b.py"]},
+    )
+    return WorkerQualityDecision(
+        ok=False,
+        hard_block=False,
+        needs_cleanup=True,
+        findings=[finding],
+        instruction=(
+            "Do not redesign.\n"
+            "Do not broaden scope.\n"
+            "Patch only the listed findings.\n"
+            "Preserve behavior.\n"
+            "Rerun the smallest relevant validation.\n"
+            "Finish only after it passes.\n\n"
+            "Findings:\n"
+            "- aura/a.py, aura/b.py:3 - Same newly added string literal appears in multiple changed files: "
+            "aura/a.py, aura/b.py - Replace the duplicated literal with an existing shared constant."
+        ),
+    )
+
+
+def test_worker_quality_duplicate_string_needs_cleanup(tmp_path):
+    diff = """diff --git a/aura/a.py b/aura/a.py
+--- a/aura/a.py
++++ b/aura/a.py
+@@ -1,0 +1,1 @@
++MESSAGE = "shared deterministic worker cleanup text"
+diff --git a/aura/b.py b/aura/b.py
+--- a/aura/b.py
++++ b/aura/b.py
+@@ -1,0 +1,1 @@
++LABEL = "shared deterministic worker cleanup text"
+"""
+    with patch("aura.conversation.worker_quality.audit_changed_files", return_value=[]):
+        decision = evaluate_worker_quality(
+            tmp_path,
+            ["aura/a.py", "aura/b.py"],
+            diff,
+            validation_passed=True,
+        )
+
+    assert decision.needs_cleanup is True
+    assert decision.hard_block is False
+    assert decision.ok is False
+    assert decision.findings[0].kind == "duplicate_changed_string"
+    assert "aura/a.py" in decision.findings[0].message
+    assert "aura/b.py" in decision.findings[0].message
+    assert "aura/a.py" in decision.instruction
+    assert decision.findings[0].suggested_action in decision.instruction
+    lowered = decision.instruction.lower()
+    assert "improve" not in lowered
+    assert "quality" not in lowered
+    assert "better" not in lowered
+
+
+def test_worker_quality_removed_public_symbol_hard_blocks(tmp_path):
+    from aura.code_intel.models import AuditFinding
+
+    audit_finding = AuditFinding(
+        file="aura/module.py",
+        line=10,
+        message="Removed public symbol 'run'",
+        severity="error",
+        kind="removed_export",
+    )
+    with patch("aura.conversation.worker_quality.audit_changed_files", return_value=[audit_finding]):
+        decision = evaluate_worker_quality(
+            tmp_path,
+            ["aura/module.py"],
+            "",
+            validation_passed=True,
+        )
+
+    assert decision.hard_block is True
+    assert decision.needs_cleanup is False
+    assert decision.ok is False
+    assert decision.instruction == ""
+
+
+def test_worker_quality_clean_changeset_is_ok(tmp_path):
+    diff = """diff --git a/aura/module.py b/aura/module.py
+--- a/aura/module.py
++++ b/aura/module.py
+@@ -1 +1 @@
+-VALUE = 1
++VALUE = 2
+"""
+    with patch("aura.conversation.worker_quality.audit_changed_files", return_value=[]):
+        decision = evaluate_worker_quality(
+            tmp_path,
+            ["aura/module.py"],
+            diff,
+            validation_passed=True,
+        )
+
+    assert decision.ok is True
+    assert decision.hard_block is False
+    assert decision.needs_cleanup is False
+    assert decision.findings == []
+
+
+def test_worker_quality_gate_warns_once_then_releases(manager, on_event, tmp_path, mock_tools):
+    type(mock_tools).workspace_root = PropertyMock(return_value=tmp_path)
+    (tmp_path / ".git").mkdir()
+    target = tmp_path / "aura" / "module.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("VALUE = 1\n", encoding="utf-8")
+    state = _SendState(mode="worker", research_policy=None)
+    state.worker_app_writes.add("aura/module.py")
+    decision = _quality_warning_decision()
+
+    with (
+        patch("aura.conversation.worker_quality_gate._diff_changed_files", return_value="diff"),
+        patch("aura.conversation.worker_quality_gate.evaluate_worker_quality", return_value=decision) as evaluate_mock,
+    ):
+        assert handle_worker_quality_gate(
+            state=state,
+            workspace_root=tmp_path,
+            history=manager._history,
+            on_event=on_event,
+        ) == "cleanup"
+        assert handle_worker_quality_gate(
+            state=state,
+            workspace_root=tmp_path,
+            history=manager._history,
+            on_event=on_event,
+        ) == "none"
+        assert handle_worker_quality_gate(
+            state=state,
+            workspace_root=tmp_path,
+            history=manager._history,
+            on_event=on_event,
+        ) == "none"
+
+    assert state.worker_quality_nudge_sent is True
+    assert state.worker_quality_cleanup_attempted is True
+    assert state.last_quality_ok_fingerprint is not None
+    assert evaluate_mock.call_count == 2
+    assert manager._history.messages[-1]["role"] == "user"
+    assert "aura/a.py" in manager._history.messages[-1]["content"]
+
+
+def test_worker_quality_gate_clean_changeset_sets_fingerprint(manager, on_event, tmp_path, mock_tools):
+    type(mock_tools).workspace_root = PropertyMock(return_value=tmp_path)
+    (tmp_path / ".git").mkdir()
+    target = tmp_path / "aura" / "module.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("VALUE = 1\n", encoding="utf-8")
+    state = _SendState(mode="worker", research_policy=None)
+    state.worker_app_writes.add("aura/module.py")
+    decision = WorkerQualityDecision(
+        ok=True,
+        hard_block=False,
+        needs_cleanup=False,
+        findings=[],
+    )
+
+    with (
+        patch("aura.conversation.worker_quality_gate._diff_changed_files", return_value="diff"),
+        patch("aura.conversation.worker_quality_gate.evaluate_worker_quality", return_value=decision) as evaluate_mock,
+    ):
+        assert handle_worker_quality_gate(
+            state=state,
+            workspace_root=tmp_path,
+            history=manager._history,
+            on_event=on_event,
+        ) == "none"
+        assert handle_worker_quality_gate(
+            state=state,
+            workspace_root=tmp_path,
+            history=manager._history,
+            on_event=on_event,
+        ) == "none"
+
+    assert state.last_quality_ok_fingerprint is not None
+    assert state.last_quality_findings == []
+    assert evaluate_mock.call_count == 1
+
+
+def test_worker_quality_gate_hard_block_finishes_with_phase_boundary(
+    manager, on_event, captured_events, tmp_path, mock_tools
+):
+    type(mock_tools).workspace_root = PropertyMock(return_value=tmp_path)
+    (tmp_path / ".git").mkdir()
+    target = tmp_path / "aura" / "module.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("VALUE = 1\n", encoding="utf-8")
+    state = _SendState(mode="worker", research_policy=None)
+    state.worker_app_writes.add("aura/module.py")
+    finding = QualityFinding(
+        kind="removed_export",
+        severity="error",
+        file="aura/module.py",
+        line=1,
+        message="Removed public symbol 'run'",
+        suggested_action="Restore the removed public symbol or update all importers before final release.",
+        evidence={"source": "audit_changed_files"},
+    )
+    decision = WorkerQualityDecision(
+        ok=False,
+        hard_block=True,
+        needs_cleanup=False,
+        findings=[finding],
+    )
+
+    with (
+        patch("aura.conversation.worker_quality_gate._diff_changed_files", return_value="diff"),
+        patch("aura.conversation.worker_quality_gate.evaluate_worker_quality", return_value=decision),
+    ):
+        assert handle_worker_quality_gate(
+            state=state,
+            workspace_root=tmp_path,
+            history=manager._history,
+            on_event=on_event,
+        ) == "finished"
+
+    done = next(event for event in captured_events if isinstance(event, Done))
+    payload = json.loads(done.full_message["content"])
+    assert payload["recoverable"] is True
+    assert payload["phase_boundary"] is True
+    assert payload["details"]["findings"][0]["kind"] == "removed_export"
+
+
+def test_worker_final_quality_warning_is_re_dispatched_once(
+    manager, mock_client, mock_tools, on_event, cancel_event, history, tmp_path
+):
+    type(mock_tools).mode = PropertyMock(return_value="worker")
+    (tmp_path / ".git").mkdir()
+
+    def execute(name, args, **_kwargs):
+        if name == "write_file":
+            path = tmp_path / args["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(args.get("content", ""), encoding="utf-8")
+            return ToolExecResult(ok=True, payload={"ok": True, "path": args["path"]})
+        return ToolExecResult(ok=True, payload={"ok": True})
+
+    mock_tools.execute.side_effect = execute
+    decision = _quality_warning_decision()
+    mock_client.side_effect = [
+        iter([_make_done(tool_calls=[_tool_call("w1", "write_file", {"path": "aura/module.py", "content": "VALUE = 1\n"})])]),
+        iter([_make_done(content="done once. Validation: pytest passed.")]),
+        iter([_make_done(content="done twice. Validation: pytest passed.")]),
+    ]
+
+    with (
+        patch("aura.conversation.manager.run_focused_py_compile", return_value=(True, "")),
+        patch("aura.conversation.manager.run_focused_import_check", return_value=(True, "")),
+        patch("aura.conversation.manager.compute_dependents", return_value=[]),
+        patch("aura.conversation.worker_quality_gate._diff_changed_files", return_value="diff"),
+        patch("aura.conversation.worker_quality_gate.evaluate_worker_quality", return_value=decision) as evaluate_mock,
+    ):
+        manager.send(
+            on_event=on_event,
+            approval_cb=_make_approval_cb(),
+            cancel_event=cancel_event,
+            model="deepseek-chat",
+            thinking="off",
+        )
+
+    user_messages = [msg["content"] for msg in history.messages if msg["role"] == "user"]
+    assistant_messages = [msg["content"] for msg in history.messages if msg["role"] == "assistant"]
+    assert any("aura/a.py" in content for content in user_messages)
+    assert assistant_messages[-1] == "done twice. Validation: pytest passed."
+    assert evaluate_mock.call_count == 2
 
 
 # ===================================================================
@@ -2252,16 +2535,16 @@ class TestFingerprintPaths:
     """Tests for finish-time verification fingerprints."""
 
     def test_empty_or_missing_paths_return_empty(self, tmp_path):
-        assert _fingerprint_paths(set(), tmp_path) == ""
-        assert _fingerprint_paths({"missing.py"}, tmp_path) == ""
+        assert fingerprint_paths(set(), tmp_path) == ""
+        assert fingerprint_paths({"missing.py"}, tmp_path) == ""
 
     def test_identical_contents_yield_identical_fingerprint(self, tmp_path):
         path = tmp_path / "aura" / "module.py"
         path.parent.mkdir()
         path.write_bytes(b"VALUE = 1\n")
 
-        first = _fingerprint_paths({"aura/module.py"}, tmp_path)
-        second = _fingerprint_paths({"./aura\\module.py"}, tmp_path)
+        first = fingerprint_paths({"aura/module.py"}, tmp_path)
+        second = fingerprint_paths({"./aura\\module.py"}, tmp_path)
 
         assert first
         assert first == second
@@ -2271,9 +2554,9 @@ class TestFingerprintPaths:
         path.parent.mkdir()
         path.write_bytes(b"VALUE = 1\n")
 
-        first = _fingerprint_paths({"aura/module.py"}, tmp_path)
+        first = fingerprint_paths({"aura/module.py"}, tmp_path)
         path.write_bytes(b"VALUE = 2\n")
-        second = _fingerprint_paths({"aura/module.py"}, tmp_path)
+        second = fingerprint_paths({"aura/module.py"}, tmp_path)
 
         assert first != second
 

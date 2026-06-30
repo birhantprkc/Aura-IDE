@@ -15,7 +15,6 @@ the supplied DispatchCallback rather than the registry.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -97,6 +96,7 @@ from aura.conversation.worker_final_validation import (
     emit_explicit_validation_runs,
     run_explicit_validation_commands,
 )
+from aura.conversation.worker_fingerprints import fingerprint_paths
 from aura.conversation.worker_finish import (
     build_worker_recoverable_followup_message,
     build_worker_unrecoverable_message,
@@ -117,6 +117,7 @@ from aura.conversation.worker_recovery_payload import (
     is_recoverable_phase_boundary,
     parse_tool_payload,
 )
+from aura.conversation.worker_quality_gate import handle_worker_quality_gate
 from aura.conversation.worker_validation import (
     emit_auto_dependent_import_info,
     emit_auto_import_result,
@@ -164,44 +165,6 @@ _FINAL_REPORT_ACCEPTANCE_PROOF_RE = re.compile(
 )
 
 
-
-
-def _fingerprint_paths(paths: set[str], workspace_root) -> str:
-    if not paths:
-        return ""
-
-    root = Path(workspace_root)
-    try:
-        resolved_root = root.resolve()
-    except OSError:
-        resolved_root = root
-    entries: list[tuple[str, str]] = []
-    for raw_path in paths:
-        normalized = _normalize_worker_path(raw_path)
-        candidate = Path(normalized)
-        full_path = candidate if candidate.is_absolute() else root / normalized
-        if not full_path.exists():
-            continue
-        try:
-            content_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
-        except OSError:
-            continue
-        try:
-            relative_path = full_path.resolve().relative_to(resolved_root).as_posix()
-        except (OSError, ValueError):
-            relative_path = normalized
-        entries.append((relative_path, content_hash))
-
-    if not entries:
-        return ""
-
-    digest = hashlib.sha256()
-    for relative_path, content_hash in sorted(entries):
-        digest.update(relative_path.encode("utf-8", errors="surrogateescape"))
-        digest.update(b"\0")
-        digest.update(content_hash.encode("ascii"))
-        digest.update(b"\n")
-    return digest.hexdigest()
 
 
 def _terminal_payload(loop_info: dict[str, Any] | None) -> dict[str, Any]:
@@ -647,7 +610,7 @@ class ConversationManager:
                                     for path in product_paths:
                                         state.import_verification_required.discard(path)
                                     # --- Dependent import verification rung ---
-                                    fp_dep = _fingerprint_paths(
+                                    fp_dep = fingerprint_paths(
                                         set(product_paths),
                                         self._tools.workspace_root,
                                     )
@@ -715,7 +678,7 @@ class ConversationManager:
                                 continue
                     # --- Launch verification rung ---
                     if declared_run_command:
-                        fp = _fingerprint_paths(
+                        fp = fingerprint_paths(
                             state.worker_app_writes,
                             self._tools.workspace_root,
                         )
@@ -856,6 +819,17 @@ class ConversationManager:
                     if flow_steering_action != "none":
                         state.discard_worker_candidate_final()
                         if flow_steering_action == "finished":
+                            return
+                        continue
+                    quality_action = handle_worker_quality_gate(
+                        state=state,
+                        workspace_root=self._tools.workspace_root,
+                        history=self._history,
+                        on_event=on_event,
+                    )
+                    if quality_action != "none":
+                        state.discard_worker_candidate_final()
+                        if quality_action == "finished":
                             return
                         continue
                     # All gates passed — release candidate final and flush buffer
