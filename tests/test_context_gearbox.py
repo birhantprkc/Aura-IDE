@@ -335,6 +335,11 @@ def test_worker_composition_includes_quality_contract_stack(tmp_path):
     assert "Implement only the dispatched spec and current step." in composed.context_text
     assert "Use patch_file for existing-file edits" in composed.context_text
     assert "Code must compile or parse when applicable." in composed.context_text
+    assert "validation_selection_contract" in composed.context_text
+    assert "Compile touched Python files when Python changed." in composed.context_text
+    assert "Run focused tests for touched behavior when available." in composed.context_text
+    assert "Do not run irrelevant expensive tests as ritual validation." in composed.context_text
+    assert "State skipped validation honestly." in composed.context_text
     assert "Do not claim checks that were not run." in composed.context_text
     assert "Do not fabricate files, APIs, validation results, or receipts." in composed.context_text
     assert "List changed files." in composed.context_text

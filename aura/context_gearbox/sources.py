@@ -53,11 +53,14 @@ CODE_QUALITY_CONTRACT = """### code_quality_contract
 - Keep validation focused on the changed surface."""
 
 VALIDATION_SELECTION_CONTRACT = """### validation_selection_contract
-- Compile touched Python files when relevant.
-- Run focused tests for touched behavior.
-- Run broader tests only when the touched area justifies it.
-- Do not spend time on irrelevant tests.
-- Report skipped validation honestly and compactly."""
+- Validate the changed surface when practical.
+- Compile touched Python files when Python changed.
+- Run focused tests for touched behavior when available.
+- Use broader tests only for shared infrastructure, integration seams, or high-risk changes.
+- Prefer fast deterministic checks over slow unrelated suites.
+- Do not run irrelevant expensive tests as ritual validation.
+- State skipped validation honestly.
+- Never claim checks that were not run."""
 
 RECEIPT_CONTRACT = """### receipt_contract
 - List changed files.
