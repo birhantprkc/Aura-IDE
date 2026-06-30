@@ -16,6 +16,10 @@ Aura works on real repos from a desktop cockpit. It plans changes, edits files t
 
 [Start Here](https://aura-ide.hashnode.dev/start-here) · [Download](https://github.com/CarpseDeam/Aura-IDE/releases/latest) · [Discord](https://discord.gg/aGSthBX2Bg) · [Build Log](https://aura-ide.hashnode.dev/) · [Support](https://buymeacoffee.com/snowballkori)
 
+<p align="center">
+  <img src="media/aura-face.png" alt="Aura IDE desktop cockpit" width="900">
+</p>
+
 ---
 
 ## The core idea
@@ -32,6 +36,30 @@ Aura works differently. Every change is visible, reviewable, and verifiable.
 - **Receipts** show every tool call, token cost, and file changed. You know exactly what happened and what it cost.
 
 This is not a chat wrapper. This is a two-agent harness with guardrails, visibility, and accountability.
+
+---
+
+## See the workflow
+
+Watch the full loop: the Planner reads your repo, writes a spec, the Worker edits files, validates, and completes.
+
+<p align="center">
+  <img src="media/plan_and_code.gif" alt="Aura planning and coding workflow" width="900">
+</p>
+
+The key moments, captured:
+
+<p align="center">
+  <img src="media/dispatch.png" alt="Aura dispatch screen" width="420">
+  <img src="media/working.png" alt="Aura worker running" width="420">
+</p>
+
+<p align="center">
+  <img src="media/diff-view.png" alt="Aura diff review" width="420">
+  <img src="media/workflow-complete.png" alt="Aura workflow complete" width="420">
+</p>
+
+**Plan → Dispatch → Work → Review → Complete.** Five steps, one loop. You see every stage, approve every write, and get a receipt when it's done.
 
 ---
 
@@ -75,6 +103,11 @@ aura
 
 Aura Companion turns your phone into a remote command center for your desktop agent. It's a web surface — no app store, no install.
 
+<p align="center">
+  <img src="media/phone-home.jpg" alt="Aura Companion home on phone" width="260">
+  <img src="media/proj-phone-home.jpg" alt="Aura Companion projects on phone" width="260">
+</p>
+
 **Pair your phone in seconds.** Enable Companion from the desktop, scan the QR code or enter the pairing ticket on your phone browser, and you're connected. Communication flows through the relay — your phone never needs to be on the same network as your desktop.
 
 **What you can do from your phone:**
@@ -89,7 +122,7 @@ The Companion is a remote control, not a separate IDE. Your desktop does the wor
 
 ---
 
-## Aura Credits and BYOK
+## Aura Credits, telemetry, and BYOK
 
 Aura gives you two paths to model access. Choose what fits you.
 
@@ -102,6 +135,14 @@ Credits are a pay-as-you-go balance that works across all Aura-hosted models. No
 - Select "Aura" as your Planner or Worker provider
 - Start building
 
+<p align="center">
+  <img src="media/cache-hit.png" alt="Aura cache and status telemetry" width="700">
+</p>
+
+<p align="center">
+  <img src="media/token-cost.png" alt="Aura token cost and session telemetry" width="650">
+</p>
+
 Credits include a small service margin to help cover hosting, the relay, and infrastructure. You always see your balance and session spend in the status bar.
 
 ### Bring Your Own Keys — full provider freedom
@@ -110,28 +151,15 @@ Connect directly to the model provider of your choice. Your key, your billing, y
 
 Supported providers: **DeepSeek**, **OpenAI**, **Anthropic**, **Gemini**, **OpenRouter**
 
-Set your API key in Settings → API Keys. Keys are encrypted to disk with a machine-derived key. Environment variables also work (`DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, etc.).
+Set your API key in Settings → API Keys. Keys are encrypted to disk with a hardware-derived key. Environment variables also work (`DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, etc.).
 
 **Mix and match.** Use Aura Credits for the Planner and your own Anthropic key for the Worker. Or the reverse. Both paths support the full Planner/Worker architecture.
 
 ---
 
-## How Aura works
-
-Aura uses a two-agent architecture: **Planner** researches and plans, **Worker** executes and validates.
-
-1. **Prompt** — Describe the change you want, in your own words.
-2. **Planner** — Reads your workspace (AST repo map, BM25 index, dependency graph) and writes a structured technical spec. You review it before anything runs.
-3. **Dispatch** — When the spec looks right, you dispatch it.
-4. **Worker** — Reads the spec and makes changes through controlled file tools. It can read, write, edit, and search your codebase. Every write shows a diff for your approval.
-5. **Validation** — The Worker runs validation after every change. If it fails, the Worker inspects the error and attempts a fix. If recovery fails, the change is aborted cleanly.
-6. **Commit** — Approved changes are committed with an AI-generated message. You get a receipt showing every tool call, token cost, and file changed.
-
-The Planner and Worker are separate agent runs with separate system prompts and model selections. This means you can use a cheap fast model for planning and a more capable model for execution, or use different providers per role. The architecture — not any single model — produces the consistency.
-
----
-
 ## Why Aura is different
+
+Most AI coding tools edit files directly with no intermediate reasoning layer. Aura separates concerns and puts you in control.
 
 - **Planner/Worker separation** — two agents, two roles, no confusion. One researches and specs, the other builds and validates.
 - **Repo-aware context** — AST repo maps, dependency graphs, BM25 code search, all baked into every Planner prompt. Aura understands your project structure, not just your last message.
@@ -159,6 +187,10 @@ Aura treats AI-generated changes like a teammate's pull request. Every change is
 ## Drones
 
 Drones are reusable automation cards for repeatable repo work. Define a task once, run it anytime.
+
+<p align="center">
+  <img src="media/drone-workbay.png" alt="Aura Drone workbay" width="900">
+</p>
 
 Each Drone lives in its own folder with a `drone.json` manifest. Drones appear as cards in Aura's Drone panel, where you can run them, loop them on a timer, or delete them. Every run produces a receipt saved to `.aura/drones/runs/`.
 
@@ -190,7 +222,17 @@ Read-only Drones can run in parallel (up to 3). Write-capable Drones use a share
 
 Aura wrote most of itself. During May/June 2026 it processed **2+ billion DeepSeek tokens** across nearly **30,000 API requests** while building its own codebase.
 
+<p align="center">
+  <img src="media/aura-may.png" alt="Aura May token usage" width="650">
+</p>
+
 The harness produces the quality, not the model. Swap models, swap providers, change thinking depth — the workflow stays the same and the output stays consistent.
+
+---
+
+## Video walkthrough
+
+[Watch Aura working](media/Aura-Working.mp4) — a quick walkthrough of the full workflow from prompt to receipt.
 
 ---
 
