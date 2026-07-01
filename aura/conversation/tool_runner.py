@@ -95,12 +95,21 @@ class ToolRunner:
             )
 
         if not campaign.ok and (campaign.requires_steps or req.steps):
+            required_step_fields = "id, title, goal, spec, files, and acceptance"
+            failure_constraint = (
+                "CONSTRAINT FOR NEXT DISPATCH ATTEMPT: The previous "
+                "dispatch_to_worker call was rejected before Worker start "
+                "because this task requires a steps campaign. Re-call "
+                "dispatch_to_worker now with a populated steps array. Every "
+                f"step must include {required_step_fields}. Do not call "
+                "edit/write tools."
+            )
             error_message = (
                 "Plan incomplete - broad/multi-file/refactor work must be dispatched "
                 "as an ordered steps campaign of bounded objectives. "
-                "The Worker was not started. Re-call dispatch_to_worker with a "
-                "populated steps array whose items each include their own files, "
-                "spec, and acceptance. Campaign errors:\n"
+                "The Worker was not started. The Planner must retry "
+                "dispatch_to_worker with a populated steps array whose items "
+                f"each include {required_step_fields}. Campaign errors:\n"
                 + "\n".join(f"- {item}" for item in campaign.errors)
             )
             result = WorkerDispatchResult(
@@ -113,13 +122,7 @@ class ToolRunner:
                     "internal_planner_handoff": True,
                     "user_visible_blocker": False,
                     "campaign_errors": list(campaign.errors),
-                    "failure_constraint": (
-                        "CONSTRAINT FOR NEXT ATTEMPT: Broad/multi-file/refactor work "
-                        "must be dispatched as an ordered steps campaign of bounded "
-                        "objectives. Re-call dispatch_to_worker with a populated steps "
-                        "array where every step has its own id, title, goal, spec, "
-                        "files, and acceptance."
-                    ),
+                    "failure_constraint": failure_constraint,
                 },
             )
             # Manager owns dispatch lifecycle emission — do NOT emit ToolResult

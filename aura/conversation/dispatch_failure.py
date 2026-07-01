@@ -190,6 +190,9 @@ def _worker_dispatch_failure_signature(
 def _worker_dispatch_error_signature(result: WorkerDispatchResult) -> str:
     extras = result.extras or {}
     if extras.get("dispatch_spec_rejected"):
+        errors = extras.get("campaign_errors")
+        if isinstance(errors, list):
+            return "dispatch_spec_rejected_campaign:" + "|".join(str(e) for e in errors)
         errors = extras.get("quality_errors")
         if isinstance(errors, list):
             return "dispatch_spec_rejected:" + "|".join(str(e) for e in errors)

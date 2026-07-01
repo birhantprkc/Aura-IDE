@@ -263,6 +263,9 @@ class ToolRoundRunner:
             if "result_payload" in res:
                 self._history.append_tool_result(task["id"], res["result_payload"])
                 on_event(res["event"])
+                planner_constraint = str(res.get("planner_internal_constraint", "") or "")
+                if planner_constraint:
+                    self._history.append_internal_user_text(planner_constraint)
 
         self._planner_refresh.handle_post_write_notices(
             self._history, planner_stale_read_files
@@ -530,6 +533,11 @@ class ToolRoundRunner:
                 "result_payload": tool_msg_content,
             },
         }
+        if state.mode == "planner" and exec_result.extras.get("planner_tool_unavailable"):
+            result["planner_internal_constraint"] = str(
+                exec_result.extras.get("failure_constraint", "") or ""
+            )
+            result["completed_tool_result_for_final"] = False
         if is_recoverable_phase_boundary(loop_info):
             result["_worker_phase_boundary_info"] = loop_info
         return result

@@ -8,6 +8,15 @@ from aura.conversation.tools._types import ApprovalCallback, ApprovalRequest, To
 from aura.conversation.tools.consequential import is_consequential
 from aura.conversation.tools.dynamic import execute_dynamic_tool
 
+_PLANNER_FORBIDDEN_WRITE_TOOLS = frozenset({
+    "apply_edit_transaction",
+    "delete_file",
+    "edit_file",
+    "edit_symbol",
+    "patch_file",
+    "write_file",
+})
+
 
 class ToolExecutor:
     """Dispatches tool execution across static handlers, MCP, and dynamic tools."""
@@ -39,6 +48,12 @@ class ToolExecutor:
         4. Unknown tool error
         """
         try:
+            if (
+                getattr(self._owner, "mode", "") == "planner"
+                and name in _PLANNER_FORBIDDEN_WRITE_TOOLS
+            ):
+                return _planner_write_tool_correction(name)
+
             from aura.conversation.tools.registry import TOOL_HANDLERS
 
             # 1. Static dispatch via TOOL_HANDLERS
@@ -122,3 +137,40 @@ class ToolExecutor:
                 ok=False,
                 payload={"ok": False, "error": str(exc), "failure_class": "internal_error"},
             )
+
+
+def _planner_write_tool_correction(name: str) -> ToolExecResult:
+    failure_constraint = (
+        "CONSTRAINT FOR NEXT DISPATCH ATTEMPT: Planner cannot edit files or "
+        f"call {name}. Do not call edit/write tools. Use dispatch_to_worker "
+        "as the implementation deliverable. If a previous dispatch_to_worker "
+        "call was rejected for missing steps, re-call dispatch_to_worker now "
+        "with a steps array where every step includes id, title, goal, spec, "
+        "files, and acceptance."
+    )
+    payload = {
+        "ok": False,
+        "error": (
+            f"{name} is not available in Planner mode. Planner never edits "
+            "files directly; use dispatch_to_worker for implementation."
+        ),
+        "failure_class": "planner_tool_unavailable",
+        "planner_tool_unavailable": True,
+        "planner_resolution_needed": True,
+        "internal_planner_handoff": True,
+        "user_visible_blocker": False,
+        "suggested_next_tool": "dispatch_to_worker",
+        "failure_constraint": failure_constraint,
+    }
+    return ToolExecResult(
+        ok=False,
+        payload=payload,
+        extras={
+            "planner_tool_unavailable": True,
+            "planner_resolution_needed": True,
+            "internal_planner_handoff": True,
+            "user_visible_blocker": False,
+            "failure_constraint": failure_constraint,
+            "suggested_next_tool": "dispatch_to_worker",
+        },
+    )
