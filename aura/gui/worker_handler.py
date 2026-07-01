@@ -16,12 +16,9 @@ from aura.config import redact_secrets
 
 _log = logging.getLogger(__name__)
 
-from aura.conversation.dispatch_lifecycle import (
-    is_internal_dispatch_continuation,
-    is_user_visible_dispatch_blocker,
-)
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
-from aura.gui.cards.dispatch_status_labels import mismatch_card_should_show
+from aura.gui.dispatch_ui_lifecycle import DispatchUiLifecycle
+from aura.gui.worker_finish_presenter import WorkerFinishPresenter
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -61,11 +58,14 @@ class WorkerEventHandler(QObject):
         self._settings = settings
         self._session_usage: dict[str, dict[str, int]] = {}
         self._active_workflow: WorkflowState | None = None
-        self._wired_spec_cards: set[str] = set()
-        self._active_mismatch_card_id: str | None = None
-        self._canonical_dispatch_ids: set[str] = set()
-        self._visible_dispatch_card_id: str | None = None
-        self._pending_internal_retool_id: str | None = None
+        self._dispatch_ui = DispatchUiLifecycle(
+            bridge=bridge,
+            chat=chat,
+            parent_widget=parent,
+            active_workflow=lambda: self._active_workflow,
+            transition_workflow=self._transition_active_workflow,
+        )
+        self._finish_presenter = WorkerFinishPresenter(chat, playground)
 
     # ---- public property -------------------------------------------------------
 
@@ -133,22 +133,12 @@ class WorkerEventHandler(QObject):
             tool_call_id, goal[:120],
         )
 
-        if self._active_mismatch_card_id is not None:
-            self._chat.mark_mismatch_resolved(self._active_mismatch_card_id)
-            self._active_mismatch_card_id = None
+        if self._finish_presenter.resolve_active_mismatch():
             self._chat.stop_current_aura()
 
         file_list = list(files)
         step_list = list(steps or [])
-        # ---- Internal continuation: continue without visible card ceremony ----
-        if self._pending_internal_retool_id is not None:
-            old_id = self._pending_internal_retool_id
-            self._pending_internal_retool_id = None
-            self._chat.remove_spec_card(old_id)
-            self._wired_spec_cards.discard(old_id)
-            self._canonical_dispatch_ids.discard(old_id)
-            self._canonical_dispatch_ids.add(tool_call_id)
-            self._visible_dispatch_card_id = None
+        if self._dispatch_ui.consume_internal_continuation(tool_call_id):
             self._set_active_workflow(
                 WorkflowState.intent_captured(
                     tool_call_id, goal, summary=summary,
@@ -161,13 +151,7 @@ class WorkerEventHandler(QObject):
             self._chat.scroll_to_bottom(force=True)
             return
 
-        previous_card_id = self._visible_dispatch_card_id
-        if previous_card_id and previous_card_id != tool_call_id:
-            self._chat.remove_spec_card(previous_card_id)
-            self._wired_spec_cards.discard(previous_card_id)
-            self._canonical_dispatch_ids.discard(previous_card_id)
-        self._canonical_dispatch_ids.add(tool_call_id)
-        self._visible_dispatch_card_id = tool_call_id
+        self._dispatch_ui.begin_visible_dispatch(tool_call_id)
         self._playground.begin_dispatch_todo_list(tool_call_id, step_list)
         self._set_active_workflow(
             WorkflowState.intent_captured(
@@ -179,114 +163,15 @@ class WorkerEventHandler(QObject):
                 pending_user_action="Dispatch, edit, or cancel the plan.",
             )
         )
-        try:
-            if hasattr(self._chat, "prepare_spec_card"):
-                self._chat.prepare_spec_card(tool_call_id)
-            if step_list:
-                card = self._chat.add_spec_card(
-                    tool_call_id,
-                    goal,
-                    file_list,
-                    spec,
-                    acceptance,
-                    summary,
-                    steps=step_list,
-                )
-            else:
-                card = self._chat.add_spec_card(
-                    tool_call_id, goal, file_list, spec, acceptance, summary
-                )
-        except Exception as exc:
-            logging.exception("Failed to render worker dispatch spec card")
-            try:
-                self._chat.add_error(
-                    "Dispatch UI Error",
-                    f"Could not render the dispatch card: {type(exc).__name__}: {exc}",
-                )
-            except Exception:
-                logging.exception("Failed to show dispatch UI error")
-            if self._bridge.auto_dispatch:
-                self._bridge.user_dispatched(
-                    tool_call_id, goal, file_list, spec, acceptance, summary
-                )
-            else:
-                self._bridge.user_cancelled_dispatch(tool_call_id)
-            return
-        if hasattr(card, "update_workflow_state") and self._active_workflow is not None:
-            card.update_workflow_state(self._active_workflow)
-        if tool_call_id not in self._wired_spec_cards:
-            card.dispatch_clicked.connect(self._on_dispatch_clicked)
-            card.edit_clicked.connect(self._on_edit_spec_clicked)
-            card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)
-            self._wired_spec_cards.add(tool_call_id)
-
-        if self._bridge.auto_dispatch:
-            if hasattr(card, "mark_dispatched"):
-                card.mark_dispatched()
-            self._transition_active_workflow(
-                tool_call_id,
-                WorkflowStatus.dispatched,
-                pending_user_action="",
-            )
-            self._bridge.user_dispatched(tool_call_id, goal, file_list, spec, acceptance, summary)
-            return
-
-    def _on_dispatch_clicked(self, tool_call_id: str) -> None:
-        """Dispatch the spec card's current values directly."""
-        _log.info("dispatch_clicked tool_call_id=%s", tool_call_id)
-        card = self._get_spec_card(tool_call_id)
-        if card is None:
-            return
-        goal, files, spec, acceptance, summary = card.current_spec()
-        accepted = self._bridge.user_dispatched(tool_call_id, goal, files, spec, acceptance, summary)
-        if not accepted:
-            card.mark_stale()
-            self._transition_active_workflow(
-                tool_call_id,
-                WorkflowStatus.blocked,
-                blocker_reason="Dispatch is no longer pending.",
-                follow_up_required=True,
-            )
-        else:
-            self._transition_active_workflow(
-                tool_call_id,
-                WorkflowStatus.dispatched,
-                pending_user_action="",
-            )
-
-    def _on_edit_spec_clicked(self, tool_call_id: str) -> None:
-        """Open the SpecEditDialog pre-populated with the spec card's values."""
-        from aura.gui.spec_edit_dialog import SpecEditDialog
-
-        card = self._get_spec_card(tool_call_id)
-        if card is None:
-            return
-        goal, files, spec, acceptance, summary = card.current_spec()
-        dlg = SpecEditDialog(goal, files, spec, acceptance, summary, parent=self.parent())
-        if dlg.exec() == SpecEditDialog.DialogCode.Accepted:
-            card.update_spec(dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance(), dlg.summary())
-            self._chat.scroll_to_bottom(force=True)
-
-    def _on_cancel_dispatch_clicked(self, tool_call_id: str) -> None:
-        """Cancel the pending dispatch."""
-        accepted = self._bridge.user_cancelled_dispatch(tool_call_id)
-        if not accepted:
-            card = self._get_spec_card(tool_call_id)
-            if card:
-                card.mark_stale()
-            self._transition_active_workflow(
-                tool_call_id,
-                WorkflowStatus.blocked,
-                blocker_reason="Dispatch is no longer pending.",
-                follow_up_required=True,
-            )
-        else:
-            self._transition_active_workflow(
-                tool_call_id,
-                WorkflowStatus.cancelled,
-                pending_user_action="",
-            )
-            self._clear_active_spec_card(tool_call_id)
+        self._dispatch_ui.show_spec_card(
+            tool_call_id=tool_call_id,
+            goal=goal,
+            file_list=file_list,
+            spec=spec,
+            acceptance=acceptance,
+            summary=summary,
+            step_list=step_list,
+        )
 
     # ---- worker lifecycle slots ------------------------------------------------
 
@@ -299,12 +184,7 @@ class WorkerEventHandler(QObject):
         self._playground.render_dispatch_todo_list(tool_call_id)
         self.worker_started.emit()
 
-        card = self._get_spec_card(tool_call_id)
-        if card and self._bridge.auto_dispatch:
-            self._clear_active_spec_card(tool_call_id)
-            card = None
-        if card:
-            card.mark_worker_running()
+        self._dispatch_ui.mark_worker_started(tool_call_id)
         self._transition_active_workflow(
             tool_call_id,
             WorkflowStatus.dispatched,
@@ -327,83 +207,21 @@ class WorkerEventHandler(QObject):
         )
 
         metadata = self._worker_result_metadata(tool_call_id)
-        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
-        terminal_success = self._is_terminal_success(
+        presentation = self._finish_presenter.present(
+            tool_call_id=tool_call_id,
             ok=ok,
-            needs_followup=bool(needs_followup),
+            summary=summary,
+            needs_followup=needs_followup,
             status=status,
+            metadata=metadata,
+            active_workflow=self._active_workflow,
+            spec_card=self._dispatch_ui.get_spec_card(tool_call_id),
         )
-        if terminal_success:
-            extras = self._scrub_internal_success_extras(extras)
-            metadata = {**metadata, "extras": extras}
-
-        # ── canonical dispatch lifecycle classification ──────────────────
-        is_internal = is_internal_dispatch_continuation(
-            metadata,
-            ok=ok,
-            needs_followup=bool(needs_followup),
-            status=status,
-        )
-        user_visible_blocker = is_user_visible_dispatch_blocker(metadata)
-        suppress_user_followup_card = (
-            False if terminal_success else bool(extras.get("suppress_user_followup_card"))
-        )
-
-        # Internal continuations are never user-visible summaries
-        suppress_main_summary = is_internal or (
-            suppress_user_followup_card and not user_visible_blocker
-        )
-
-        # Mismatch card: only for true user-visible ambiguity
-        has_mismatch_data = bool(
-            extras.get("mismatch_kind")
-            or extras.get("mismatch_question")
-        )
-        is_mismatch = mismatch_card_should_show(
-            is_internal=is_internal,
-            suppressed=suppress_user_followup_card and not user_visible_blocker,
-            has_mismatch_data=has_mismatch_data,
-        )
-        if is_mismatch:
-            kind, question = self._mismatch_display(metadata)
-            self._chat.add_mismatch_resolution_card(
-                tool_call_id, kind, question, is_internal=is_internal,
-            )
-            self._active_mismatch_card_id = tool_call_id
-            suppress_main_summary = True
-        self._playground.stop_aura()
-        if needs_followup is None:
-            self._playground.worker_finished(ok, summary, status=status)
-        else:
-            self._playground.worker_finished(
-                ok, summary, needs_followup=bool(needs_followup), status=status
-            )
-        self._playground.finish_todo_list(
-            tool_call_id,
-            ok=ok,
-            needs_followup=bool(needs_followup),
-        )
-        if is_mismatch:
-            self._chat.begin_planner_resolution_aura()
-
-        card = self._get_spec_card(tool_call_id)
-        if card and not suppress_main_summary:
-            card.worker_finished(ok, summary, status=status, is_internal=is_internal)
-        goal = self._worker_summary_goal(tool_call_id, card)
-        if not suppress_main_summary:
-            self._chat.add_worker_summary(
-                tool_call_id,
-                goal,
-                ok,
-                summary,
-                needs_followup=bool(needs_followup),
-                status=status,
-                is_internal=is_internal,
-            )
+        outcome = presentation.outcome
         if (
             self._active_workflow is not None
             and self._active_workflow.tool_call_id == tool_call_id
-            and not suppress_main_summary
+            and not outcome.suppress_main_summary
         ):
             self._set_active_workflow(
                 self._active_workflow.finish(
@@ -411,97 +229,17 @@ class WorkerEventHandler(QObject):
                     summary=summary,
                     needs_followup=bool(needs_followup),
                     status=status,
-                    modified_files=metadata.get("modified_files"),
-                    validation=metadata.get("validation"),
-                    extras=extras,
+                    modified_files=outcome.metadata.get("modified_files"),
+                    validation=outcome.metadata.get("validation"),
+                    extras=outcome.extras,
                 )
             )
-        if not (suppress_user_followup_card and not user_visible_blocker):
-            self._clear_active_spec_card(tool_call_id)
-            if self._visible_dispatch_card_id == tool_call_id:
-                self._visible_dispatch_card_id = None
-        if is_internal and not extras.get("dispatch_session"):
-            # Only set pending retool for non-DispatchSession internal
-            # continuations (e.g. spec-reject handbacks from ToolRunner).
-            # DispatchSession campaigns are terminal — the session already
-            # owns the cursor and finalized the TODO list.
-            self._pending_internal_retool_id = tool_call_id
-        self._canonical_dispatch_ids.discard(tool_call_id)
+        if outcome.should_clear_dispatch_card:
+            self._dispatch_ui.clear_active_spec_card(tool_call_id)
+        if outcome.should_set_pending_internal_retool:
+            self._dispatch_ui.mark_pending_internal_retool(tool_call_id)
+        self._dispatch_ui.discard_canonical_dispatch(tool_call_id)
         self.worker_running_changed.emit(False)
-
-    @staticmethod
-    def _is_planner_resolution_result(status: str | None, metadata: dict) -> bool:
-        """Check whether status/metadata indicate Planner resolution is needed
-        **and** the result is user-visible (not an internal continuation).
-
-        Internal continuations (Planner retry) are never "planner resolution"
-        results from the user's perspective — the Planner handles them silently.
-        """
-        is_internal = is_internal_dispatch_continuation(metadata)
-        if is_internal:
-            return False
-        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
-        return bool(
-            extras.get("mismatch_kind")
-            or extras.get("mismatch_question")
-            or status == "needs_planner_resolution"
-        )
-
-    @staticmethod
-    def _is_user_visible_blocker(metadata: dict) -> bool:
-        """Thin delegation to the canonical lifecycle predicate."""
-        return is_user_visible_dispatch_blocker(metadata)
-
-    @staticmethod
-    def _suppress_user_followup_card(metadata: dict) -> bool:
-        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
-        return bool(extras.get("suppress_user_followup_card"))
-
-    @staticmethod
-    def _mismatch_display(metadata: dict) -> tuple[str, str]:
-        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
-        return (
-            extras.get("mismatch_kind", ""),
-            extras.get("mismatch_question", ""),
-        )
-
-    @staticmethod
-    def _is_recoverable_internal_worker_result(
-        *,
-        ok: bool,
-        needs_followup: bool,
-        metadata: dict,
-    ) -> bool:
-        """Thin delegation to the canonical lifecycle predicate."""
-        return is_internal_dispatch_continuation(metadata)
-
-    @staticmethod
-    def _is_terminal_success(
-        *,
-        ok: bool,
-        needs_followup: bool,
-        status: str | None,
-    ) -> bool:
-        return bool(ok and not needs_followup and status != "needs_planner_resolution")
-
-    @staticmethod
-    def _scrub_internal_success_extras(extras: dict) -> dict:
-        """Drop retry-control flags that must not survive onto a later success."""
-        if not isinstance(extras, dict):
-            return {}
-        result = dict(extras)
-        for key in (
-            "internal_planner_handoff",
-            "internal_campaign_continuation",
-            "suppress_user_followup_card",
-            "planner_resolution_needed",
-            "mismatch_kind",
-            "mismatch_question",
-            "failure_constraint",
-            "dispatch_spec_rejected",
-        ):
-            result.pop(key, None)
-        return result
 
     def _worker_result_metadata(self, tool_call_id: str) -> dict:
         getter = getattr(self._bridge, "worker_result_metadata", None)
@@ -510,36 +248,18 @@ class WorkerEventHandler(QObject):
         metadata = getter(tool_call_id)
         return metadata if isinstance(metadata, dict) else {}
 
-    def _worker_summary_goal(self, tool_call_id: str, card) -> str:
-        if card is not None and hasattr(card, "current_spec"):
-            try:
-                goal, _files, _spec, _acceptance, _summary = card.current_spec()
-                if goal:
-                    return str(goal)
-            except Exception:
-                logging.exception("Failed to read worker spec card goal")
-        if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
-            return self._active_workflow.task_title or "Worker task"
-        return "Worker task"
-
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
         """Stop worker aura and forward cancel to playground/spec card."""
 
         self._playground.stop_aura()
         self._playground.worker_cancelled()
 
-        card = self._get_spec_card(tool_call_id)
-        if card:
-            card.worker_cancelled()
         self._transition_active_workflow(
             tool_call_id,
             WorkflowStatus.cancelled,
             pending_user_action="",
         )
-        self._clear_active_spec_card(tool_call_id)
-        if self._visible_dispatch_card_id == tool_call_id:
-            self._visible_dispatch_card_id = None
-        self._canonical_dispatch_ids.discard(tool_call_id)
+        self._dispatch_ui.mark_worker_cancelled(tool_call_id)
         self.worker_running_changed.emit(False)
 
     # ---- worker content slots --------------------------------------------------
@@ -547,14 +267,14 @@ class WorkerEventHandler(QObject):
     def _on_worker_reasoning(self, tool_call_id: str, text: str) -> None:
         """Forward reasoning delta to playground."""
 
-        if tool_call_id in self._canonical_dispatch_ids:
+        if self._dispatch_ui.is_canonical_dispatch(tool_call_id):
             return
         self._playground.append_reasoning(text)
 
     def _on_worker_content(self, tool_call_id: str, text: str) -> None:
         """Forward content delta to playground."""
 
-        if tool_call_id in self._canonical_dispatch_ids:
+        if self._dispatch_ui.is_canonical_dispatch(tool_call_id):
             return
         self._playground.append_content(text)
 
@@ -652,14 +372,11 @@ class WorkerEventHandler(QObject):
             follow_up_required=False,
             pending_user_action="Review the failure before retrying.",
         )
-        self._clear_active_spec_card(tool_call_id)
-
-    def _get_spec_card(self, tool_call_id: str):
-        return self._chat.get_spec_card(tool_call_id)
+        self._dispatch_ui.clear_active_spec_card(tool_call_id)
 
     def _set_active_workflow(self, state: WorkflowState) -> None:
         self._active_workflow = state
-        card = self._get_spec_card(state.tool_call_id)
+        card = self._dispatch_ui.get_spec_card(state.tool_call_id)
         if card is not None and hasattr(card, "update_workflow_state"):
             card.update_workflow_state(state)
 
@@ -685,14 +402,6 @@ class WorkerEventHandler(QObject):
             )
         )
 
-    def _clear_active_spec_card(self, tool_call_id: str) -> None:
-        """Remove the active plan card once the workflow reaches a terminal state."""
-        self._chat.remove_spec_card(tool_call_id)
-        if self._visible_dispatch_card_id == tool_call_id:
-            self._visible_dispatch_card_id = None
-        self._wired_spec_cards.discard(tool_call_id)
-        self._chat.scroll_to_bottom(force=True)
-
     def _on_worker_usage(
         self,
         _tool_call_id: str,
@@ -717,6 +426,8 @@ class WorkerEventHandler(QObject):
     def _on_worker_todo_list_updated(self, tool_call_id: str, tasks: list) -> None:
         """Route the worker's TODO list update to the playground."""
 
+        if self._dispatch_ui.is_canonical_dispatch(tool_call_id):
+            return
         self._playground.update_todo_list(tasks, tool_call_id)
 
     def _on_worker_terminal_output(
