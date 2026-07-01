@@ -42,6 +42,7 @@ from aura.conversation import (
 )
 from aura.conversation.dispatch_plan import plan_from_request
 from aura.conversation.persistence import WorkerDispatchRecord
+from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
 
@@ -388,6 +389,40 @@ class _DispatchProxy(QObject):
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
             self._init_workflow_state(tool_call_id, goal, summary)
         self._transition_workflow_state(tool_call_id, status)
+
+    def _workflow_tool_started(
+        self, tool_call_id: str, worker_tool_id: str, name: str
+    ) -> None:
+        """Transition workflow state when a Worker tool starts.
+
+        Called synchronously on the planner thread via DirectConnection
+        from WorkerEventRelay.toolCallStart.
+        """
+        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            return
+        if name in WRITE_TOOLS:
+            self._transition_workflow_state(tool_call_id, WorkflowStatus.editing)
+        elif name in TERMINAL_TOOLS:
+            self._transition_workflow_state(tool_call_id, WorkflowStatus.validating)
+
+    def _workflow_tool_result(
+        self,
+        parent_tool_id: str,
+        worker_tool_id: str,
+        name: str,
+        ok: bool,
+        result: str,
+        extras: dict,
+    ) -> None:
+        """Absorb a Worker tool result into the canonical WorkflowState.
+
+        Called synchronously on the planner thread via DirectConnection
+        from WorkerEventRelay.toolResult.
+        """
+        if self._active_workflow is None or self._active_workflow.tool_call_id != parent_tool_id:
+            return
+        new_state = self._active_workflow.absorb_worker_tool_result(name, ok, result, extras)
+        self._set_workflow_state(new_state)
 
     def user_cancelled(self, tool_call_id: str) -> bool:
         if not self._pending_map.resolve_cancelled(tool_call_id):

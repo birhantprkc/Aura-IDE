@@ -1,7 +1,7 @@
 """Compact status card for a worker plan being written."""
 from __future__ import annotations
 
-import json
+
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontMetrics
@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuation
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.gui.cards._helpers import _fade_in_widget
 from aura.gui.theme import BG_TOOL_CARD, BORDER, DANGER, SUCCESS, WARN
@@ -45,6 +44,7 @@ class PlanWriterCard(QFrame):
         self._goal: str = ""
         self._latest_spec: str = ""
         self._state = self.STATE_RUNNING
+        self._has_workflow_snapshot: bool = False
         self._incomplete_text = "⚡ Plan incomplete"
 
         layout = QHBoxLayout(self)
@@ -132,32 +132,16 @@ class PlanWriterCard(QFrame):
         # so per-fragment refresh is wasted work.
 
     def set_result(self, ok: bool, result_text: str | None = None) -> None:
-        """Simplified set_result — the canonical state comes from the backend."""
-        if result_text:
-            try:
-                parsed = json.loads(result_text)
-            except (json.JSONDecodeError, TypeError):
-                parsed = {}
-            if isinstance(parsed, dict):
-                extras = parsed.get("extras") if isinstance(parsed.get("extras"), dict) else {}
-                if is_internal_dispatch_continuation(parsed):
-                    self._state = self.STATE_RETRYING
-                    self._refresh()
-                    return
-                if (
-                    parsed.get("dispatch_spec_rejected")
-                    or extras.get("dispatch_spec_rejected")
-                    or parsed.get("dispatch_not_started")
-                    or extras.get("dispatch_not_started")
-                ):
-                    self._state = self.STATE_INCOMPLETE
-                    self._incomplete_text = "⚡ Plan incomplete"
-                    self._refresh()
-                    return
-                if parsed.get("phase_boundary"):
-                    self._state = self.STATE_PHASE
-                    self._refresh()
-                    return
+        """Legacy fallback when no WorkflowState snapshot ever arrived.
+
+        Once update_workflow_state has been called (backend owns the state),
+        this method is a no-op — it must never override the canonical snapshot.
+        """
+        if self._has_workflow_snapshot:
+            return
+        # Basic done/failed — dispatch-specific states (rejected, cancelled,
+        # internal_continuation, phase_boundary) are now owned by the backend
+        # _DispatchProxy and rendered via update_workflow_state.
         self._state = self.STATE_DONE if ok else self.STATE_FAILED
         self._refresh()
 
@@ -174,6 +158,7 @@ class PlanWriterCard(QFrame):
           done                → done
           cancelled           → not_started (cancelled)
         """
+        self._has_workflow_snapshot = True
         old_state = self._state
         if state.status == WorkflowStatus.plan_ready:
             self._state = self.STATE_DONE

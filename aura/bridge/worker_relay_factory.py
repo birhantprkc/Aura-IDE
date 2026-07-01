@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from PySide6.QtCore import Qt
+
 from aura.bridge.event_relay import WorkerEventRelay
 
 
@@ -53,6 +55,18 @@ def create_worker_relay(
     relay.agentProcessStarted.connect(dispatch_proxy.workerAgentProcessStarted)
     relay.agentProcessOutput.connect(dispatch_proxy.workerAgentProcessOutput)
     relay.agentProcessFinished.connect(dispatch_proxy.workerAgentProcessFinished)
+
+    # ---- WorkflowState (DirectConnection on planner thread) ----
+    # These run synchronously on the planner thread so they can update
+    # _active_workflow while request_dispatch / session.run() is on the
+    # call stack.  The regular (Auto) connections above handle GUI update.
+    relay.toolCallStart.connect(
+        dispatch_proxy._workflow_tool_started, Qt.DirectConnection
+    )
+    relay.toolResult.connect(
+        dispatch_proxy._workflow_tool_result, Qt.DirectConnection
+    )
+
     return relay
 
 
