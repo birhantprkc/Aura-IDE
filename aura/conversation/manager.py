@@ -59,9 +59,6 @@ from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuati
 from aura.conversation.edit_orchestrator import (
     EditRetryLedger,
 )
-from aura.conversation.edit_recovery_state import (
-    edit_recovery_details,
-)
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.manager_recovery import (
@@ -69,19 +66,8 @@ from aura.conversation.manager_recovery import (
     worker_recovery_block,
 )
 from aura.conversation.manager_send_state import _SendState
-from aura.conversation.path_utils import (
-    is_validation_scratch_path as _is_validation_scratch_path,
-)
-from aura.conversation.path_utils import (
-    normalize_worker_path as _normalize_worker_path,
-)
 from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.planner_refresh import PlannerRefreshState
-from aura.conversation.syntax_repair_state import (
-    has_terminal_syntax_failure,
-    set_syntax_repair_state,
-    syntax_repair_paths,
-)
 from aura.conversation.syntax_terminal_state import update_syntax_state_from_terminal
 from aura.conversation.tool_limits import (
     WRITE_TOOLS,
@@ -95,50 +81,19 @@ from aura.conversation.tools._types import (
 )
 from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.verification_progress import VerificationProgressTracker
-from aura.conversation.worker_final_validation import (
-    WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION,
-    emit_explicit_validation_result,
-    emit_explicit_validation_runs,
-    run_explicit_validation_commands,
-)
-from aura.conversation.worker_fingerprints import fingerprint_paths
+from aura.conversation.worker_finalization_gate import handle_worker_candidate_finalization
 from aura.conversation.worker_finish import (
     build_worker_recoverable_followup_message,
     build_worker_unrecoverable_message,
 )
-from aura.conversation.worker_flow import (
-    WORKER_FLOW_VALIDATION_REQUIRED_TEXT,
-    WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT,
-)
-from aura.conversation.worker_final_report_guard import (
-    WORKER_FINAL_REPORT_PROOF_REQUIRED_TEXT,
-    worker_final_report_missing_proof,
-)
-from aura.conversation.worker_quality_gate import handle_worker_quality_gate
-from aura.conversation.worker_recovery_messages import (
-    PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
-    WORKER_AUTO_PY_COMPILE_INSTRUCTION,
-    WORKER_DEPENDENT_CONTRACT_INSTRUCTION,
-    WORKER_EDIT_RECOVERY_INSTRUCTION,
-    WORKER_IMPORT_FAILURE_INSTRUCTION,
-    WORKER_LAUNCH_FAILURE_INSTRUCTION,
-)
+from aura.conversation.worker_flow import WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT
 from aura.conversation.worker_recovery_payload import (
     blocked_tool_result,
     is_recoverable_phase_boundary,
     parse_tool_payload,
 )
-from aura.conversation.worker_validation import (
-    emit_auto_dependent_import_info,
-    emit_auto_import_result,
-    emit_auto_launch_result,
-    emit_auto_py_compile_result,
-    run_focused_py_compile,
-)
-from aura.dependency_context import compute_dependents
 from aura.hooks import hooks
 from aura.research.policy import ANSWER_ONLY, decide_research_policy
-from aura.verify import run_dependent_import_check, run_focused_import_check
 
 EventCallback = Callable[[Event], None]
 
@@ -441,32 +396,36 @@ class ConversationManager:
                 state.last_completion_final_text = content_text
                 return
 
-            # Worker final quarantine: hold candidate until validation gates pass
-            if not tool_calls and state.mode == "worker":
-                state.candidate_final_message = full_message
-            else:
+            if not tool_calls:
+                if state.mode == "worker":
+                    finalization_action = handle_worker_candidate_finalization(
+                        state=state,
+                        full_message=full_message,
+                        history=self._history,
+                        workspace_root=self._tools.workspace_root,
+                        on_event=on_event,
+                        finish_worker_recoverable_followup=(
+                            self._finish_worker_recoverable_followup
+                        ),
+                        handle_worker_flow_steering=self._handle_worker_flow_steering,
+                        handle_worker_zero_work_final=self._handle_worker_zero_work_final,
+                        critic_cb=critic_cb,
+                        worker_dispatch_request=worker_dispatch_request,
+                        dispatch_tool_call_id=dispatch_tool_call_id,
+                        declared_run_command=declared_run_command,
+                        explicit_validation_commands=explicit_validation_commands,
+                    )
+                    if finalization_action == "continue":
+                        continue
+                    return
                 self._history.append_assistant(full_message)
-                if tool_calls and state.stream_buffer is not None:
-                    state.stream_buffer.discard()
+                return
+
+            self._history.append_assistant(full_message)
+            if state.stream_buffer is not None:
+                state.stream_buffer.discard()
 
             if state.worker_needs_final_report:
-                if not tool_calls:
-                    if state.candidate_final_message is not None:
-                        if worker_final_report_missing_proof(
-                            state,
-                            state.candidate_final_message,
-                        ):
-                            self._history.append_user_text(
-                                WORKER_FINAL_REPORT_PROOF_REQUIRED_TEXT
-                            )
-                            state.worker_final_report_proof_nudge_sent = True
-                            state.discard_worker_candidate_final()
-                            continue
-                        self._history.append_assistant(state.candidate_final_message)
-                        state.candidate_final_message = None
-                    if state.stream_buffer is not None:
-                        state.stream_buffer.flush(on_event)
-                    return
                 for tc in tool_calls:
                     fn = tc["function"]
                     name = fn["name"]
@@ -504,469 +463,6 @@ class ConversationManager:
                     self._append_limit_tool_result(tool_call_id, name, info, on_event)
                 if state.stream_buffer is not None:
                     state.stream_buffer.discard()
-                return
-
-            if not tool_calls:
-                if state.mode == "worker":
-                    if has_terminal_syntax_failure(state.syntax_repair_required):
-                        if not state.worker_recovery_nudge_sent:
-                            diagnostic_parts = []
-                            for path, s in state.syntax_repair_required.items():
-                                if s.get("repair_failed") and s.get("error"):
-                                    diagnostic_parts.append(f"{path}:\n{s['error']}")
-                            diagnostic_text = "\n\n".join(diagnostic_parts)
-                            instruction = (
-                                "Terminal py_compile still failing after repair. "
-                                "Re-read the failing Python file, fix the syntax error, "
-                                "then re-run python -m py_compile. "
-                                "Finish only after py_compile passes."
-                            )
-                            if diagnostic_text:
-                                instruction += f"\n\nDiagnostic output:\n{diagnostic_text}"
-                            self._history.append_user_text(instruction)
-                            state.worker_recovery_nudge_sent = True
-                            state.discard_worker_candidate_final()
-                            continue
-                        failing_paths = sorted(
-                            p for p, s in state.syntax_repair_required.items()
-                            if s.get("repair_failed")
-                        )
-                        self._finish_worker_recoverable_followup(
-                            on_event,
-                            failure_class="syntax_invalid",
-                            error="Python syntax still fails after two repair attempts.",
-                            details={
-                                "failing_files": failing_paths,
-                                "suggested_next_tool": "dispatch_to_worker",
-                                "suggested_next_action": (
-                                    "Redispatch with a narrower edit target or "
-                                    "different approach to the failing file."
-                                ),
-                                "planner_resolution_needed": True,
-                                "worker_confusion_question": (
-                                    "Worker could not repair Python syntax errors "
-                                    "after two repair attempts"
-                                    + (": " + ", ".join(failing_paths) if failing_paths else ".")
-                                ),
-                            },
-                        )
-                        return
-                    # Carry import-verification paths forward for re-check
-                    if state.import_verification_required:
-                        for path in state.import_verification_required:
-                            state.syntax_validation_required.add(path)
-                    edit_recovery_pending = bool(
-                        state.edit_fallback_required
-                        or state.line_range_reread_required
-                        or state.patch_invalid_syntax_required
-                    )
-                    syntax_repair_pending = bool(
-                        syntax_repair_paths(state.syntax_repair_required)
-                    )
-                    if (
-                        edit_recovery_pending
-                        or syntax_repair_pending
-                    ):
-                        if not state.worker_recovery_nudge_sent:
-                            if edit_recovery_pending:
-                                if (
-                                    state.patch_invalid_syntax_required
-                                    and not state.edit_fallback_required
-                                    and not state.line_range_reread_required
-                                ):
-                                    instruction = PATCH_CANDIDATE_INVALID_SYNTAX_ACTION
-                                else:
-                                    instruction = WORKER_EDIT_RECOVERY_INSTRUCTION
-                            else:
-                                # Distinguish craft-gate failures from terminal py_compile failures
-                                any_repair_failed = any(
-                                    s.get("repair_failed")
-                                    for s in state.syntax_repair_required.values()
-                                )
-                                if any_repair_failed:
-                                    instruction = (
-                                        "Previous py_compile failed. Re-read the touched "
-                                        "Python file, repair it with patch_file, then run python -m py_compile again. "
-                                        "Finish only after py_compile passes."
-                                    )
-                                else:
-                                    instruction = (
-                                        "Validation caught invalid Python in the following file(s). "
-                                        "Re-read the file, repair with patch_file, "
-                                        "then run python -m py_compile. "
-                                        "Finish only after py_compile passes."
-                                    )
-                            if not edit_recovery_pending:
-                                diagnostic_parts = []
-                                for path, s in state.syntax_repair_required.items():
-                                    if (
-                                        not s.get("awaiting_validation")
-                                        and not s.get("repair_failed")
-                                        and s.get("error")
-                                    ):
-                                        diagnostic_parts.append(f"{path}:\n{s['error']}")
-                                diagnostic_text = "\n\n".join(diagnostic_parts)
-                                if diagnostic_text:
-                                    instruction += f"\n\nDiagnostic output:\n{diagnostic_text}"
-                            self._history.append_user_text(instruction)
-                            state.worker_recovery_nudge_sent = True
-                            state.discard_worker_candidate_final()
-                            continue
-                        error_parts = [
-                            "Worker stopped before recovering from a recoverable failure."
-                        ]
-                        details: dict[str, Any] = {}
-                        if syntax_repair_pending:
-                            sync_paths = sorted(
-                                syntax_repair_paths(state.syntax_repair_required)
-                            )
-                            error_parts.append(
-                                f" Syntax repair pending on: {', '.join(sync_paths)}."
-                            )
-                            details["syntax_paths"] = sync_paths
-                        if edit_recovery_pending:
-                            error_parts.append(
-                                " Edit mechanics recovery pending."
-                            )
-                            details.update(edit_recovery_details(
-                                state.edit_fallback_required,
-                                state.line_range_reread_required,
-                            ))
-                            if state.patch_invalid_syntax_required:
-                                details["patch_invalid_syntax_paths"] = sorted(
-                                    state.patch_invalid_syntax_required
-                                )
-                        details.update({
-                            "suggested_next_tool": "dispatch_to_worker",
-                            "suggested_next_action": (
-                                "Redispatch with exact edit regions for "
-                                "the files that failed to apply."
-                            ),
-                            "planner_resolution_needed": True,
-                            "worker_confusion_question": (
-                                "Worker exhausted edit-mechanics recovery; "
-                                "could not apply edits for the targeted files."
-                            ),
-                        })
-                        self._finish_worker_recoverable_followup(
-                            on_event,
-                            failure_class="worker_recovery_exhausted",
-                            error="".join(error_parts),
-                            details=details or None,
-                        )
-                        return
-                    state.syntax_validation_required.difference_update(
-                        path for path in set(state.syntax_validation_required)
-                        if _is_validation_scratch_path(path)
-                    )
-                    if state.syntax_validation_required:
-                        product_paths = sorted(
-                            _normalize_worker_path(path) for path in state.syntax_validation_required
-                            if not _is_validation_scratch_path(path)
-                        )
-                        if product_paths:
-                            all_ok, diagnostics = run_focused_py_compile(
-                                product_paths,
-                                workspace_root=self._tools.workspace_root,
-                            )
-                            emit_auto_py_compile_result(
-                                paths=product_paths,
-                                ok=all_ok,
-                                diagnostics=diagnostics,
-                                on_event=on_event,
-                                workspace_root=self._tools.workspace_root,
-                            )
-                            if all_ok:
-                                state.syntax_validation_required.clear()
-                                if state.worker_flow is not None:
-                                    state.worker_flow.mark_validation_satisfied()
-                                # --- Import verification rung ---
-                                import_ok, import_diag = run_focused_import_check(
-                                    Path(self._tools.workspace_root),
-                                    product_paths,
-                                )
-                                if not import_ok:
-                                    for path in product_paths:
-                                        state.import_verification_required.add(path)
-                                    emit_auto_import_result(
-                                        paths=product_paths,
-                                        diagnostics=import_diag,
-                                        on_event=on_event,
-                                        workspace_root=self._tools.workspace_root,
-                                    )
-                                    instruction = WORKER_IMPORT_FAILURE_INSTRUCTION.format(
-                                        diagnostics=import_diag,
-                                    )
-                                    self._history.append_user_text(instruction)
-                                    state.discard_worker_candidate_final()
-                                    continue
-                                else:
-                                    for path in product_paths:
-                                        state.import_verification_required.discard(path)
-                                    # --- Dependent import verification rung ---
-                                    fp_dep = fingerprint_paths(
-                                        set(product_paths),
-                                        self._tools.workspace_root,
-                                    )
-                                    try:
-                                        gating_paths: list[str] = []
-                                        if fp_dep and fp_dep == state.last_dependent_ok_fingerprint:
-                                            pass
-                                        else:
-                                            deps = compute_dependents(
-                                                Path(self._tools.workspace_root),
-                                                product_paths,
-                                            )
-                                            deps = deps[:15]
-                                            if deps:
-                                                gating_paths, gating_diag, info_diag = run_dependent_import_check(
-                                                    Path(self._tools.workspace_root),
-                                                    product_paths,
-                                                    deps,
-                                                )
-                                                if info_diag:
-                                                    emit_auto_dependent_import_info(
-                                                        paths=deps,
-                                                        diagnostics=info_diag,
-                                                        on_event=on_event,
-                                                        workspace_root=self._tools.workspace_root,
-                                                    )
-                                                if gating_paths:
-                                                    for path in product_paths:
-                                                        state.import_verification_required.add(path)
-                                                    emit_auto_import_result(
-                                                        paths=gating_paths,
-                                                        diagnostics=gating_diag,
-                                                        on_event=on_event,
-                                                        workspace_root=self._tools.workspace_root,
-                                                    )
-                                                    instruction = WORKER_DEPENDENT_CONTRACT_INSTRUCTION.format(
-                                                        edited_files=", ".join(product_paths),
-                                                        dependent_files=", ".join(gating_paths),
-                                                        diagnostics=gating_diag,
-                                                    )
-                                                    self._history.append_user_text(instruction)
-                                                    state.discard_worker_candidate_final()
-                                                    continue
-                                        if fp_dep and not gating_paths:
-                                            state.last_dependent_ok_fingerprint = fp_dep
-                                    except Exception:
-                                        logging.getLogger(__name__).warning(
-                                            "Dependent import check failed non-fatally",
-                                            exc_info=True,
-                                        )
-
-                            else:
-                                # Auto-py_compile failed — feed diagnostics back for repair
-                                for path in product_paths:
-                                    set_syntax_repair_state(state.syntax_repair_required, path, {
-                                        "error": diagnostics,
-                                        "failed_repairs": 0,
-                                    })
-                                state.syntax_validation_required.clear()
-                                instruction = WORKER_AUTO_PY_COMPILE_INSTRUCTION.format(
-                                    diagnostics=diagnostics,
-                                )
-                                self._history.append_user_text(instruction)
-                                state.discard_worker_candidate_final()
-                                continue
-                    # --- Launch verification rung ---
-                    if declared_run_command:
-                        fp = fingerprint_paths(
-                            state.worker_app_writes,
-                            self._tools.workspace_root,
-                        )
-                        try:
-                            if fp and fp == state.last_launch_ok_fingerprint:
-                                emit_auto_launch_result(
-                                    command=declared_run_command,
-                                    ok=True,
-                                    output="(skipped: no app-source change since last successful launch)",
-                                    on_event=on_event,
-                                    workspace_root=self._tools.workspace_root,
-                                )
-                            else:
-                                from aura.sandbox import SandboxExecutor
-                                sandbox = SandboxExecutor(
-                                    mode="host",
-                                    workspace_root=Path(self._tools.workspace_root),
-                                )
-                                watch = sandbox.run_and_watch(
-                                    declared_run_command,
-                                    window_seconds=10,
-                                )
-                                if not (watch.ok and watch.exited_early):
-                                    emit_auto_launch_result(
-                                        command=declared_run_command,
-                                        ok=False,
-                                        output=watch.output,
-                                        on_event=on_event,
-                                        workspace_root=self._tools.workspace_root,
-                                    )
-                                    instruction = WORKER_LAUNCH_FAILURE_INSTRUCTION.format(
-                                        command=declared_run_command,
-                                        output=watch.output,
-                                    )
-                                    self._history.append_user_text(instruction)
-                                    state.discard_worker_candidate_final()
-                                    continue
-                                if fp:
-                                    state.last_launch_ok_fingerprint = fp
-                                emit_auto_launch_result(
-                                    command=declared_run_command,
-                                    ok=True,
-                                    output=watch.output,
-                                    on_event=on_event,
-                                    workspace_root=self._tools.workspace_root,
-                                )
-                        except Exception:
-                            logging.getLogger(__name__).warning(
-                                "Launch verification failed non-fatally",
-                                exc_info=True,
-                            )
-                    # --- Explicit validation commands rung ---
-                    if explicit_validation_commands:
-                        val_result = run_explicit_validation_commands(
-                            workspace_root=Path(self._tools.workspace_root),
-                            commands=explicit_validation_commands,
-                        )
-                        validation_runs = getattr(val_result, "runs", None)
-                        if validation_runs:
-                            emit_explicit_validation_runs(
-                                runs=validation_runs,
-                                on_event=on_event,
-                                workspace_root=self._tools.workspace_root,
-                            )
-                        if not val_result.ok:
-                            if not validation_runs:
-                                emit_explicit_validation_result(
-                                    command=val_result.command,
-                                    ok=False,
-                                    output=val_result.diagnostics,
-                                    on_event=on_event,
-                                    workspace_root=self._tools.workspace_root,
-                                )
-                            validation_key = val_result.command or "\n".join(
-                                explicit_validation_commands
-                            )
-                            failure_count = state.explicit_validation_failure_counts.get(
-                                validation_key,
-                                0,
-                            ) + 1
-                            state.explicit_validation_failure_counts[validation_key] = failure_count
-                            if failure_count > 1:
-                                self._finish_worker_recoverable_followup(
-                                    on_event,
-                                    failure_class="product_validation_failed",
-                                    error=(
-                                        "Final acceptance validation still fails after one focused "
-                                        "repair attempt."
-                                    ),
-                                    details={
-                                        "command": val_result.command,
-                                        "diagnostics": val_result.diagnostics,
-                                        "suggested_next_tool": "dispatch_to_worker",
-                                        "suggested_next_action": (
-                                            "Redispatch a focused repair, or revise the "
-                                            "acceptance command if it is misdeclared."
-                                        ),
-                                        "planner_resolution_needed": True,
-                                        "worker_confusion_question": (
-                                            "Worker could not make acceptance validation "
-                                            "pass after one focused repair attempt"
-                                            + (": " + str(val_result.command) if val_result.command else ".")
-                                        ),
-                                    },
-                                )
-                                return
-                            instruction = WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION.format(
-                                command=val_result.command,
-                                diagnostics=val_result.diagnostics,
-                            )
-                            self._history.append_user_text(instruction)
-                            state.discard_worker_candidate_final()
-                            continue
-                        state.explicit_validation_failure_counts.clear()
-                        if state.worker_flow is not None:
-                            state.worker_flow.mark_validation_satisfied()
-                    if (
-                        state.worker_flow is not None
-                        and state.worker_flow.requires_validation_before_final()
-                    ):
-                        if not state.worker_validation_nudge_sent:
-                            self._history.append_user_text(
-                                WORKER_FLOW_VALIDATION_REQUIRED_TEXT
-                            )
-                            state.worker_validation_nudge_sent = True
-                            state.discard_worker_candidate_final()
-                            continue
-                        state.discard_worker_candidate_final()
-                        self._finish_worker_recoverable_followup(
-                            on_event,
-                            failure_class="worker_validation_required",
-                            error=(
-                                "Worker stopped after changing files without running "
-                                "focused validation after one validation nudge."
-                            ),
-                            details={
-                                "suggested_next_tool": "run_terminal_command",
-                                "suggested_next_action": (
-                                    "Run the smallest relevant py_compile or pytest "
-                                    "command, then provide the final report."
-                                ),
-                                "planner_resolution_needed": True,
-                            },
-                        )
-                        return
-                    flow_steering_action = self._handle_worker_flow_steering(
-                        state,
-                        on_event,
-                    )
-                    if flow_steering_action != "none":
-                        state.discard_worker_candidate_final()
-                        if flow_steering_action == "finished":
-                            return
-                        continue
-                    zero_work_action = self._handle_worker_zero_work_final(
-                        state,
-                        on_event,
-                    )
-                    if zero_work_action != "none":
-                        state.discard_worker_candidate_final()
-                        if zero_work_action == "finished":
-                            return
-                        continue
-                    quality_action = handle_worker_quality_gate(
-                        state=state,
-                        workspace_root=self._tools.workspace_root,
-                        history=self._history,
-                        on_event=on_event,
-                        critic_cb=critic_cb,
-                        worker_request=worker_dispatch_request,
-                        dispatch_tool_call_id=dispatch_tool_call_id,
-                    )
-                    if quality_action != "none":
-                        state.discard_worker_candidate_final()
-                        if quality_action == "finished":
-                            return
-                        continue
-                    # All gates passed — release candidate final and flush buffer
-                    if state.candidate_final_message is not None:
-                        if worker_final_report_missing_proof(
-                            state,
-                            state.candidate_final_message,
-                        ):
-                            self._history.append_user_text(
-                                WORKER_FINAL_REPORT_PROOF_REQUIRED_TEXT
-                            )
-                            state.worker_final_report_proof_nudge_sent = True
-                            state.discard_worker_candidate_final()
-                            continue
-                        self._history.append_assistant(state.candidate_final_message)
-                        state.candidate_final_message = None
-                    if state.stream_buffer is not None:
-                        state.stream_buffer.flush(on_event)
-                    return
                 return
 
             _terminal_dispatch = False
