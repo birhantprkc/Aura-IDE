@@ -36,6 +36,7 @@ WEB_RESEARCH_RULES = """### web_research_rules
 
 WORKER_EXECUTION_CONTRACT = """### worker_execution_contract
 - Implement only the dispatched spec and current step.
+- If the task is part of a campaign, DispatchSession owns the campaign TODO list and starts each step sequentially; Worker must not plan or schedule the whole campaign.
 - Do not ask the user to resolve implementation ambiguity; use repository facts, recover internally, or return a blocker.
 - Inspect live files with tools before editing.
 - Use patch_file for existing-file edits unless full replacement is explicitly justified.

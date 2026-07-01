@@ -172,7 +172,8 @@ class DispatchSession:
 
         final_worker_result: WorkerDispatchResult | None = None
 
-        for step in self.plan.steps:
+        final_step_index = len(self.plan.steps) - 1
+        for index, step in enumerate(self.plan.steps):
             # Activate this step in the TODO rail.
             self._canonical_set_active(step.id)
 
@@ -182,7 +183,11 @@ class DispatchSession:
             step_result = _step_result_for(step, worker_result)
             self.step_results.append(step_result)
 
-            if _step_should_stop(step_result, worker_result):
+            if _step_should_stop(
+                step_result,
+                worker_result,
+                is_final_step=index == final_step_index,
+            ):
                 break
 
             # Step completed — mark done.
@@ -294,26 +299,84 @@ def _step_result_for(step: WorkerStepSpec, worker_result: WorkerDispatchResult) 
 def _step_should_stop(
     step_result: StepResult,
     worker_result: WorkerDispatchResult,
+    *,
+    is_final_step: bool = True,
 ) -> bool:
     """Return True if this step's outcome should halt the multi-step campaign.
 
     Stop conditions (any one is sufficient):
     - cancelled: user or harness stopped the Worker
-    - not ok: any failure classification (validation, edit mechanics, no-progress,
-      harness error, unverified acceptance, recoverable blocker, etc.)
     - phase_boundary: Worker hit its context/tool limit; not safe to continue
-    - mismatch: Worker surfaced a planner-resolution request; stop so the
-      Planner can update the plan before retrying
+    - hard internal/user-owned failure
+    - no concrete file progress
+
+    Non-final campaign steps may leave the workspace transiently incomplete.
+    If the Worker made concrete file progress, continue to the next campaign
+    step instead of making the Planner schedule it. The final step's aggregate
+    result decides whether the campaign succeeded.
     """
     if worker_result.cancelled:
         return True
-    if not step_result.ok:
-        return True
     if worker_result.phase_boundary:
         return True
-    if worker_result.mismatch is not None:
+    if _step_result_is_true_blocker(worker_result):
+        return True
+    if not step_result.ok and not _nonfinal_step_may_continue(
+        worker_result,
+        is_final_step=is_final_step,
+    ):
         return True
     return False
+
+
+def _nonfinal_step_may_continue(
+    worker_result: WorkerDispatchResult,
+    *,
+    is_final_step: bool,
+) -> bool:
+    if is_final_step:
+        return False
+
+    extras = worker_result.extras if isinstance(worker_result.extras, dict) else {}
+    if not _step_made_file_progress(worker_result, extras):
+        return False
+    return True
+
+
+def _step_made_file_progress(
+    worker_result: WorkerDispatchResult,
+    extras: dict[str, Any],
+) -> bool:
+    if worker_result.modified_files:
+        return True
+    writes = extras.get("writes")
+    if isinstance(writes, list):
+        return any(
+            isinstance(write, dict) and write.get("applied") is not False
+            for write in writes
+        )
+    return False
+
+
+def _step_result_is_true_blocker(worker_result: WorkerDispatchResult) -> bool:
+    status = str(worker_result.status or "")
+    if status in {
+        WorkerOutcomeStatus.approval_rejected.value,
+        WorkerOutcomeStatus.cancelled.value,
+        WorkerOutcomeStatus.harness_error.value,
+        WorkerOutcomeStatus.needs_planner_resolution.value,
+    }:
+        return True
+
+    extras = worker_result.extras if isinstance(worker_result.extras, dict) else {}
+    return bool(
+        extras.get("user_visible_blocker")
+        or extras.get("user_only_blocker")
+        or extras.get("terminal_environment_blocker")
+        or extras.get("worker_internal_error")
+        or extras.get("dispatch_internal_error")
+        or worker_result.mismatch is not None
+    )
 
 
 def _collect_modified_files(step_results: list[StepResult]) -> list[str]:

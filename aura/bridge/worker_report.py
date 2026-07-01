@@ -81,6 +81,16 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
         parts.extend([*task_shape_contract_lines(task.task_shape), ""])
 
     parts.extend([
+        "Active Dispatch Step",
+        (
+            "This is one bounded step from a Planner-owned campaign. Do only "
+            "this step. Do not plan, decompose, or schedule the whole task; "
+            "DispatchSession will start the next step after this Worker returns."
+        ),
+        "",
+    ])
+
+    parts.extend([
         "Goal",
         task.goal,
         "",
