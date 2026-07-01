@@ -57,12 +57,9 @@ from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.project_profile import detect_project_profile
 from aura.dependency_context import build_dependency_stanza
 from aura.validation.selector import ValidationPlan
-from aura.bridge.validation_selector_runtime import (
-    build_worker_validation_selector_plan as _build_worker_validation_selector_plan,
-    combine_validation_commands as _combine_validation_commands,
-    refresh_validation_selector_plan,
-    validation_selector_changed_files as _validation_selector_changed_files,
-    validation_selector_commands as _validation_selector_commands,
+from aura.bridge.worker_validation_selector_bridge import (
+    _WorkerValidationSelectorBridge,
+    refresh_worker_validation_selector_plan,
 )
 
 _log = logging.getLogger(__name__)
@@ -364,11 +361,12 @@ class _DispatchProxy(QObject):
 
         try:
             validation_selector, validation_selector_key, validation_selector_failed = (
-                self._refresh_worker_validation_selector_plan(
+                refresh_worker_validation_selector_plan(
                     relay=relay,
                     task_spec=task_spec,
                     task_kind=task_spec.task_shape.task_kind if task_spec.task_shape is not None else "unknown",
                     context_gearbox=context_gearbox,
+                    workspace_root=self._workspace_root,
                     final_validation_commands=final_validation_commands,
                     validation_selector=validation_selector,
                     validation_selector_key=validation_selector_key,
@@ -470,30 +468,6 @@ class _DispatchProxy(QObject):
             todo_relay_callback=self._relay_worker_todo_update,
         )
 
-    def _refresh_worker_validation_selector_plan(
-        self,
-        *,
-        relay: WorkerEventRelay,
-        task_spec: WorkerTaskSpec,
-        task_kind: str,
-        context_gearbox: dict[str, Any],
-        final_validation_commands: list[str],
-        validation_selector: ValidationPlan | None,
-        validation_selector_key: tuple[str, ...] | None,
-        validation_selector_failed: bool,
-    ) -> tuple[ValidationPlan | None, tuple[str, ...] | None, bool]:
-        return refresh_validation_selector_plan(
-            relay=relay,
-            task_spec_validation_commands=task_spec.validation_commands,
-            task_kind=task_kind,
-            context_gearbox=context_gearbox,
-            workspace_root=self._workspace_root,
-            final_validation_commands=final_validation_commands,
-            validation_selector=validation_selector,
-            validation_selector_key=validation_selector_key,
-            validation_selector_failed=validation_selector_failed,
-        )
-
     def _execute_worker_conversation(
         self,
         *,
@@ -508,30 +482,19 @@ class _DispatchProxy(QObject):
     ) -> tuple[list[str], ValidationPlan | None, tuple[str, ...] | None, bool, str | None, list[str]]:
         task_kind = task_spec.task_shape.task_kind if task_spec.task_shape is not None else "unknown"
         final_validation_commands = list(task_spec.validation_commands)
-        validation_selector: ValidationPlan | None = None
-        validation_selector_key: tuple[str, ...] | None = None
-        validation_selector_failed = False
 
-        def refresh_validation_selector_plan() -> None:
-            nonlocal validation_selector, validation_selector_key, validation_selector_failed
-            validation_selector, validation_selector_key, validation_selector_failed = (
-                self._refresh_worker_validation_selector_plan(
-                    relay=relay,
-                    task_spec=task_spec,
-                    task_kind=task_kind,
-                    context_gearbox=context_gearbox,
-                    final_validation_commands=final_validation_commands,
-                    validation_selector=validation_selector,
-                    validation_selector_key=validation_selector_key,
-                    validation_selector_failed=validation_selector_failed,
-                )
-            )
-
-        refresh_validation_selector_plan()
+        vs_bridge = _WorkerValidationSelectorBridge(
+            task_spec=task_spec,
+            task_kind=task_kind,
+            context_gearbox=context_gearbox,
+            workspace_root=self._workspace_root,
+            final_validation_commands=final_validation_commands,
+        )
+        vs_bridge.refresh(relay)
 
         def relay_worker_event(ev) -> None:
             relay.relay(tool_call_id, ev)
-            refresh_validation_selector_plan()
+            vs_bridge.refresh(relay)
 
         internal_error: str | None = None
         scratch_before = _validation_scratch_files(self._workspace_root) if self._workspace_root is not None else set()
@@ -564,9 +527,9 @@ class _DispatchProxy(QObject):
         cleaned_scratch_files = self._cleanup_worker_scratch_outputs(req, relay, scratch_before)
         return (
             final_validation_commands,
-            validation_selector,
-            validation_selector_key,
-            validation_selector_failed,
+            vs_bridge.validation_selector,
+            vs_bridge.validation_selector_key,
+            vs_bridge.validation_selector_failed,
             internal_error,
             cleaned_scratch_files,
         )
