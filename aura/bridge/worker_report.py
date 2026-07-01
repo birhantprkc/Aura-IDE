@@ -213,28 +213,28 @@ def _build_worker_summary(
             status = "completed"
 
     STATUS_LABELS = {
-        "completed": "\u2705  Worker completed successfully",
-        "completed_with_caveats": "\u2705  Worker completed with caveats",
-        "needs_followup": "\u2139\ufe0f  Worker Log details below",
-        "needs_planner_resolution": "\u26a0\ufe0f  Worker needs Planner resolution",
-        "validation_failed": "\u274c  Validation failed",
-        "edit_mechanics_blocked": "\u26a0\ufe0f  Edit mechanics blocked",
-        "scope_mismatch": "\u26a0\ufe0f  Scope mismatch",
-        "approval_rejected": "\u274c  Approval rejected",
-        "cancelled": "\U0001f536  Worker cancelled",
-        "harness_error": "\u274c  Harness error",
+        "completed": "Completed",
+        "completed_with_caveats": "Completed",
+        "needs_followup": "Needs attention",
+        "needs_planner_resolution": "Needs attention",
+        "validation_failed": "Needs attention",
+        "edit_mechanics_blocked": "Needs attention",
+        "scope_mismatch": "Needs attention",
+        "approval_rejected": "Failed",
+        "cancelled": "Cancelled",
+        "harness_error": "Failed",
     }
     ACTION_LABELS = {
-        "completed": "None \u2014 ready for review",
-        "completed_with_caveats": "Review caveats below",
-        "needs_followup": "Review Worker Log for details",
-        "needs_planner_resolution": "Planner will revise the handoff",
-        "validation_failed": "Fix validation failure \u2014 see below",
-        "edit_mechanics_blocked": "Re-dispatch \u2014 edit tool failure",
-        "scope_mismatch": "Review and re-specify",
-        "approval_rejected": "N/A \u2014 was not approved",
-        "cancelled": "N/A \u2014 was cancelled",
-        "harness_error": "Check logs and retry",
+        "completed": "Ready for review",
+        "completed_with_caveats": "Review details below",
+        "needs_followup": "Review details below",
+        "needs_planner_resolution": "Review details below",
+        "validation_failed": "Review details below",
+        "edit_mechanics_blocked": "Review details below",
+        "scope_mismatch": "Review details below",
+        "approval_rejected": "Review details below",
+        "cancelled": "No action needed",
+        "harness_error": "Review details below",
     }
 
     status_label = STATUS_LABELS.get(status, "\u2753  Unknown outcome")

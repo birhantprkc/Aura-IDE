@@ -732,7 +732,6 @@ class ChatView(QScrollArea):
                     and not (needs_followup and recoverable)
                     and not (suppress_user_followup_card and not user_visible_blocker)
                 ):
-                    context_gearbox = extras.get("context_gearbox") if isinstance(extras, dict) else None
                     goal = (
                         controller.goal
                         or self._tool_goal_from_args(controller.buffer)
@@ -745,7 +744,6 @@ class ChatView(QScrollArea):
                         summary,
                         needs_followup=needs_followup,
                         status=status,
-                        context_gearbox=context_gearbox,
                         is_internal=_internal_continuation,
                     )
 
@@ -966,7 +964,6 @@ class ChatView(QScrollArea):
     def add_worker_summary(
         self, tool_call_id: str, goal: str, ok: bool, summary: str,
         needs_followup: bool = False, status: str | None = None,
-        context_gearbox: dict | None = None,
         is_internal: bool = False,
     ) -> None:
         """Add a summary card to the chat after a worker completes."""
@@ -982,7 +979,6 @@ class ChatView(QScrollArea):
                 summary,
                 needs_followup=needs_followup,
                 status=status,
-                context_gearbox=context_gearbox,
                 is_internal=is_internal,
             )
             self._scroll_after_bottom_layout_change()
@@ -991,7 +987,6 @@ class ChatView(QScrollArea):
             tool_call_id, goal, ok, summary,
             needs_followup=needs_followup, parent=self,
             status=status,
-            context_gearbox=context_gearbox,
             is_internal=is_internal,
         )
         self._worker_summary_cards[tool_call_id] = card

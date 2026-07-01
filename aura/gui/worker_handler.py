@@ -140,46 +140,24 @@ class WorkerEventHandler(QObject):
 
         file_list = list(files)
         step_list = list(steps or [])
-        # ---- Internal continuation: reuse existing card instead of stacking ----
+        # ---- Internal continuation: continue without visible card ceremony ----
         if self._pending_internal_retool_id is not None:
             old_id = self._pending_internal_retool_id
             self._pending_internal_retool_id = None
-            if hasattr(self._chat, "prepare_spec_card"):
-                self._chat.prepare_spec_card(tool_call_id)
-            if old_id != tool_call_id:
-                self._chat.remap_spec_card(old_id, tool_call_id)
-                self._wired_spec_cards.discard(old_id)
-                self._canonical_dispatch_ids.discard(old_id)
+            self._chat.remove_spec_card(old_id)
+            self._wired_spec_cards.discard(old_id)
+            self._canonical_dispatch_ids.discard(old_id)
             self._canonical_dispatch_ids.add(tool_call_id)
-            self._visible_dispatch_card_id = tool_call_id
-            self._playground.begin_dispatch_todo_list(tool_call_id, step_list)
+            self._visible_dispatch_card_id = None
             self._set_active_workflow(
                 WorkflowState.intent_captured(
                     tool_call_id, goal, summary=summary,
                 ).with_status(
-                    WorkflowStatus.plan_ready,
-                    pending_user_action="Dispatch, edit, or cancel the plan.",
-                )
-            )
-            card = self._get_spec_card(tool_call_id)
-            if card:
-                card.update_spec(goal, file_list, spec, acceptance, summary, steps=step_list)
-                if hasattr(card, "update_workflow_state") and self._active_workflow is not None:
-                    card.update_workflow_state(self._active_workflow)
-            if tool_call_id not in self._wired_spec_cards and card is not None:
-                card.dispatch_clicked.connect(self._on_dispatch_clicked)
-                card.edit_clicked.connect(self._on_edit_spec_clicked)
-                card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)
-                self._wired_spec_cards.add(tool_call_id)
-            if self._bridge.auto_dispatch:
-                if card and hasattr(card, "mark_dispatched"):
-                    card.mark_dispatched()
-                self._transition_active_workflow(
-                    tool_call_id,
                     WorkflowStatus.dispatched,
                     pending_user_action="",
                 )
-                self._bridge.user_dispatched(tool_call_id, goal, file_list, spec, acceptance, summary)
+            )
+            self._bridge.user_dispatched(tool_call_id, goal, file_list, spec, acceptance, summary)
             self._chat.scroll_to_bottom(force=True)
             return
 
@@ -322,6 +300,9 @@ class WorkerEventHandler(QObject):
         self.worker_started.emit()
 
         card = self._get_spec_card(tool_call_id)
+        if card and self._bridge.auto_dispatch:
+            self._clear_active_spec_card(tool_call_id)
+            card = None
         if card:
             card.mark_worker_running()
         self._transition_active_workflow(
@@ -346,7 +327,6 @@ class WorkerEventHandler(QObject):
         )
 
         metadata = self._worker_result_metadata(tool_call_id)
-        context_gearbox = self._context_gearbox_metadata(metadata)
         extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
         terminal_success = self._is_terminal_success(
             ok=ok,
@@ -403,18 +383,6 @@ class WorkerEventHandler(QObject):
             ok=ok,
             needs_followup=bool(needs_followup),
         )
-        if context_gearbox:
-            shower = getattr(self._playground, "show_context_gearbox_metadata", None)
-            if callable(shower):
-                shower(context_gearbox)
-
-        # Validation selector line
-        validation_selector = extras.get("validation_selector")
-        if isinstance(validation_selector, dict) and validation_selector.get("display"):
-            shower = getattr(self._playground, "show_validation_selector_line", None)
-            if callable(shower):
-                shower(validation_selector)
-
         if is_mismatch:
             self._chat.begin_planner_resolution_aura()
 
@@ -430,7 +398,6 @@ class WorkerEventHandler(QObject):
                 summary,
                 needs_followup=bool(needs_followup),
                 status=status,
-                context_gearbox=context_gearbox,
                 is_internal=is_internal,
             )
         if (
@@ -497,12 +464,6 @@ class WorkerEventHandler(QObject):
             extras.get("mismatch_kind", ""),
             extras.get("mismatch_question", ""),
         )
-
-    @staticmethod
-    def _context_gearbox_metadata(metadata: dict) -> dict:
-        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
-        context_gearbox = extras.get("context_gearbox")
-        return context_gearbox if isinstance(context_gearbox, dict) else {}
 
     @staticmethod
     def _is_recoverable_internal_worker_result(

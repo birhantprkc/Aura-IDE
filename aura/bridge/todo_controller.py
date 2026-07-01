@@ -7,13 +7,7 @@ for a tool_call_id, only the controller may emit visible TODO snapshots.
 Rules:
 - IDs and order never change after begin().
 - Descriptions never change after begin().
-- Unknown Worker objective IDs with status other than "done"/"active"
-  are ignored.
-- A Worker "done"/"active" update with an unknown ID is routed to the
-  single active canonical objective (the step currently being
-  executed). If there is zero or more than one active row, it is ignored.
-- Worker-local TODOs with unknown IDs, ad-hoc descriptions, or replacement
-  task lists are ignored during canonical dispatch.
+- Worker-local TODOs are ignored during canonical dispatch.
 - Worker cannot add, remove, reorder, or rename visible rows.
 - Final checklist remains visible after dispatch finish.
 - Clear canonical state only when a new dispatch begins for that tool ID,
@@ -57,8 +51,7 @@ class DispatchTodoController:
     """Owns canonical TODO state for every active tool_call_id.
 
     Once begin() is called for a tool_call_id, all visible TODO emissions
-    for that ID must come through snapshot(). Worker-local updates are
-    absorbed (status-only for known IDs) or ignored.
+    for that ID must come through snapshot(). Worker-local updates are ignored.
     """
 
     def __init__(self) -> None:
@@ -164,81 +157,6 @@ class DispatchTodoController:
         return tool_call_id in self._canonical
 
     # ------------------------------------------------------------------
-    # Worker update absorption
-    # ------------------------------------------------------------------
-
-    def absorb_worker_update(
-        self,
-        tool_call_id: str,
-        tasks: list[Any],
-    ) -> list[dict[str, Any]] | None:
-        """Absorb a Worker-local TODO update during canonical dispatch.
-
-        Returns the canonical snapshot if any status was absorbed, or None
-        if the worker update should be completely suppressed (no emission).
-
-        Enforces one-active-row: when a known objective is set to active,
-        any other non-done active row is returned to pending.
-        """
-        if not self.has_canonical(tool_call_id):
-            return None
-
-        ordered = self._canonical[tool_call_id]
-        changed = False
-
-        for task in tasks:
-            if not isinstance(task, dict):
-                continue
-            task_id = str(task.get("id") or task.get("step_id") or "")
-            if not task_id:
-                continue
-            worker_status = _normalize_status(task.get("status") or task.get("state") or "")
-
-            obj = ordered.get(task_id)
-            if obj is None:
-                # Unknown ID — route "done"/"active" update to the
-                # currently-active objective.
-                if worker_status not in ("done", "active"):
-                    continue
-                active_obj = _find_single_active(ordered)
-                if active_obj is None:
-                    continue
-                if active_obj.status == "done":
-                    continue
-                active_obj.status = worker_status
-                changed = True
-                # Enforce one active row when routing to active
-                if worker_status == "active":
-                    for other in ordered.values():
-                        if other is active_obj:
-                            continue
-                        if other.status == "done":
-                            continue
-                        if other.status == "active":
-                            other.status = "pending"
-                continue
-
-            # Known ID — absorb status only
-            if worker_status in ("done", "active") and obj.status != "done":
-                if obj.status != worker_status:
-                    obj.status = worker_status
-                    changed = True
-                    # Enforce one active row when setting a known ID to active
-                    if worker_status == "active":
-                        for other_id, other in ordered.items():
-                            if other_id == task_id:
-                                continue
-                            if other.status == "done":
-                                continue
-                            if other.status == "active":
-                                other.status = "pending"
-
-        # Only re-emit if something actually changed
-        if changed:
-            return self.snapshot(tool_call_id)
-        return None
-
-    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -251,37 +169,10 @@ class DispatchTodoController:
         return ordered.get(objective_id)
 
 
-def _find_single_active(
-    ordered: dict[str, TodoObjective],
-) -> TodoObjective | None:
-    """Return the single active objective, or None.
-
-    Returns None when there are zero or more than one active rows — the
-    fallback routing is only safe when the target is unambiguous.
-    """
-    found: TodoObjective | None = None
-    for obj in ordered.values():
-        if obj.status == "active":
-            if found is not None:
-                # More than one active → ambiguous, abort
-                return None
-            found = obj
-    return found
-
-
 def _str_list(raw: Any) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [str(item) for item in raw]
-
-
-def _normalize_status(raw: str) -> str:
-    s = str(raw or "").strip().lower()
-    if s in ("done", "completed", "complete"):
-        return "done"
-    if s in ("active", "in_progress", "doing", "current"):
-        return "active"
-    return "pending"
 
 
 __all__ = [

@@ -230,17 +230,8 @@ class _DispatchProxy(QObject):
         self.workerTodoListUpdated.emit(tool_call_id, tasks)
 
     def _relay_worker_todo_update(self, tool_call_id: str, tasks: list) -> None:
-        """Relay or absorb a Worker-local TODO update.
-
-        During canonical dispatch, only status updates for known objective IDs
-        are absorbed. Unknown IDs, ad-hoc descriptions, and replacement task
-        lists are ignored. The canonical snapshot is re-emitted only if status
-        actually changed.
-        """
+        """Relay Worker-local TODO updates only outside canonical dispatch."""
         if self._todo_controller.has_canonical(tool_call_id):
-            updated = self._todo_controller.absorb_worker_update(tool_call_id, tasks)
-            if updated is not None:
-                self.workerTodoListUpdated.emit(tool_call_id, updated)
             return
         # No canonical state: pass through as before (non-dispatch worker runs).
         self.workerTodoListUpdated.emit(tool_call_id, tasks)

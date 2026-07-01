@@ -15,9 +15,8 @@ TODO rail:
 - All steps start as pending via todo_controller.begin().
 - The active step becomes active while it runs (todo_controller.set_active).
 - Completed steps become done before the next step activates.
-- A blocked/failed step shows as active+blocked in the final emission.
 - One final TODO emission happens after the loop ends.
-- Worker-local TODO updates are blocked by the controller.
+- Worker-local TODO updates are ignored by the bridge.
 """
 from __future__ import annotations
 
@@ -77,7 +76,7 @@ class DispatchSession:
 
     Product invariant:
     The user expressed intent. That intent is durable until completed,
-    cancelled, or truly blocked by a user-only decision.
+    cancelled, or stopped.
 
     Visible lifecycle:
     - workerStarted fires once, before the first step.
@@ -92,8 +91,8 @@ class DispatchSession:
     - Completed steps become done before the next step activates.
     - If a step fails, the campaign stops (no blocked TODO state).
     - One final TODO emission happens after the loop ends.
-    - Worker-local TODO updates from inside _run_worker_step are absorbed
-      by the controller for canonical dispatch tool_call_ids.
+    - Worker-local TODO updates from inside _run_worker_step are ignored
+      for canonical dispatch tool_call_ids.
     """
 
     def __init__(
@@ -186,9 +185,7 @@ class DispatchSession:
         if not self.plan.steps:
             result = WorkerDispatchResult(
                 ok=False,
-                summary=(
-                    "Aura paused this campaign without needing user action."
-                ),
+                summary="Aura stopped before completion.",
                 status=WorkerOutcomeStatus.needs_followup.value,
                 needs_followup=True,
                 recoverable=True,
@@ -234,17 +231,14 @@ class DispatchSession:
             self.cursor.completed_step_ids.append(step.id)
             self._canonical_mark_done(step.id)
 
-        # Emit final TODO state once: completed=done, blocked=active+blocked, rest=pending.
+        # Emit final TODO state once.
         self._canonical_finish()
 
         if final_worker_result is None:
             # Guard — can't happen: plan.steps was verified non-empty above.
             result = WorkerDispatchResult(
                 ok=False,
-                summary=(
-                    "Aura paused this campaign before completion. "
-                    "No user action is required."
-                ),
+                summary="Aura stopped before completion.",
                 status=WorkerOutcomeStatus.needs_followup.value,
                 needs_followup=True,
                 recoverable=True,
@@ -597,12 +591,7 @@ def _visible_campaign_result(
 
 
 def _calm_campaign_recovery_summary(classification: str) -> str:
-    if classification == INTERNAL_RECOVERABLE_ERROR:
-        return "Aura paused this campaign without needing user action."
-    return (
-        "Aura paused this campaign before completion. "
-        "No user action is required."
-    )
+    return "Aura stopped before completion."
 
 
 __all__ = [

@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import media_path
-from aura.context_gearbox.runtime import format_context_gearbox_display
 from aura.gui.cards._helpers import _mono_font
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
@@ -167,26 +166,7 @@ class InfoHubPane(QWidget):
         Flushes buffered prose immediately so the summary is ordered correctly.
         """
         self._log_stream.flush()
-        if status is not None:
-            from aura.conversation.dispatch import WorkerOutcomeStatus
-            status_labels = {
-                WorkerOutcomeStatus.completed.value: "✅ Worker completed successfully.",
-                WorkerOutcomeStatus.completed_with_caveats.value: "✅ Worker completed with caveats.",
-                WorkerOutcomeStatus.needs_followup.value: "ℹ️ Worker Log details below.",
-                WorkerOutcomeStatus.validation_failed.value: "❌ Worker validation failed.",
-                WorkerOutcomeStatus.edit_mechanics_blocked.value: "⚠️ Worker edit mechanics blocked.",
-                WorkerOutcomeStatus.scope_mismatch.value: "⚠️ Worker scope mismatch.",
-                WorkerOutcomeStatus.approval_rejected.value: "❌ Worker approval rejected.",
-                WorkerOutcomeStatus.cancelled.value: "🔶 Worker cancelled.",
-                WorkerOutcomeStatus.harness_error.value: "❌ Worker harness error.",
-            }
-            prefix = status_labels.get(status, "❓ Unknown status.")
-        elif ok:
-            prefix = "✅ Worker completed successfully."
-        elif needs_followup:
-            prefix = "ℹ️ Worker Log details below."
-        else:
-            prefix = "Harness error."
+        prefix = _final_summary_label(ok, needs_followup=needs_followup, status=status)
         block = f"\n\n{'─' * 40}\n{prefix}\n{summary}\n{'─' * 40}\n"
         self._log_view.insertPlainText(block)
 
@@ -217,28 +197,6 @@ class InfoHubPane(QWidget):
         row_layout.addWidget(copy_btn)
 
         self._cards_layout.addWidget(row)
-
-    def show_context_gearbox_metadata(self, metadata: dict | None) -> None:
-        """Append compact Context Gearbox details to the Worker Log."""
-        lines = format_context_gearbox_display(metadata or {})
-        if not lines:
-            return
-        self._log_stream.flush()
-        self._log_view.insertPlainText("\n" + "\n".join(lines) + "\n")
-        sb = self._log_view.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-    def show_validation_selector_line(self, metadata: dict | None) -> None:
-        """Append one compact validation selector line to the Worker Log."""
-        if not isinstance(metadata, dict):
-            return
-        display = metadata.get("display", "").strip()
-        if not display:
-            return
-        self._log_stream.flush()
-        self._log_view.insertPlainText("\n" + display + "\n")
-        sb = self._log_view.verticalScrollBar()
-        sb.setValue(sb.maximum())
 
     def _on_copy_summary(self, btn: QToolButton, receipt_text: str) -> None:
         QGuiApplication.clipboard().setText(receipt_text)
@@ -328,3 +286,32 @@ class InfoHubPane(QWidget):
                 border-radius: 3px;
             }}
         """
+
+
+def _final_summary_label(
+    ok: bool,
+    *,
+    needs_followup: bool = False,
+    status: str | None = None,
+) -> str:
+    from aura.conversation.dispatch import WorkerOutcomeStatus, normalize_outcome_status
+
+    normalized = normalize_outcome_status(status)
+    if normalized == WorkerOutcomeStatus.cancelled.value:
+        return "Cancelled."
+    if ok and not needs_followup:
+        return "Completed."
+    if normalized in {
+        WorkerOutcomeStatus.completed.value,
+        WorkerOutcomeStatus.completed_with_caveats.value,
+    }:
+        return "Completed."
+    if needs_followup or normalized in {
+        WorkerOutcomeStatus.needs_followup.value,
+        WorkerOutcomeStatus.needs_planner_resolution.value,
+        WorkerOutcomeStatus.validation_failed.value,
+        WorkerOutcomeStatus.edit_mechanics_blocked.value,
+        WorkerOutcomeStatus.scope_mismatch.value,
+    }:
+        return "Needs attention."
+    return "Failed."

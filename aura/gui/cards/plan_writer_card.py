@@ -76,7 +76,7 @@ class PlanWriterCard(QFrame):
             self.STATE_PHASE: "⚡ Phase complete — preparing follow-up",
             self.STATE_INCOMPLETE: self._incomplete_text,
             self.STATE_NOT_STARTED: self._incomplete_text,
-            self.STATE_RETRYING: "⚡ Retrying",
+            self.STATE_RETRYING: "⚡ Working",
         }[self._state]
 
         metrics = QFontMetrics(self._status.font())
@@ -172,7 +172,7 @@ class PlanWriterCard(QFrame):
     @staticmethod
     def _format_not_started_text(parsed: dict, extras: dict) -> str:
         if extras.get("pure_research"):
-            return "⚡ Plan blocked — research only"
+            return "⚡ Plan not dispatched — research only"
         if extras.get("dispatch_approval_timeout"):
             return "⚡ Plan expired"
         if extras.get("dispatch_cancelled"):

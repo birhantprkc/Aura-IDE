@@ -40,5 +40,5 @@ class ErrorCard(QFrame):
 
     def _on_retry(self) -> None:
         self._retry_btn.setEnabled(False)
-        self._retry_btn.setText("Retrying...")
+        self._retry_btn.setText("Working...")
         self.retry_clicked.emit()

@@ -153,7 +153,6 @@ class WorkerSummaryCard(QFrame):
         needs_followup: bool = False,
         parent=None,
         status: str | None = None,
-        context_gearbox: dict[str, Any] | None = None,
         is_internal: bool = False,
     ) -> None:
         super().__init__(parent)
@@ -205,7 +204,6 @@ class WorkerSummaryCard(QFrame):
             summary,
             needs_followup=needs_followup,
             status=status,
-            context_gearbox=context_gearbox,
         )
 
     def update_summary(
@@ -216,7 +214,6 @@ class WorkerSummaryCard(QFrame):
         *,
         needs_followup: bool = False,
         status: str | None = None,
-        context_gearbox: dict[str, Any] | None = None,
         is_internal: bool | None = None,
     ) -> None:
         """Update this card in place for repeated results with the same ID."""
@@ -264,7 +261,7 @@ class WorkerSummaryCard(QFrame):
             self._summary_line.setVisible(False)
 
         # Rebuild stats chips
-        self._rebuild_stats(file_counts, validation, context_gearbox)
+        self._rebuild_stats(file_counts, validation)
 
         # Footer
         self._footer.setText("Details are in Worker Log.")
@@ -274,7 +271,6 @@ class WorkerSummaryCard(QFrame):
         self,
         file_counts: dict[str, int],
         validation: str,
-        context_gearbox: dict[str, Any] | None = None,
     ) -> None:
         """Rebuild the stats chip row from parsed file counts and validation."""
         # Clear existing chips
@@ -305,24 +301,7 @@ class WorkerSummaryCard(QFrame):
                 val_short = validation.split("(")[1].rstrip(")")
             self._stats_layout.addWidget(self._build_chip(val_short))
 
-        context_chip = self._context_chip_text(context_gearbox)
-        if context_chip:
-            self._stats_layout.addWidget(self._build_chip(context_chip))
-
         self._stats_layout.addStretch()
-
-    @staticmethod
-    def _context_chip_text(context_gearbox: dict[str, Any] | None) -> str:
-        if not isinstance(context_gearbox, dict):
-            return ""
-        summary = context_gearbox.get("summary")
-        if not isinstance(summary, dict):
-            return ""
-        loaded = summary.get("loaded_count")
-        skipped = summary.get("skipped_count")
-        if not isinstance(loaded, int) or not isinstance(skipped, int):
-            return ""
-        return f"Context {loaded}/{skipped}"
 
     @staticmethod
     def _build_chip(text: str) -> QLabel:
