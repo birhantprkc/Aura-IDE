@@ -73,7 +73,14 @@ from aura.conversation.validation_orchestrator import (
     TIMEOUT,
 )
 from aura.dependency_context import build_dependency_stanza
-from aura.validation.selector import ValidationPlan, select_validation_plan
+from aura.validation.selector import ValidationPlan
+from aura.bridge.validation_selector_runtime import (
+    build_worker_validation_selector_plan as _build_worker_validation_selector_plan,
+    combine_validation_commands as _combine_validation_commands,
+    refresh_validation_selector_plan,
+    validation_selector_changed_files as _validation_selector_changed_files,
+    validation_selector_commands as _validation_selector_commands,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -108,90 +115,6 @@ EDIT_TRANSACTION_FAILURE_CLASSES = {
     "edit_transaction_invalid_syntax",
     "edit_transaction_not_applicable",
 }
-
-
-def _combine_validation_commands(
-    planner_commands: list[str] | tuple[str, ...] | None,
-    selector_commands: list[str] | tuple[str, ...] | None,
-) -> list[str]:
-    """Combine Planner and selector validation commands, preserving order."""
-    combined: list[str] = []
-    seen: set[str] = set()
-    for raw in [*(planner_commands or []), *(selector_commands or [])]:
-        command = str(raw or "").strip()
-        if not command or command in seen:
-            continue
-        combined.append(command)
-        seen.add(command)
-    return combined
-
-
-def _validation_selector_commands(plan: ValidationPlan | None) -> list[str]:
-    if not isinstance(plan, dict):
-        return []
-    commands = plan.get("commands")
-    if not isinstance(commands, list):
-        return []
-    return [str(command).strip() for command in commands if str(command).strip()]
-
-
-def _validation_selector_changed_files(relay: Any) -> list[str]:
-    """Return applied Worker write paths for focused selector validation."""
-    write_results = getattr(relay, "write_results", [])
-    raw_files: list[str] = []
-    if isinstance(write_results, list) and write_results:
-        for write in write_results:
-            if not isinstance(write, dict):
-                continue
-            path = write.get("path")
-            if (
-                write.get("applied") is True
-                and not write.get("deleted")
-                and isinstance(path, str)
-                and path
-            ):
-                raw_files.append(path)
-    else:
-        touched = getattr(relay, "touched_files", set())
-        if isinstance(touched, set):
-            raw_files = sorted(str(path) for path in touched)
-        elif isinstance(touched, list):
-            raw_files = [str(path) for path in touched]
-
-    files: list[str] = []
-    seen: set[str] = set()
-    for raw in raw_files:
-        path = _normalize_worker_path(str(raw or ""))
-        if not path or _is_validation_scratch_path(path) or path in seen:
-            continue
-        files.append(path)
-        seen.add(path)
-    return files
-
-
-def _build_worker_validation_selector_plan(
-    *,
-    changed_files: list[str],
-    task_kind: str,
-    context_gearbox: dict[str, Any],
-    workspace_root: Path | None,
-) -> ValidationPlan:
-    """Build the data-only selector plan used by the Worker final gate."""
-    if not changed_files:
-        return select_validation_plan(
-            target_files=[],
-            changed_files=None,
-            task_kind=task_kind,
-            context_gearbox=None,
-            workspace_root=workspace_root,
-        )
-    return select_validation_plan(
-        target_files=changed_files,
-        changed_files=changed_files,
-        task_kind=task_kind,
-        context_gearbox=context_gearbox,
-        workspace_root=workspace_root,
-    )
 
 
 class _DispatchPending:
@@ -699,28 +622,17 @@ class _DispatchProxy(QObject):
         validation_selector_key: tuple[str, ...] | None,
         validation_selector_failed: bool,
     ) -> tuple[ValidationPlan | None, tuple[str, ...] | None, bool]:
-        changed_files = _validation_selector_changed_files(relay)
-        key = tuple(changed_files)
-        if validation_selector is not None and key == validation_selector_key:
-            return validation_selector, validation_selector_key, validation_selector_failed
-        validation_selector_key = key
-        try:
-            validation_selector = _build_worker_validation_selector_plan(
-                changed_files=changed_files,
-                task_kind=task_kind,
-                context_gearbox=context_gearbox,
-                workspace_root=self._workspace_root,
-            )
-            final_validation_commands[:] = _combine_validation_commands(
-                task_spec.validation_commands,
-                _validation_selector_commands(validation_selector),
-            )
-        except Exception:
-            if not validation_selector_failed:
-                _log.exception("Failed to build validation selector plan")
-            validation_selector_failed = True
-            final_validation_commands[:] = list(task_spec.validation_commands)
-        return validation_selector, validation_selector_key, validation_selector_failed
+        return refresh_validation_selector_plan(
+            relay=relay,
+            task_spec_validation_commands=task_spec.validation_commands,
+            task_kind=task_kind,
+            context_gearbox=context_gearbox,
+            workspace_root=self._workspace_root,
+            final_validation_commands=final_validation_commands,
+            validation_selector=validation_selector,
+            validation_selector_key=validation_selector_key,
+            validation_selector_failed=validation_selector_failed,
+        )
 
     def _execute_worker_conversation(
         self,

@@ -62,6 +62,7 @@ class WorkerEventHandler(QObject):
         self._active_workflow: WorkflowState | None = None
         self._wired_spec_cards: set[str] = set()
         self._active_mismatch_card_id: str | None = None
+        self._canonical_dispatch_ids: set[str] = set()
 
     # ---- public property -------------------------------------------------------
 
@@ -136,6 +137,7 @@ class WorkerEventHandler(QObject):
 
         file_list = list(files)
         step_list = list(steps or [])
+        self._canonical_dispatch_ids.add(tool_call_id)
         self._playground.begin_dispatch_todo_list(tool_call_id, step_list)
         self._set_active_workflow(
             WorkflowState.intent_captured(
@@ -393,6 +395,7 @@ class WorkerEventHandler(QObject):
             )
         if not (suppress_user_followup_card and not user_visible_blocker):
             self._clear_active_spec_card(tool_call_id)
+        self._canonical_dispatch_ids.discard(tool_call_id)
         self.worker_running_changed.emit(False)
 
     @staticmethod
@@ -509,6 +512,7 @@ class WorkerEventHandler(QObject):
             pending_user_action="",
         )
         self._clear_active_spec_card(tool_call_id)
+        self._canonical_dispatch_ids.discard(tool_call_id)
         self.worker_running_changed.emit(False)
 
     # ---- worker content slots --------------------------------------------------
@@ -516,11 +520,15 @@ class WorkerEventHandler(QObject):
     def _on_worker_reasoning(self, tool_call_id: str, text: str) -> None:
         """Forward reasoning delta to playground."""
 
+        if tool_call_id in self._canonical_dispatch_ids:
+            return
         self._playground.append_reasoning(text)
 
     def _on_worker_content(self, tool_call_id: str, text: str) -> None:
         """Forward content delta to playground."""
 
+        if tool_call_id in self._canonical_dispatch_ids:
+            return
         self._playground.append_content(text)
 
     # ---- worker tool call slots ------------------------------------------------
