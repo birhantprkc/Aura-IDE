@@ -1353,7 +1353,8 @@ class ConversationManager:
                         payload_dict["failure_constraint"] = failure_constraint
                         payload = json.dumps(payload_dict, ensure_ascii=False)
                         self._history.append_tool_result(task["id"], payload)
-                        self._history.append_user_text(failure_constraint)
+                        if failure_constraint:
+                            self._history.append_internal_user_text(failure_constraint)
                         on_event(ToolResult(
                             tool_call_id=task["id"],
                             name="dispatch_to_worker",
@@ -1771,7 +1772,7 @@ class ConversationManager:
         failure_constraint: str = "",
     ) -> None:
         if failure_constraint:
-            self._history.append_user_text(failure_constraint)
+            self._history.append_internal_user_text(failure_constraint)
         # Suppress visible card. Still emit Done with empty content so the
         # planner stream closes cleanly. No ContentDelta, no history append.
         on_event(Done(

@@ -167,6 +167,12 @@ def is_internal_dispatch_continuation(
         return False
     if meta.get("status") in _TERMINAL_STATUSES:
         return False
+    if (
+        meta.get("ok")
+        and not meta.get("needs_followup")
+        and meta.get("status") != "needs_planner_resolution"
+    ):
+        return False
 
     # ── 2. Explicit handoff ───────────────────────────────────────────
     if ex.get("internal_planner_handoff"):

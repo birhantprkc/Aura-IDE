@@ -34,6 +34,8 @@ def _is_transient_replay_message(m: dict) -> bool:
     - Assistant messages whose purpose was tool dispatch/progress.
     """
     role = m.get("role")
+    if m.get("aura_internal"):
+        return True
     if role == "user":
         content = m.get("content", "")
         if isinstance(content, str) and content.startswith("Planner stale-read invalidation:"):

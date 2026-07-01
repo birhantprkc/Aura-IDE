@@ -242,14 +242,20 @@ class WorkflowState:
                 write_outcome = str(not_applied[-1].get("write_outcome") or "")
         caveats = tuple(str(item) for item in (extras or {}).get("caveats", []) if isinstance(extras, dict))
         blockers = tuple(str(item) for item in (extras or {}).get("errors", []) if isinstance(extras, dict))
+        ordinary_success = (
+            ok
+            and not needs_followup
+            and not _not_applied_outcome(write_outcome)
+            and outcome != WorkerOutcomeStatus.needs_planner_resolution.value
+        )
         if outcome == WorkerOutcomeStatus.cancelled.value:
             final_status = WorkflowStatus.cancelled
+        elif ordinary_success:
+            final_status = WorkflowStatus.done
         elif outcome == WorkerOutcomeStatus.needs_planner_resolution.value or (
             isinstance(extras, dict) and extras.get("planner_resolution_needed")
         ):
             final_status = WorkflowStatus.planner_resolving
-        elif ok and not needs_followup and not _not_applied_outcome(write_outcome):
-            final_status = WorkflowStatus.done
         elif outcome in {
             WorkerOutcomeStatus.harness_error.value,
             WorkerOutcomeStatus.craft_rejected.value,

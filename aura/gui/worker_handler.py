@@ -292,11 +292,26 @@ class WorkerEventHandler(QObject):
         metadata = self._worker_result_metadata(tool_call_id)
         context_gearbox = self._context_gearbox_metadata(metadata)
         extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
+        terminal_success = self._is_terminal_success(
+            ok=ok,
+            needs_followup=bool(needs_followup),
+            status=status,
+        )
+        if terminal_success:
+            extras = self._scrub_internal_success_extras(extras)
+            metadata = {**metadata, "extras": extras}
 
         # ── canonical dispatch lifecycle classification ──────────────────
-        is_internal = is_internal_dispatch_continuation(metadata)
+        is_internal = is_internal_dispatch_continuation(
+            metadata,
+            ok=ok,
+            needs_followup=bool(needs_followup),
+            status=status,
+        )
         user_visible_blocker = is_user_visible_dispatch_blocker(metadata)
-        suppress_user_followup_card = bool(extras.get("suppress_user_followup_card"))
+        suppress_user_followup_card = (
+            False if terminal_success else bool(extras.get("suppress_user_followup_card"))
+        )
 
         # Internal continuations are never user-visible summaries
         suppress_main_summary = is_internal or (
@@ -424,6 +439,34 @@ class WorkerEventHandler(QObject):
     ) -> bool:
         """Thin delegation to the canonical lifecycle predicate."""
         return is_internal_dispatch_continuation(metadata)
+
+    @staticmethod
+    def _is_terminal_success(
+        *,
+        ok: bool,
+        needs_followup: bool,
+        status: str | None,
+    ) -> bool:
+        return bool(ok and not needs_followup and status != "needs_planner_resolution")
+
+    @staticmethod
+    def _scrub_internal_success_extras(extras: dict) -> dict:
+        """Drop retry-control flags that must not survive onto a later success."""
+        if not isinstance(extras, dict):
+            return {}
+        result = dict(extras)
+        for key in (
+            "internal_planner_handoff",
+            "internal_campaign_continuation",
+            "suppress_user_followup_card",
+            "planner_resolution_needed",
+            "mismatch_kind",
+            "mismatch_question",
+            "failure_constraint",
+            "dispatch_spec_rejected",
+        ):
+            result.pop(key, None)
+        return result
 
     def _worker_result_metadata(self, tool_call_id: str) -> dict:
         getter = getattr(self._bridge, "worker_result_metadata", None)

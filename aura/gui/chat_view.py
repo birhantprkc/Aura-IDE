@@ -35,6 +35,21 @@ from aura.gui.theme import (
 from aura.gui.widgets.aura_glow import AuraWidget
 
 
+def _is_terminal_worker_success(
+    data: dict,
+    *,
+    event_ok: bool,
+    needs_followup: bool,
+    status: str | None,
+) -> bool:
+    payload_ok = bool(data.get("ok", event_ok)) if isinstance(data, dict) else event_ok
+    return bool(
+        payload_ok
+        and not needs_followup
+        and status != "needs_planner_resolution"
+    )
+
+
 class ChatView(QScrollArea):
     """Vertical, scrollable column of cards."""
 
@@ -277,6 +292,8 @@ class ChatView(QScrollArea):
         Messages are full API-format dicts: user, assistant, tool.
         """
         for msg in messages:
+            if msg.get("aura_internal"):
+                continue
             role = msg.get("role", "")
             if role == "user":
                 content = msg.get("content", "")
@@ -633,6 +650,24 @@ class ChatView(QScrollArea):
                         summary = data.get("summary", "")
                         needs_followup = bool(data.get("needs_followup", False))
                         status = data.get("status")
+                    if _is_terminal_worker_success(
+                        data,
+                        event_ok=ok,
+                        needs_followup=needs_followup,
+                        status=status,
+                    ):
+                        _internal_continuation = False
+                        suppress_user_followup_card = False
+                        for key in (
+                            "internal_planner_handoff",
+                            "internal_campaign_continuation",
+                            "planner_resolution_needed",
+                            "mismatch_kind",
+                            "mismatch_question",
+                            "failure_constraint",
+                            "dispatch_spec_rejected",
+                        ):
+                            extras.pop(key, None)
                 except Exception:
                     pass
 

@@ -56,6 +56,9 @@ class History:
     def append_user_text(self, text: str) -> None:
         self.messages.append({"role": "user", "content": text})
 
+    def append_internal_user_text(self, text: str) -> None:
+        self.messages.append({"role": "user", "content": text, "aura_internal": True})
+
     def append_user_multimodal(
         self, parts: list[dict[str, Any]]
     ) -> None:
@@ -408,7 +411,9 @@ class History:
 
         for msg in self.messages:
             if msg.get("role") != "assistant":
-                out.append(copy.deepcopy(msg))
+                api_msg = copy.deepcopy(msg)
+                api_msg.pop("aura_internal", None)
+                out.append(api_msg)
                 continue
             api_msg: dict[str, Any] = {
                 "role": "assistant",

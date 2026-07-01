@@ -97,6 +97,8 @@ def _slugify(text: str, max_len: int = 40) -> str:
 
 def _first_user_text(history: History) -> str:
     for msg in history.messages:
+        if msg.get("aura_internal"):
+            continue
         if msg.get("role") != "user":
             continue
         content = msg.get("content")
