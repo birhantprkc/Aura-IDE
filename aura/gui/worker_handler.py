@@ -136,6 +136,7 @@ class WorkerEventHandler(QObject):
 
         file_list = list(files)
         step_list = list(steps or [])
+        self._playground.begin_dispatch_todo_list(tool_call_id, step_list)
         self._set_active_workflow(
             WorkflowState.intent_captured(
                 tool_call_id,
@@ -263,6 +264,7 @@ class WorkerEventHandler(QObject):
         self._chat.stop_current_aura()
         self._playground.set_glow_state("coding")
         self._playground.begin_assistant()
+        self._playground.render_dispatch_todo_list(tool_call_id)
         self.worker_started.emit()
 
         card = self._get_spec_card(tool_call_id)
@@ -342,6 +344,11 @@ class WorkerEventHandler(QObject):
             self._playground.worker_finished(
                 ok, summary, needs_followup=bool(needs_followup), status=status
             )
+        self._playground.finish_todo_list(
+            tool_call_id,
+            ok=ok,
+            needs_followup=bool(needs_followup),
+        )
         if context_gearbox:
             shower = getattr(self._playground, "show_context_gearbox_metadata", None)
             if callable(shower):
@@ -523,7 +530,7 @@ class WorkerEventHandler(QObject):
     ) -> None:
         """Forward tool call start to playground."""
 
-        self._playground.add_tool_call(worker_tool_id, name)
+        self._playground.add_tool_call(worker_tool_id, name, parent_tool_id=tool_call_id)
         write_tools = {
             "write_file",
             "apply_edit_transaction",
@@ -672,7 +679,7 @@ class WorkerEventHandler(QObject):
     def _on_worker_todo_list_updated(self, tool_call_id: str, tasks: list) -> None:
         """Route the worker's TODO list update to the playground."""
 
-        self._playground.update_todo_list(tasks)
+        self._playground.update_todo_list(tasks, tool_call_id)
 
     def _on_worker_terminal_output(
         self, parent_tool_id: str, worker_tool_id: str, text: str

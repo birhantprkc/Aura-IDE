@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import BORDER
 from aura.gui.widgets.aura_glow import AuraWidget
+from aura.gui.worker_todo_state import WorkerTodoState
 from aura.gui.workspace_tree import WorkspaceTree
 
 
@@ -142,6 +143,7 @@ class AuraPlayground(QWidget):
         self._worker_code_tool_names: dict[str, str] = {}
         self._pending_worker_code_content: dict[str, str] = {}
         self._workspace_root: Path | None = None
+        self._worker_todos = WorkerTodoState()
 
         # Active drone run card (shown below the stack widget)
         self._run_cards: dict[str, QWidget] = {}
@@ -275,20 +277,30 @@ class AuraPlayground(QWidget):
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
 
+    def begin_dispatch_todo_list(self, tool_call_id: str, steps: list) -> None:
+        self._info_hub.update_todo_list(
+            self._worker_todos.begin_dispatch(tool_call_id, steps)
+        )
+
+    def render_dispatch_todo_list(self, tool_call_id: str) -> None:
+        self._info_hub.update_todo_list(self._worker_todos.render_active(tool_call_id))
+
     def append_reasoning(self, text: str):
         self._info_hub.append_reasoning(text)
 
     def append_content(self, text: str):
         self._info_hub.append_content(text)
 
-    def add_tool_call(self, worker_tool_id: str, name: str):
+    def add_tool_call(self, worker_tool_id: str, name: str, parent_tool_id: str | None = None):
         self._info_hub.flush_worker_log()
         self._info_hub.mark_worker_log_boundary()
         c = ToolStreamController(name, self)
         self._controllers[worker_tool_id] = c
 
         if name == "update_todo_list":
-            c.todo_updated.connect(self.update_todo_list)
+            c.todo_updated.connect(
+                lambda tasks, tid=parent_tool_id: self.update_todo_list(tasks, tid)
+            )
 
         if name in ("write_file", "apply_edit_transaction", "edit_file", "edit_symbol"):
             self._worker_code_tool_names[worker_tool_id] = name
@@ -337,8 +349,19 @@ class AuraPlayground(QWidget):
             pass
         self._terminal_window.set_result(worker_tool_id, exit_code)
 
-    def update_todo_list(self, tasks: list):
-        self._info_hub.update_todo_list(tasks)
+    def update_todo_list(self, tasks: list, tool_call_id: str | None = None):
+        self._info_hub.update_todo_list(
+            self._worker_todos.reconcile(tasks, tool_call_id=tool_call_id)
+        )
+
+    def finish_todo_list(self, tool_call_id: str, *, ok: bool, needs_followup: bool) -> None:
+        snapshot = self._worker_todos.finish(
+            tool_call_id,
+            ok=ok,
+            needs_followup=needs_followup,
+        )
+        if snapshot:
+            self._info_hub.update_todo_list(snapshot)
 
     def _on_code_path_resolved(self, worker_tool_id: str, path: str) -> None:
         self._worker_code_paths[worker_tool_id] = path
@@ -446,6 +469,7 @@ class AuraPlayground(QWidget):
         self._worker_code_paths.clear()
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
+        self._worker_todos.clear()
 
     def add_mermaid_artifact(self, code: str):
         pass
