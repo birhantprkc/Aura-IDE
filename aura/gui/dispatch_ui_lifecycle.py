@@ -1,10 +1,15 @@
-"""GUI-side lifecycle owner for visible Worker dispatch SpecCards."""
+"""GUI-side lifecycle owner for visible Worker dispatch SpecCards.
+
+No longer owns WorkflowState transitions — those originate in the backend
+_DispatchProxy. This module only creates/wires/removes SpecCards and forwards
+user button-clicks (dispatch, cancel) to the bridge.
+"""
 from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Callable
 
-from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
+from aura.conversation.workflow_state import WorkflowState
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -25,13 +30,11 @@ class DispatchUiLifecycle:
         chat: ChatView,
         parent_widget: QWidget | None,
         active_workflow: Callable[[], WorkflowState | None],
-        transition_workflow: Callable[..., None],
     ) -> None:
         self._bridge = bridge
         self._chat = chat
         self._parent_widget = parent_widget
         self._active_workflow = active_workflow
-        self._transition_workflow = transition_workflow
         self._wired_spec_cards: set[str] = set()
         self._canonical_dispatch_ids: set[str] = set()
         self._visible_dispatch_card_id: str | None = None
@@ -166,7 +169,11 @@ class DispatchUiLifecycle:
         self._chat.scroll_to_bottom(force=True)
 
     def _on_dispatch_clicked(self, tool_call_id: str) -> None:
-        """Dispatch the spec card's current values directly."""
+        """Dispatch the spec card's current values directly.
+
+        Only forwards the user intent to the bridge.  The backend
+        _DispatchProxy owns the WorkflowState transition.
+        """
         _log.info("dispatch_clicked tool_call_id=%s", tool_call_id)
         card = self.get_spec_card(tool_call_id)
         if card is None:
@@ -182,18 +189,6 @@ class DispatchUiLifecycle:
         )
         if not accepted:
             card.mark_stale()
-            self._transition_workflow(
-                tool_call_id,
-                WorkflowStatus.blocked,
-                blocker_reason="Dispatch is no longer pending.",
-                follow_up_required=True,
-            )
-        else:
-            self._transition_workflow(
-                tool_call_id,
-                WorkflowStatus.dispatched,
-                pending_user_action="",
-            )
 
     def _on_edit_spec_clicked(self, tool_call_id: str) -> None:
         """Open the SpecEditDialog pre-populated with the spec card's values."""
@@ -209,22 +204,15 @@ class DispatchUiLifecycle:
             self._chat.scroll_to_bottom(force=True)
 
     def _on_cancel_dispatch_clicked(self, tool_call_id: str) -> None:
-        """Cancel the pending dispatch."""
+        """Cancel the pending dispatch.
+
+        Only forwards the user intent to the bridge.  The backend
+        _DispatchProxy owns the WorkflowState transition.
+        """
         accepted = self._bridge.user_cancelled_dispatch(tool_call_id)
         if not accepted:
             card = self.get_spec_card(tool_call_id)
             if card:
                 card.mark_stale()
-            self._transition_workflow(
-                tool_call_id,
-                WorkflowStatus.blocked,
-                blocker_reason="Dispatch is no longer pending.",
-                follow_up_required=True,
-            )
         else:
-            self._transition_workflow(
-                tool_call_id,
-                WorkflowStatus.cancelled,
-                pending_user_action="",
-            )
             self.clear_active_spec_card(tool_call_id)

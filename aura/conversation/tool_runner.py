@@ -6,7 +6,7 @@ import logging
 import threading
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from aura.client import (
     TerminalOutput,
@@ -39,6 +39,7 @@ from aura.conversation.validation_orchestrator import (
     parse_validation_command,
 )
 from aura.conversation.verification_progress import VerificationProgressTracker
+from aura.conversation.workflow_state import WorkflowStatus
 from aura.project_env import (
     build_project_command,
     build_project_command_rewrite,
@@ -75,6 +76,7 @@ class ToolRunner:
         args: dict[str, Any],
         on_event: Any,
         dispatch_cb: DispatchCallback | None,
+        workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None = None,
     ) -> WorkerDispatchResult | None:
         req = WorkerDispatchRequest.from_dict(args)
         raw_steps = args.get("steps") if isinstance(args.get("steps"), list) else []
@@ -121,6 +123,8 @@ class ToolRunner:
             # Manager owns dispatch lifecycle emission — do NOT emit ToolResult
             # or append tool result here.  The returned result flows through
             # classify_failed_worker_dispatch → blocker → internal handback.
+            if workflow_state_cb:
+                workflow_state_cb(tool_call_id, req.goal, req.summary, WorkflowStatus.planner_resolving)
             return result
 
         quality = validate_worker_dispatch_spec(req.spec, req.acceptance, goal=req.goal)
@@ -153,6 +157,8 @@ class ToolRunner:
             # Manager owns dispatch lifecycle emission — do NOT emit ToolResult
             # or append tool result here.  The returned result flows through
             # classify_failed_worker_dispatch → blocker → internal handback.
+            if workflow_state_cb:
+                workflow_state_cb(tool_call_id, req.goal, req.summary, WorkflowStatus.planner_resolving)
             return result
 
         if dispatch_cb is None:

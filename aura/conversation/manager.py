@@ -44,6 +44,7 @@ from aura.conversation.completion_guard import (
     is_repetitive_completion_final,
 )
 from aura.conversation.critic_dispatch import CriticCallback
+from aura.conversation.workflow_state import WorkflowStatus
 from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
@@ -206,6 +207,7 @@ class ConversationManager:
         model: ModelId,
         thinking: ThinkingMode,
         dispatch_cb: DispatchCallback | None = None,
+        workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None = None,
         critic_cb: CriticCallback | None = None,
         worker_dispatch_request: WorkerDispatchRequest | None = None,
         dispatch_tool_call_id: str = "",
@@ -390,6 +392,7 @@ class ConversationManager:
                 approval_cb=approval_cb,
                 cancel_event=cancel_event,
                 dispatch_cb=dispatch_cb,
+                workflow_state_cb=workflow_state_cb,
                 cleanup_cancelled=self._cleanup_cancelled,
                 explicit_validation_commands=explicit_validation_commands,
                 declared_run_command=declared_run_command,

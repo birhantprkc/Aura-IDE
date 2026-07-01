@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from aura.client import Done, Event, ToolResult
+from aura.conversation.workflow_state import WorkflowStatus
 from aura.conversation.completion_guard import (
     terminal_result_completed,
     tool_result_completes_action,
@@ -89,6 +90,7 @@ class ToolRoundRunner:
         approval_cb: ApprovalCallback,
         cancel_event: threading.Event,
         dispatch_cb: DispatchCallback | None,
+        workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None = None,
         cleanup_cancelled: Callable[[EventCallback], None],
         explicit_validation_commands: list[str] | None = None,
         declared_run_command: str | None = None,
@@ -166,6 +168,7 @@ class ToolRoundRunner:
                 approval_cb=approval_cb,
                 cancel_event=cancel_event,
                 dispatch_cb=dispatch_cb,
+                workflow_state_cb=workflow_state_cb,
                 explicit_validation_commands=explicit_validation_commands,
                 declared_run_command=declared_run_command,
             )
@@ -340,6 +343,7 @@ class ToolRoundRunner:
         approval_cb: ApprovalCallback,
         cancel_event: threading.Event,
         dispatch_cb: DispatchCallback | None,
+        workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None = None,
         explicit_validation_commands: list[str] | None,
         declared_run_command: str | None,
     ) -> dict[str, Any]:
@@ -380,6 +384,7 @@ class ToolRoundRunner:
                 args=args,
                 state=state,
                 dispatch_cb=dispatch_cb,
+                workflow_state_cb=workflow_state_cb,
                 on_event=on_event,
             )
 
@@ -620,6 +625,7 @@ class ToolRoundRunner:
         args: dict[str, Any],
         state: _SendState,
         dispatch_cb: DispatchCallback | None,
+        workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None = None,
         on_event: EventCallback,
     ) -> dict[str, Any]:
         if (
@@ -660,6 +666,7 @@ class ToolRoundRunner:
             args=args,
             on_event=on_event,
             dispatch_cb=dispatch_cb,
+            workflow_state_cb=workflow_state_cb,
         )
         terminal_dispatch = False
         if result is not None and not result.cancelled:

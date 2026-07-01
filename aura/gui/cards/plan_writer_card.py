@@ -13,12 +13,19 @@ from PySide6.QtWidgets import (
 )
 
 from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuation
+from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.gui.cards._helpers import _fade_in_widget
 from aura.gui.theme import BG_TOOL_CARD, BORDER, DANGER, SUCCESS, WARN
 
 
 class PlanWriterCard(QFrame):
-    """Small status indicator for temporary planner output."""
+    """Small status indicator for temporary planner output.
+
+    Renders from the canonical WorkflowState snapshot received via
+    update_workflow_state().  The set_result() method is kept for backward
+    compat with chat_view controller wiring but no longer drives state —
+    the backend _DispatchProxy owns all transitions.
+    """
 
     STATE_RUNNING = "running"
     STATE_DONE = "done"
@@ -125,6 +132,7 @@ class PlanWriterCard(QFrame):
         # so per-fragment refresh is wasted work.
 
     def set_result(self, ok: bool, result_text: str | None = None) -> None:
+        """Simplified set_result — the canonical state comes from the backend."""
         if result_text:
             try:
                 parsed = json.loads(result_text)
@@ -132,22 +140,18 @@ class PlanWriterCard(QFrame):
                 parsed = {}
             if isinstance(parsed, dict):
                 extras = parsed.get("extras") if isinstance(parsed.get("extras"), dict) else {}
-                # Internal continuation — recoverable planner handback, not
-                # user-visible.  Do NOT render "Plan incomplete".
                 if is_internal_dispatch_continuation(parsed):
                     self._state = self.STATE_RETRYING
                     self._refresh()
                     return
-                if parsed.get("dispatch_spec_rejected") or extras.get("dispatch_spec_rejected"):
-                    self._incomplete_text = self._format_incomplete_text(
-                        extras.get("quality_errors") or parsed.get("quality_errors")
-                    )
+                if (
+                    parsed.get("dispatch_spec_rejected")
+                    or extras.get("dispatch_spec_rejected")
+                    or parsed.get("dispatch_not_started")
+                    or extras.get("dispatch_not_started")
+                ):
                     self._state = self.STATE_INCOMPLETE
-                    self._refresh()
-                    return
-                if parsed.get("dispatch_not_started") or extras.get("dispatch_not_started"):
-                    self._incomplete_text = self._format_not_started_text(parsed, extras)
-                    self._state = self.STATE_NOT_STARTED
+                    self._incomplete_text = "⚡ Plan incomplete"
                     self._refresh()
                     return
                 if parsed.get("phase_boundary"):
@@ -157,24 +161,44 @@ class PlanWriterCard(QFrame):
         self._state = self.STATE_DONE if ok else self.STATE_FAILED
         self._refresh()
 
-    @staticmethod
-    def _format_incomplete_text(errors: object) -> str:
-        if not isinstance(errors, list) or not errors:
-            return "⚡ Plan incomplete"
-        missing: list[str] = []
-        for error in errors:
-            text = str(error)
-            if text.endswith(" is required"):
-                text = text[: -len(" is required")]
-            missing.append(text)
-        return "⚡ Plan incomplete — missing " + ", ".join(missing)
+    def update_workflow_state(self, state: WorkflowState) -> None:
+        """Render from the canonical backend WorkflowState snapshot.
 
-    @staticmethod
-    def _format_not_started_text(parsed: dict, extras: dict) -> str:
-        if extras.get("pure_research"):
-            return "⚡ Plan not dispatched — research only"
-        if extras.get("dispatch_approval_timeout"):
-            return "⚡ Plan expired"
-        if extras.get("dispatch_cancelled"):
-            return "⚡ Plan cancelled"
-        return "⚡ Plan not dispatched"
+        Mapping from WorkflowStatus:
+          plan_ready          → done (plan written)
+          planner_resolving   → retrying / working
+          dispatched/editing/validating → running
+          blocked             → incomplete
+          failed_retryable    → retrying
+          failed_nonrecoverable → failed
+          done                → done
+          cancelled           → not_started (cancelled)
+        """
+        old_state = self._state
+        if state.status == WorkflowStatus.plan_ready:
+            self._state = self.STATE_DONE
+        elif state.status == WorkflowStatus.planner_resolving:
+            self._state = self.STATE_RETRYING
+        elif state.status in {
+            WorkflowStatus.dispatched,
+            WorkflowStatus.editing,
+            WorkflowStatus.validating,
+        }:
+            self._state = self.STATE_RUNNING
+        elif state.status == WorkflowStatus.blocked:
+            self._state = self.STATE_INCOMPLETE
+            self._incomplete_text = "⚡ Plan incomplete"
+        elif state.status == WorkflowStatus.failed_retryable:
+            self._state = self.STATE_RETRYING
+        elif state.status == WorkflowStatus.failed_nonrecoverable:
+            self._state = self.STATE_FAILED
+        elif state.status == WorkflowStatus.done:
+            self._state = self.STATE_DONE
+        elif state.status == WorkflowStatus.cancelled:
+            self._state = self.STATE_NOT_STARTED
+            self._incomplete_text = "⚡ Plan cancelled"
+        else:
+            self._state = self.STATE_RUNNING
+
+        if old_state != self._state:
+            self._refresh()

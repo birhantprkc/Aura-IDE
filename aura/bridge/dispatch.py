@@ -42,6 +42,7 @@ from aura.conversation import (
 )
 from aura.conversation.dispatch_plan import plan_from_request
 from aura.conversation.persistence import WorkerDispatchRecord
+from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
 
 __all__ = [
@@ -77,6 +78,7 @@ class _DispatchProxy(QObject):
     workerAgentProcessStarted = Signal(str, str, str, str)  # parent_tool_id, process_id, label, command
     workerAgentProcessOutput = Signal(str, str, str)  # parent_tool_id, process_id, text
     workerAgentProcessFinished = Signal(str, str, object)  # parent_tool_id, process_id, exit_code
+    workflowStateChanged = Signal(object)  # WorkflowState snapshot
 
     def __init__(
         self,
@@ -107,6 +109,7 @@ class _DispatchProxy(QObject):
         self._records: list[WorkerDispatchRecord] = []
         self._result_metadata: dict[str, dict[str, Any]] = {}
         self._todo_controller: DispatchTodoController = DispatchTodoController()
+        self._active_workflow: WorkflowState | None = None
 
     # ---- config -----------------------------------------------------------
 
@@ -191,9 +194,25 @@ class _DispatchProxy(QObject):
             [step.to_dict() for step in req.steps],
         )
 
+        # --- Emit plan_ready snapshot ---
+        self._set_workflow_state(
+            WorkflowState.intent_captured(
+                tool_call_id, req.goal, summary=req.summary,
+            ).with_status(
+                WorkflowStatus.plan_ready,
+                pending_user_action="Dispatch, edit, or cancel the plan.",
+            )
+        )
+
         signaled = pending.decision_event.wait(timeout=DISPATCH_TIMEOUT)
         if not signaled:
             self._pending_map.pop(tool_call_id)
+            self._transition_workflow_state(
+                tool_call_id,
+                WorkflowStatus.blocked,
+                blocker_reason="Plan expired — click Dispatch again or Cancel",
+                follow_up_required=True,
+            )
             return WorkerDispatchResult(
                 ok=False,
                 recoverable=True,
@@ -203,6 +222,11 @@ class _DispatchProxy(QObject):
 
         if pending.cancelled:
             self._pending_map.pop(tool_call_id)
+            self._transition_workflow_state(
+                tool_call_id,
+                WorkflowStatus.cancelled,
+                pending_user_action="",
+            )
             return WorkerDispatchResult(
                 ok=False,
                 summary="Cancelled",
@@ -222,6 +246,13 @@ class _DispatchProxy(QObject):
         # starting a new dispatch (new SpecCard → fresh checklist).
         self._todo_controller.clear(tool_call_id)
 
+        # --- Emit dispatched snapshot ---
+        self._transition_workflow_state(
+            tool_call_id,
+            WorkflowStatus.dispatched,
+            pending_user_action="",
+        )
+
         plan = plan_from_request(edited)
         session = DispatchSession(
             tool_call_id=tool_call_id,
@@ -239,6 +270,20 @@ class _DispatchProxy(QObject):
         # cleared only on the next dispatch for this tool_call_id, cancellation,
         # or conversation reset.
         result = session.run()
+        # Emit the finished WorkflowState snapshot for the terminal outcome.
+        if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
+            extras = result.extras if isinstance(result.extras, dict) else {}
+            self._set_workflow_state(
+                self._active_workflow.finish(
+                    ok=result.ok,
+                    summary=result.summary,
+                    needs_followup=bool(result.needs_followup),
+                    status=result.status,
+                    modified_files=list(result.modified_files) if result.modified_files else None,
+                    validation=result.validation,
+                    extras=extras,
+                )
+            )
         self._merge_session_result_metadata(tool_call_id, result)
         self._pending_map.pop(tool_call_id)
         return result
@@ -282,6 +327,67 @@ class _DispatchProxy(QObject):
         if result.validation is not None:
             metadata["validation"] = result.validation
         self._result_metadata[tool_call_id] = metadata
+
+    # ---- canonical WorkflowState ownership --------------------------------
+
+    def _set_workflow_state(self, state: WorkflowState) -> None:
+        """Store a WorkflowState snapshot and emit it to the GUI."""
+        self._active_workflow = state
+        self.workflowStateChanged.emit(state)
+
+    def _get_workflow_state(self) -> WorkflowState | None:
+        return self._active_workflow
+
+    def _transition_workflow_state(
+        self,
+        tool_call_id: str,
+        status: WorkflowStatus,
+        *,
+        pending_user_action: str | None = None,
+        blocker_reason: str | None = None,
+        failure_reason: str | None = None,
+        follow_up_required: bool | None = None,
+    ) -> None:
+        """Transition the active workflow to *status* if it matches *tool_call_id*."""
+        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            return
+        self._set_workflow_state(
+            self._active_workflow.with_status(
+                status,
+                pending_user_action=pending_user_action,
+                blocker_reason=blocker_reason,
+                failure_reason=failure_reason,
+                follow_up_required=follow_up_required,
+            )
+        )
+
+    def _init_workflow_state(
+        self,
+        tool_call_id: str,
+        goal: str,
+        summary: str = "",
+    ) -> None:
+        """Initialize a new WorkflowState for a dispatch attempt."""
+        self._set_workflow_state(
+            WorkflowState.intent_captured(tool_call_id, goal, summary=summary)
+        )
+
+    def _workflow_state_callback(
+        self,
+        tool_call_id: str,
+        goal: str,
+        summary: str,
+        status: WorkflowStatus,
+    ) -> None:
+        """Callback suitable for threading through to ToolRunner.
+
+        Creates a WorkflowState if none exists for this tool_call_id, then
+        transitions to *status*.  Used by the campaign/quality reject paths
+        that fire before ``request_dispatch`` is ever called.
+        """
+        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            self._init_workflow_state(tool_call_id, goal, summary)
+        self._transition_workflow_state(tool_call_id, status)
 
     def user_cancelled(self, tool_call_id: str) -> bool:
         if not self._pending_map.resolve_cancelled(tool_call_id):

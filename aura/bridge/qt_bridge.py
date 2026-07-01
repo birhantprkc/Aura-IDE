@@ -126,6 +126,11 @@ class _Worker(QObject):
                 if self._dispatch_proxy is not None
                 else None
             )
+            workflow_state_cb = (
+                self._dispatch_proxy._workflow_state_callback
+                if self._dispatch_proxy is not None
+                else None
+            )
             self._manager.send(
                 on_event=self._on_event,
                 approval_cb=self._approval_proxy.request_approval,
@@ -133,6 +138,7 @@ class _Worker(QObject):
                 model=self._model,
                 thinking=self._thinking,
                 dispatch_cb=dispatch_cb,
+                workflow_state_cb=workflow_state_cb,
                 temperature=self._temperature,
                 hook_name='generate_planner_code',
                 max_tool_rounds=self._max_tool_rounds,
@@ -228,6 +234,7 @@ class ConversationBridge(QObject):
     workerUsage = Signal(str, str, int, int, int, int)
     workerTodoListUpdated = Signal(str, list)  # Worker-local only
     dispatchTodoListUpdated = Signal(str, list)  # Canonical snapshots from DispatchSession
+    workflowStateChanged = Signal(object)  # WorkflowState snapshot
     workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
     workerAgentProcessStarted = Signal(str, str, str, str)
     workerAgentProcessOutput = Signal(str, str, str)
@@ -308,6 +315,7 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.workerUsage.connect(self.workerUsage)
         self._dispatch_proxy.workerTodoListUpdated.connect(self.workerTodoListUpdated)
         self._dispatch_proxy.dispatchTodoListUpdated.connect(self.dispatchTodoListUpdated)
+        self._dispatch_proxy.workflowStateChanged.connect(self.workflowStateChanged)
         self._dispatch_proxy.workerTerminalOutput.connect(self.workerTerminalOutput)
         self._dispatch_proxy.workerAgentProcessStarted.connect(self.workerAgentProcessStarted)
         self._dispatch_proxy.workerAgentProcessOutput.connect(self.workerAgentProcessOutput)

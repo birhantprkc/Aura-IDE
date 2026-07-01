@@ -398,6 +398,10 @@ class ChatView(QScrollArea):
     def _remove_plan_writer_card(self, tool_call_id: str) -> None:
         """Remove and delete the PlanWriterCard associated with *tool_call_id*."""
         card = self._plan_writer_cards.pop(tool_call_id, None)
+
+    def get_plan_writer_card(self, tool_call_id: str):
+        """Return the PlanWriterCard for *tool_call_id*, or None."""
+        return self._plan_writer_cards.get(tool_call_id)
         if card is None:
             return
         parent = card.parentWidget()

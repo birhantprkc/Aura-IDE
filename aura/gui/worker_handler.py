@@ -3,6 +3,9 @@ forwards them to chat/playground UI components.
 
 Owns its own session usage tracking dict and emits signals so that
 MainWindow can react to state changes (status bar refresh, input streaming).
+
+WorkflowState is owned by the backend _DispatchProxy. This handler only
+stores and forwards the latest canonical snapshot via _on_workflow_state_changed.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from aura.config import redact_secrets
 
 _log = logging.getLogger(__name__)
 
-from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
+from aura.conversation.workflow_state import WorkflowState
 from aura.gui.dispatch_ui_lifecycle import DispatchUiLifecycle
 from aura.gui.worker_finish_presenter import WorkerFinishPresenter
 
@@ -57,13 +60,14 @@ class WorkerEventHandler(QObject):
         self._playground = playground
         self._settings = settings
         self._session_usage: dict[str, dict[str, int]] = {}
+        # WorkflowState snapshot — stored from backend emissions only, never
+        # constructed or mutated here.
         self._active_workflow: WorkflowState | None = None
         self._dispatch_ui = DispatchUiLifecycle(
             bridge=bridge,
             chat=chat,
             parent_widget=parent,
             active_workflow=lambda: self._active_workflow,
-            transition_workflow=self._transition_active_workflow,
         )
         self._finish_presenter = WorkerFinishPresenter(chat, playground)
 
@@ -76,7 +80,7 @@ class WorkerEventHandler(QObject):
 
     @property
     def active_workflow(self) -> WorkflowState | None:
-        """Authoritative state for the currently active Worker task."""
+        """Last canonical snapshot from the backend _DispatchProxy."""
         return self._active_workflow
 
     # ---- public methods --------------------------------------------------------
@@ -115,6 +119,22 @@ class WorkerEventHandler(QObject):
         self._bridge.workerAgentProcessOutput.connect(self._on_worker_agent_process_output)
         self._bridge.workerAgentProcessFinished.connect(self._on_worker_agent_process_finished)
         self._bridge.terminalOutput.connect(self._on_terminal_output)
+        # Backend-owned canonical WorkflowState snapshots.
+        self._bridge.workflowStateChanged.connect(self._on_workflow_state_changed)
+
+    # ---- canonical WorkflowState snapshot from backend -------------------------
+
+    def _on_workflow_state_changed(self, state: WorkflowState) -> None:
+        """Store and forward a canonical WorkflowState snapshot from the backend."""
+        self._active_workflow = state
+        # Forward to the spec card for rendering.
+        card = self._dispatch_ui.get_spec_card(state.tool_call_id)
+        if card is not None and hasattr(card, "update_workflow_state"):
+            card.update_workflow_state(state)
+        # Forward to the plan writer card for rendering.
+        plan_card = getattr(self._chat, "get_plan_writer_card", lambda tid: None)(state.tool_call_id)
+        if plan_card is not None and hasattr(plan_card, "update_workflow_state"):
+            plan_card.update_workflow_state(state)
 
     # ---- dispatch slots --------------------------------------------------------
 
@@ -138,14 +158,7 @@ class WorkerEventHandler(QObject):
             # Keep playground-side canonical tracking in sync so that
             # tool-call noise suppression stays active for the continuation.
             self._playground.begin_canonical_dispatch_tracking(tool_call_id, step_list)
-            self._set_active_workflow(
-                WorkflowState.intent_captured(
-                    tool_call_id, goal, summary=summary,
-                ).with_status(
-                    WorkflowStatus.dispatched,
-                    pending_user_action="",
-                )
-            )
+            # Backend _DispatchProxy owns the plan_ready/dispatched snapshot.
             self._bridge.user_dispatched(tool_call_id, goal, file_list, spec, acceptance, summary)
             self._chat.scroll_to_bottom(force=True)
             return
@@ -157,16 +170,7 @@ class WorkerEventHandler(QObject):
             )
             self._dispatch_ui.begin_auto_dispatch(tool_call_id)
             self._playground.begin_canonical_dispatch_tracking(tool_call_id, step_list)
-            self._set_active_workflow(
-                WorkflowState.intent_captured(
-                    tool_call_id,
-                    goal,
-                    summary=summary,
-                ).with_status(
-                    WorkflowStatus.dispatched,
-                    pending_user_action="",
-                )
-            )
+            # Backend _DispatchProxy owns the plan_ready/dispatched snapshot.
             self._bridge.user_dispatched(tool_call_id, goal, file_list, spec, acceptance, summary)
             self._chat.scroll_to_bottom(force=True)
             return
@@ -177,16 +181,8 @@ class WorkerEventHandler(QObject):
         )
         self._dispatch_ui.begin_visible_dispatch(tool_call_id)
         self._playground.begin_canonical_dispatch_tracking(tool_call_id, step_list)
-        self._set_active_workflow(
-            WorkflowState.intent_captured(
-                tool_call_id,
-                goal,
-                summary=summary,
-            ).with_status(
-                WorkflowStatus.plan_ready,
-                pending_user_action="Dispatch, edit, or cancel the plan.",
-            )
-        )
+        # Backend _DispatchProxy owns the plan_ready snapshot (emitted inside
+        # request_dispatch after showSpecCard).  No WorkflowState construction here.
         self._dispatch_ui.show_spec_card(
             tool_call_id=tool_call_id,
             goal=goal,
@@ -209,11 +205,8 @@ class WorkerEventHandler(QObject):
         self.worker_started.emit()
 
         self._dispatch_ui.mark_worker_started(tool_call_id)
-        self._transition_active_workflow(
-            tool_call_id,
-            WorkflowStatus.dispatched,
-            pending_user_action="",
-        )
+        # The backend _DispatchProxy emitted the dispatched status in
+        # request_dispatch before DispatchSession.run().  No transition needed.
         self.worker_running_changed.emit(True)
 
     def _on_worker_finished(
@@ -231,6 +224,12 @@ class WorkerEventHandler(QObject):
         )
 
         metadata = self._worker_result_metadata(tool_call_id)
+        active_workflow = (
+            self._active_workflow
+            if self._active_workflow is not None
+            and self._active_workflow.tool_call_id == tool_call_id
+            else None
+        )
         presentation = self._finish_presenter.present(
             tool_call_id=tool_call_id,
             ok=ok,
@@ -238,26 +237,12 @@ class WorkerEventHandler(QObject):
             needs_followup=needs_followup,
             status=status,
             metadata=metadata,
-            active_workflow=self._active_workflow,
+            active_workflow=active_workflow,
             spec_card=self._dispatch_ui.get_spec_card(tool_call_id),
         )
         outcome = presentation.outcome
-        if (
-            self._active_workflow is not None
-            and self._active_workflow.tool_call_id == tool_call_id
-            and outcome.should_show_visible_summary
-        ):
-            self._set_active_workflow(
-                self._active_workflow.finish(
-                    ok=ok,
-                    summary=summary,
-                    needs_followup=bool(needs_followup),
-                    status=status,
-                    modified_files=outcome.metadata.get("modified_files"),
-                    validation=outcome.metadata.get("validation"),
-                    extras=outcome.extras,
-                )
-            )
+        # The backend _DispatchProxy emits the finished WorkflowState snapshot
+        # in request_dispatch after DispatchSession.run().  No finish() call here.
         if outcome.should_clear_dispatch_card:
             self._dispatch_ui.clear_active_spec_card(tool_call_id)
         if outcome.should_set_pending_internal_retool:
@@ -279,11 +264,7 @@ class WorkerEventHandler(QObject):
         self._playground.stop_aura()
         self._playground.worker_cancelled()
 
-        self._transition_active_workflow(
-            tool_call_id,
-            WorkflowStatus.cancelled,
-            pending_user_action="",
-        )
+        # Backend _DispatchProxy owns the cancelled snapshot.
         self._dispatch_ui.mark_worker_cancelled(tool_call_id)
         self.worker_running_changed.emit(False)
 
@@ -311,32 +292,9 @@ class WorkerEventHandler(QObject):
         """Forward tool call start to playground."""
 
         self._playground.add_tool_call(worker_tool_id, name, parent_tool_id=tool_call_id)
-        write_tools = {
-            "write_file",
-            "apply_edit_transaction",
-            "edit_file",
-            "edit_symbol",
-            "edit_line_range",
-            "patch_file",
-        }
-        if name in write_tools:
-            self._transition_active_workflow(
-                tool_call_id,
-                WorkflowStatus.editing,
-                pending_user_action="",
-            )
-        elif name == "run_terminal_command":
-            self._transition_active_workflow(
-                tool_call_id,
-                WorkflowStatus.validating,
-                pending_user_action="",
-            )
-        elif name == "run_and_watch":
-            self._transition_active_workflow(
-                tool_call_id,
-                WorkflowStatus.validating,
-                pending_user_action="",
-            )
+        # Tool-level state transitions (editing, validating) are now owned by
+        # the backend _DispatchProxy via WorkflowState.absorb_worker_tool_result.
+        # No speculation here.
 
     def _on_worker_tool_args(
         self, tool_call_id: str, worker_tool_id: str, fragment: str
@@ -357,10 +315,8 @@ class WorkerEventHandler(QObject):
         """Forward tool result to playground."""
 
         self._playground.set_tool_result(worker_tool_id, ok, result)
-        if self._active_workflow is not None and self._active_workflow.tool_call_id == parent_tool_id:
-            self._set_active_workflow(
-                self._active_workflow.absorb_worker_tool_result(name, ok, result, extras)
-            )
+        # Tool-result-level state absorption (editing, validating, changed_files)
+        # is now owned by the backend _DispatchProxy. No mutation here.
 
     def _on_worker_diff_decided(
         self,
@@ -375,12 +331,6 @@ class WorkerEventHandler(QObject):
         """Forward diff decision to playground."""
 
         self._playground.show_code_diff(worker_tool_id, rel_path, old, new, decision)
-        if (
-            decision == "approve"
-            and self._active_workflow is not None
-            and self._active_workflow.tool_call_id == parent_tool_id
-        ):
-            self._set_active_workflow(self._active_workflow.with_changed_file(rel_path))
 
     def _on_worker_api_error(self, tool_call_id: str, status: int, message: str) -> None:
         """Forward API error to playground with a formatted title."""
@@ -390,42 +340,7 @@ class WorkerEventHandler(QObject):
         )
         title = f"API Error {status}" if status > 0 else "Worker Error"
         self._playground.add_error(f"{title}: {message}")
-        self._transition_active_workflow(
-            tool_call_id,
-            WorkflowStatus.failed_nonrecoverable,
-            failure_reason=message,
-            follow_up_required=False,
-            pending_user_action="Review the failure before retrying.",
-        )
         self._dispatch_ui.clear_active_spec_card(tool_call_id)
-
-    def _set_active_workflow(self, state: WorkflowState) -> None:
-        self._active_workflow = state
-        card = self._dispatch_ui.get_spec_card(state.tool_call_id)
-        if card is not None and hasattr(card, "update_workflow_state"):
-            card.update_workflow_state(state)
-
-    def _transition_active_workflow(
-        self,
-        tool_call_id: str,
-        status: WorkflowStatus,
-        *,
-        pending_user_action: str | None = None,
-        blocker_reason: str | None = None,
-        failure_reason: str | None = None,
-        follow_up_required: bool | None = None,
-    ) -> None:
-        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
-            return
-        self._set_active_workflow(
-            self._active_workflow.with_status(
-                status,
-                pending_user_action=pending_user_action,
-                blocker_reason=blocker_reason,
-                failure_reason=failure_reason,
-                follow_up_required=follow_up_required,
-            )
-        )
 
     def _on_worker_usage(
         self,
