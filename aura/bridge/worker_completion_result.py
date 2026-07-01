@@ -29,8 +29,6 @@ from aura.conversation import (
 )
 from aura.conversation.path_utils import (
     is_validation_scratch_path as _is_validation_scratch_path,
-)
-from aura.conversation.path_utils import (
     normalize_worker_path as _normalize_worker_path,
 )
 from aura.conversation.tool_limits import WRITE_TOOLS

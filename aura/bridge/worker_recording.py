@@ -5,13 +5,52 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from aura.conversation import History, WorkerDispatchRequest, WorkerTaskSpec
+from aura.conversation import History, WorkerDispatchRequest, WorkerDispatchResult, WorkerTaskSpec
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.skills.outcome_log import record_outcome_join
 
 __all__ = [
     "_record_worker_completion",
+    "record_dispatch_campaign_completion",
 ]
+
+
+def record_dispatch_campaign_completion(
+    *,
+    records: list[WorkerDispatchRecord],
+    workspace_root: Path | None,
+    tool_call_id: str,
+    edited_request: WorkerDispatchRequest,
+    result: WorkerDispatchResult,
+) -> WorkerDispatchRecord | None:
+    """Record one aggregate WorkerDispatchRecord for a completed dispatch campaign.
+
+    This replaces inline campaign-record creation in ``dispatch.py`` so that all
+    persistence logic lives in one place. Internal step records are not appended;
+    only this aggregate record is persisted and marked replayable with
+    ``replay_kind="dispatch_campaign"``.
+    """
+    aggregate_spec = edited_request.to_dict()
+    if isinstance(result.extras, dict):
+        aggregate_spec["extras"] = dict(result.extras)
+    if result.modified_files:
+        aggregate_spec["modified_files"] = list(result.modified_files)
+    aggregate_spec["replay_kind"] = "dispatch_campaign"
+    aggregate_spec["replayable"] = True
+
+    record = WorkerDispatchRecord(
+        after_message_index=-1,
+        tool_call_id=tool_call_id,
+        spec=aggregate_spec,
+        worker_history=[],
+        result_summary=result.summary or "",
+    )
+    records.append(record)
+    if workspace_root is not None:
+        from aura.conversation.persistence import save_dispatch_record_to_memory
+
+        save_dispatch_record_to_memory(record, workspace_root)
+    return record
 
 
 def _record_worker_completion(
@@ -46,6 +85,9 @@ def _record_worker_completion(
     """
     spec_dict = req.to_dict()
     spec_dict["task_spec"] = task_spec.to_dict()
+    if replayable:
+        spec_dict["replay_kind"] = "worker_dispatch"
+        spec_dict["replayable"] = True
     record = WorkerDispatchRecord(
         after_message_index=-1,
         tool_call_id=tool_call_id,

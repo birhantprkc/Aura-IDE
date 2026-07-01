@@ -19,6 +19,7 @@ from PySide6.QtCore import (
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.dispatch_pending import _DispatchPending, DispatchPendingMap
 from aura.bridge.dispatch_session import DispatchSession
+from aura.bridge.worker_recording import record_dispatch_campaign_completion
 from aura.bridge.worker_completion_result import (
     _check_read_before_edit,
     _last_assistant_content,
@@ -266,22 +267,13 @@ class _DispatchProxy(QObject):
         # campaign so that conversation replay shows one user-facing
         # WorkerSummaryCard rather than one card per internal step.
         if isinstance(result.extras, dict) and result.extras.get("dispatch_session"):
-            aggregate_spec = edited.to_dict()
-            aggregate_spec["extras"] = dict(result.extras)
-            if result.modified_files:
-                aggregate_spec["modified_files"] = list(result.modified_files)
-            aggregate_record = WorkerDispatchRecord(
-                after_message_index=-1,
+            record_dispatch_campaign_completion(
+                records=self._records,
+                workspace_root=self._workspace_root,
                 tool_call_id=tool_call_id,
-                spec=aggregate_spec,
-                worker_history=[],
-                result_summary=result.summary or "",
+                edited_request=edited,
+                result=result,
             )
-            self._records.append(aggregate_record)
-            if self._workspace_root is not None:
-                from aura.conversation.persistence import save_dispatch_record_to_memory
-
-                save_dispatch_record_to_memory(aggregate_record, self._workspace_root)
 
         # Emit the finished WorkflowState snapshot for the terminal outcome.
         if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
