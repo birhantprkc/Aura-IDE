@@ -707,11 +707,12 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         "Optional ordered campaign for multi-step work, but required for "
                         "non-trivial implementation work: multi-file, high-risk, subsystem, "
                         "architecture, refactor, feature, validation-heavy, or multi-stage "
-                        "tasks. Each item is one bounded Worker run with its own id, title, "
-                        "goal, spec, files when known, acceptance when knowable, validation "
-                        "commands when knowable, required outputs, non-goals, and contract "
-                        "constraints. Do not use one giant step that restates the top-level "
-                        "summary. When omitted or empty, the top-level flat fields are the "
+                        "tasks. Each item is one self-contained bounded Worker run with "
+                        "its own id, title, goal, spec, files, and acceptance. Step items "
+                        "must not rely on top-level files, spec, or acceptance; those "
+                        "top-level fields are campaign context only once steps are present. "
+                        "Do not use one giant step that restates the top-level summary. "
+                        "When omitted or empty, the top-level flat fields are the "
                         "single-step dispatch path for tiny one-file compatibility work only."
                     ),
                     "items": {
@@ -719,28 +720,34 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         "properties": {
                             "id": {
                                 "type": "string",
-                                "description": "Stable step id, e.g. 'step-1'.",
+                                "minLength": 1,
+                                "description": "Stable non-empty step id, e.g. 'step-1'.",
                             },
                             "title": {
                                 "type": "string",
-                                "description": "Short user-readable title for this bounded edit; do not reuse the top-level summary.",
+                                "minLength": 1,
+                                "description": "Short specific user-readable title for this bounded edit; do not reuse the top-level summary.",
                             },
                             "goal": {
                                 "type": "string",
+                                "minLength": 1,
                                 "description": "What this specific step should accomplish, narrower than the campaign goal.",
                             },
                             "spec": {
                                 "type": "string",
-                                "description": "Self-contained bounded work order for this step, not the full campaign pasted into one paragraph.",
+                                "minLength": 1,
+                                "description": "Self-contained bounded work order for this step, not the full campaign pasted into one paragraph and not dependent on top-level spec.",
                             },
                             "files": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Workspace-relative files for this step.",
+                                "minItems": 1,
+                                "description": "Workspace-relative files for this step. Every step must name its own bounded file scope.",
                             },
                             "acceptance": {
                                 "type": "string",
-                                "description": "Concrete pass/fail acceptance for this step.",
+                                "minLength": 1,
+                                "description": "Concrete pass/fail acceptance for this step, not inherited from top-level acceptance.",
                             },
                             "validation_commands": {
                                 "type": "array",
@@ -781,6 +788,7 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                                 "description": "Public class methods this step must not introduce.",
                             },
                         },
+                        "required": ["id", "title", "goal", "spec", "files", "acceptance"],
                         "additionalProperties": False,
                     },
                 },

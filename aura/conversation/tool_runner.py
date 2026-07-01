@@ -94,12 +94,13 @@ class ToolRunner:
                 campaign.errors,
             )
 
-        if not campaign.ok and campaign.requires_steps:
+        if not campaign.ok and (campaign.requires_steps or req.steps):
             error_message = (
                 "Plan incomplete - broad/multi-file/refactor work must be dispatched "
                 "as an ordered steps campaign of bounded objectives. "
                 "The Worker was not started. Re-call dispatch_to_worker with a "
-                "populated steps array. Campaign errors:\n"
+                "populated steps array whose items each include their own files, "
+                "spec, and acceptance. Campaign errors:\n"
                 + "\n".join(f"- {item}" for item in campaign.errors)
             )
             result = WorkerDispatchResult(
@@ -116,7 +117,8 @@ class ToolRunner:
                         "CONSTRAINT FOR NEXT ATTEMPT: Broad/multi-file/refactor work "
                         "must be dispatched as an ordered steps campaign of bounded "
                         "objectives. Re-call dispatch_to_worker with a populated steps "
-                        "array."
+                        "array where every step has its own id, title, goal, spec, "
+                        "files, and acceptance."
                     ),
                 },
             )

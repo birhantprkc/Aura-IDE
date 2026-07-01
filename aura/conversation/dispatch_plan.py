@@ -159,9 +159,9 @@ class WorkerStepSpec:
         if not isinstance(raw, dict):
             raw = {}
         return cls(
-            id=str(raw.get("id") or "step-1"),
-            title=str(raw.get("title") or raw.get("goal") or "Worker step"),
-            goal=str(raw.get("goal") or raw.get("title") or ""),
+            id=str(raw.get("id") or ""),
+            title=str(raw.get("title") or ""),
+            goal=str(raw.get("goal") or ""),
             spec=str(raw.get("spec") or ""),
             files=_str_list(raw.get("files")),
             target_regions=_dict_list(raw.get("target_regions")),
@@ -336,43 +336,84 @@ def request_for_step(
     original: WorkerDispatchRequest,
 ) -> WorkerDispatchRequest:
     """Derive the bounded WorkerDispatchRequest for one active step."""
+    explicit_campaign = bool(original.steps)
+    if explicit_campaign:
+        files = _step_files(step)
+        target_regions = [dict(region) for region in step.target_regions]
+        goal = step.goal
+        spec = step.spec or _fallback_step_spec(plan, step, include_campaign=False)
+        acceptance = step.acceptance
+        summary = step.title or step.goal
+        required_outputs = list(step.required_outputs)
+        validation_commands = list(step.validation_commands or step.validation_policy.commands)
+        risk_notes = _dedupe([*original.risk_notes, *step.risk_notes])
+        expected_public_symbols = list(step.expected_public_symbols)
+        expected_dataclass_fields = {
+            name: list(fields) for name, fields in step.expected_dataclass_fields.items()
+        }
+        forbidden_public_methods = _dedupe([
+            *original.forbidden_public_methods,
+            *step.forbidden_public_methods,
+        ])
+        forbidden_calls = _dedupe([*original.forbidden_calls, *step.forbidden_calls])
+    else:
+        files = list(step.files or plan.global_files or original.files)
+        target_regions = [dict(region) for region in (step.target_regions or original.target_regions)]
+        goal = step.goal or plan.overall_goal or original.goal
+        spec = step.spec or _fallback_step_spec(plan, step, include_campaign=True)
+        acceptance = step.acceptance or original.acceptance
+        summary = step.title or plan.visible_summary or original.summary
+        required_outputs = list(step.required_outputs or original.required_outputs)
+        validation_commands = list(step.validation_commands or step.validation_policy.commands)
+        risk_notes = list(step.risk_notes or original.risk_notes)
+        expected_public_symbols = list(step.expected_public_symbols or original.expected_public_symbols)
+        expected_dataclass_fields = (
+            {name: list(fields) for name, fields in step.expected_dataclass_fields.items()}
+            or {name: list(fields) for name, fields in original.expected_dataclass_fields.items()}
+        )
+        forbidden_public_methods = list(step.forbidden_public_methods or original.forbidden_public_methods)
+        forbidden_calls = list(step.forbidden_calls or original.forbidden_calls)
+
     non_goals = _dedupe([*plan.global_non_goals, *step.non_goals])
-    validation_commands = list(step.validation_commands or step.validation_policy.commands)
     return WorkerDispatchRequest(
-        goal=step.goal or plan.overall_goal or original.goal,
-        files=list(step.files or plan.global_files or original.files),
-        target_regions=[dict(region) for region in (step.target_regions or original.target_regions)],
-        spec=step.spec or _fallback_step_spec(plan, step),
-        acceptance=step.acceptance or original.acceptance,
-        summary=step.title or plan.visible_summary or original.summary,
+        goal=goal,
+        files=files,
+        target_regions=target_regions,
+        spec=spec,
+        acceptance=acceptance,
+        summary=summary,
         run_command=original.run_command,
         allowed_responsibilities=list(original.allowed_responsibilities),
         forbidden_responsibilities=list(original.forbidden_responsibilities),
-        required_outputs=list(step.required_outputs or original.required_outputs),
+        required_outputs=required_outputs,
         validation_commands=validation_commands,
-        risk_notes=list(step.risk_notes or original.risk_notes),
+        risk_notes=risk_notes,
         non_goals=non_goals,
-        expected_public_symbols=list(step.expected_public_symbols or original.expected_public_symbols),
-        expected_dataclass_fields=(
-            {name: list(fields) for name, fields in step.expected_dataclass_fields.items()}
-            or {name: list(fields) for name, fields in original.expected_dataclass_fields.items()}
-        ),
-        forbidden_public_methods=list(step.forbidden_public_methods or original.forbidden_public_methods),
-        forbidden_calls=list(step.forbidden_calls or original.forbidden_calls),
+        expected_public_symbols=expected_public_symbols,
+        expected_dataclass_fields=expected_dataclass_fields,
+        forbidden_public_methods=forbidden_public_methods,
+        forbidden_calls=forbidden_calls,
         contract=original.contract,
         task_shape=original.task_shape,
     )
 
 
-def _fallback_step_spec(plan: WorkerDispatchPlan, step: WorkerStepSpec) -> str:
+def _fallback_step_spec(
+    plan: WorkerDispatchPlan,
+    step: WorkerStepSpec,
+    *,
+    include_campaign: bool,
+) -> str:
     parts = [
         f"Internal dispatch step {step.id}: {step.title}",
         "",
-        f"Campaign goal: {plan.overall_goal}",
         f"Step goal: {step.goal}",
     ]
-    if step.files:
-        parts.append("Files: " + ", ".join(step.files))
+    if include_campaign:
+        parts.insert(2, f"Campaign goal: {plan.overall_goal}")
+    step_files = _step_files(step)
+    if step_files:
+        parts.append("Files: " + ", ".join(step_files))
     if step.non_goals or plan.global_non_goals:
         parts.append("Non-goals: " + "; ".join(_dedupe([*plan.global_non_goals, *step.non_goals])))
     return "\n".join(part for part in parts if part is not None)
@@ -533,7 +574,7 @@ def _step_boundary_errors(
 
     if requires_steps and len(steps) == 1:
         step = steps[0]
-        step_files = step.files or req.files
+        step_files = _step_files(step) or _dedupe(req.files)
         if len(step_files) >= 3:
             errors.append("A single campaign step cannot cover 3 or more files.")
 
@@ -553,9 +594,15 @@ def _step_boundary_errors(
         if not step.spec.strip():
             errors.append(f"{prefix} is missing a bounded spec.")
         elif needs_distinct_boundary and _boundary_text_is_top_level(step.spec, req):
-            errors.append(f"{prefix} spec repeats the top-level dispatch instead of a bounded work order.")
+            errors.append(f"{prefix} spec must be bounded to that step, not the full campaign.")
         if needs_distinct_boundary and _boundary_text_is_top_level(step.goal, req):
             errors.append(f"{prefix} goal repeats the top-level dispatch instead of naming a step boundary.")
+        if not _step_files(step):
+            errors.append(f"{prefix} is missing files; each campaign step must name its own file scope.")
+        if not step.acceptance.strip():
+            errors.append(f"{prefix} is missing acceptance.")
+        elif needs_distinct_boundary and _boundary_text_is_top_level(step.acceptance, req):
+            errors.append(f"{prefix} acceptance repeats the top-level dispatch instead of a step-specific pass/fail check.")
 
     normalized_titles = [_normalize_boundary_text(step.title) for step in steps]
     useful_titles = [title for title in normalized_titles if title]
@@ -624,6 +671,8 @@ def _boundary_text_is_top_level(value: str, req: WorkerDispatchRequest) -> bool:
     candidates = [
         req.goal,
         req.summary,
+        req.spec,
+        req.acceptance,
         _first_sentence(req.spec),
     ]
     return normalized in {
@@ -684,6 +733,21 @@ def _dedupe(values: list[str]) -> list[str]:
         result.append(item)
         seen.add(item)
     return result
+
+
+def _files_from_target_regions(target_regions: list[dict[str, Any]]) -> list[str]:
+    paths: list[str] = []
+    for region in target_regions:
+        if not isinstance(region, dict):
+            continue
+        path = str(region.get("path") or "").strip()
+        if path:
+            paths.append(path)
+    return _dedupe(paths)
+
+
+def _step_files(step: WorkerStepSpec) -> list[str]:
+    return _dedupe(list(step.files)) or _files_from_target_regions(step.target_regions)
 
 
 def _str_list(raw: Any) -> list[str]:
